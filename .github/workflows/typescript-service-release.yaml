@@ -1,0 +1,347 @@
+name: Semantic Release with AI Notes
+
+on:
+  workflow_call:
+    inputs:
+      bun-version:
+        type: string
+        required: false
+        default: "latest"
+      service-name:
+        type: string
+        required: true
+        description: "The name of the service to release"
+      publish-npm:
+        type: string
+        required: false
+        default: "false"
+        description: "Whether to publish to npm"
+      prerelease:
+        type: string
+        required: false
+        default: "false"
+        description: "Whether to create a prerelease"
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+        description: "OpenAI API key for determining version and generating release notes"
+      NPM_TOKEN:
+        required: false
+        description: "NPM token for publishing"
+
+jobs: #hfe
+  check-release-label:
+    name: Check for Release Label
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should_release: ${{ steps.check-label.outputs.has_release_label }}
+    steps:
+      - name: Check for release label on PR
+        id: check-label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // If triggered by pull_request event, use the PR number directly
+            if (context.eventName === 'pull_request') {
+              const prNumber = context.payload.pull_request.number;
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              
+              const labels = pr.labels.map(l => l.name.toLowerCase());
+              
+              if (labels.includes('release')) {
+                console.log(`Found 'release' label on PR #${pr.number}. Proceeding with release.`);
+                core.setOutput('has_release_label', 'true');
+              } else {
+                console.log(`No 'release' label on PR #${pr.number}. Skipping release.`);
+                console.log(`Current labels: ${labels.join(', ') || 'none'}`);
+                core.setOutput('has_release_label', 'false');
+              }
+              return;
+            }
+            
+            // For push events, find PR for this branch
+            const currentRef = context.ref;
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${currentRef.replace('refs/heads/', '')}`,
+              state: 'open'
+            });
+            
+            if (prs.length === 0) {
+              console.log('No open PR found for this branch. Skipping release.');
+              core.setOutput('has_release_label', 'false');
+              return;
+            }
+            
+            const pr = prs[0];
+            const labels = pr.labels.map(l => l.name.toLowerCase());
+            
+            if (labels.includes('release')) {
+              console.log(`Found 'release' label on PR #${pr.number}. Proceeding with release.`);
+              core.setOutput('has_release_label', 'true');
+            } else {
+              console.log(`No 'release' label on PR #${pr.number}. Skipping release.`);
+              console.log(`Current labels: ${labels.join(', ') || 'none'}`);
+              core.setOutput('has_release_label', 'false');
+            }
+
+  analyze-and-release:
+    name: Analyze Commits & Create Release
+    runs-on: ubuntu-latest
+    needs: check-release-label
+    if: needs.check-release-label.outputs.should_release == 'true'
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Get latest release SHA
+        id: last-release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const { data: releases } = await github.rest.repos.listReleases({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 1
+              });
+              
+              if (releases.length > 0) {
+                const tagName = releases[0].tag_name;
+                const { data: ref } = await github.rest.git.getRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${tagName}`
+                });
+                core.setOutput('sha', ref.object.sha);
+                core.setOutput('tag', tagName);
+                core.setOutput('version', tagName.replace(/^v/, '')); // Remove 'v' prefix if present
+              } else {
+                // No releases exist, use initial commit
+                const { data: commits } = await github.rest.repos.listCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  per_page: 1,
+                  sha: 'HEAD'
+                });
+                if (commits.length > 0) {
+                  // Get the first commit (oldest)
+                  const allCommits = await github.paginate(github.rest.repos.listCommits, {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    per_page: 100
+                  });
+                  const firstCommit = allCommits[allCommits.length - 1];
+                  core.setOutput('sha', firstCommit.sha);
+                  core.setOutput('version', '0.0.0');
+                } else {
+                  core.setOutput('sha', context.sha);
+                  core.setOutput('version', '0.0.0');
+                }
+              }
+            } catch (error) {
+              core.setOutput('sha', context.sha);
+              core.setOutput('version', '0.0.0');
+            }
+
+      - name: Get unreleased commits
+        id: commits
+        run: |
+          LAST_SHA="${{ steps.last-release.outputs.sha }}"
+          CURRENT_SHA="${{ github.sha }}"
+          
+          # Get all commits between last release and current SHA
+          COMMITS_SIMPLE=$(git log ${LAST_SHA}..${CURRENT_SHA} --pretty=format:"%s%n%b" --no-merges)
+          
+          echo "commits_simple<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS_SIMPLE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT 
+            
+      - name: AI Determine new release version
+        id: ai-version
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          PROMPT="Analyze these git commits and determine the next semantic version number.
+          
+          Current Version: ${{ steps.last-release.outputs.version }}
+          Last Release SHA: ${{ steps.last-release.outputs.sha }}
+          Current SHA: ${{ github.sha }}
+          
+          Unreleased commits:
+          ${{ steps.commits.outputs.commits_simple }}
+          
+          Based on conventional commit standards:
+          - BREAKING CHANGE or ! in commit = major version bump
+          - feat: prefix = minor version bump  
+          - fix: or perf: prefix = patch version bump
+          - No significant changes = no release needed
+          
+          Respond with ONLY the version number in format X.Y.Z (e.g., 1.2.3) or \"none\" if no release is needed.
+          Do not include any other text, explanation, or markdown formatting."
+          
+          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "{
+              \"model\": \"gpt-4\",
+              \"messages\": [{\"role\": \"user\", \"content\": $(echo "$PROMPT" | jq -Rs .)}],
+              \"temperature\": 0.3
+            }")
+          
+          AI_RESPONSE=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          echo "ai_response=$AI_RESPONSE" >> $GITHUB_OUTPUT
+
+      - name: Parse AI version response
+        id: parse-version
+        run: |
+          AI_RESPONSE="${{ steps.ai-version.outputs.ai_response }}"
+          
+          # Extract version number (X.Y.Z format) or check for "none"
+          if echo "$AI_RESPONSE" | grep -qiE "none|skip|no release"; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "next_version=none" >> $GITHUB_OUTPUT
+          else
+            # Extract version number (format: X.Y.Z)
+            NEXT_VERSION=$(echo "$AI_RESPONSE" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            
+            if [ -z "$NEXT_VERSION" ]; then
+              echo "::error::AI did not return a valid version number. Response: $AI_RESPONSE"
+              exit 1
+            fi
+            
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "next_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate AI Release Notes
+        id: ai-notes
+        if: steps.parse-version.outputs.should_release == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          PROMPT="Generate a comprehensive release note in markdown format for the changes between two versions.
+          
+          Current Version: ${{ steps.last-release.outputs.version }}
+          New Version: ${{ steps.parse-version.outputs.next_version }}
+          Last Release SHA: ${{ steps.last-release.outputs.sha }}
+          Current SHA: ${{ github.sha }}
+          Service Name: ${{ inputs.service-name }}
+          
+          Unreleased commits:
+          ${{ steps.commits.outputs.commits_simple }}
+          
+          Analyze the git commits and create a well-formatted release note with:
+          - Summary of changes
+          - Breaking changes (if any, indicated by BREAKING CHANGE or ! in commits)
+          - New features (feat: commits)
+          - Bug fixes (fix: commits)
+          - Other improvements (perf:, refactor:, docs:, etc.)
+          
+          Use conventional commit format. Format the release notes professionally with proper markdown headings and bullet points. Make it user-friendly and easy to understand."
+          
+          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "{
+              \"model\": \"gpt-4\",
+              \"messages\": [{\"role\": \"user\", \"content\": $(echo "$PROMPT" | jq -Rs .)}],
+              \"temperature\": 0.7
+            }")
+          
+          AI_NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$AI_NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Prepare release body
+        id: release-body
+        if: steps.parse-version.outputs.should_release == 'true'
+        run: |
+          AI_NOTES="${{ steps.ai-notes.outputs.release_notes }}"
+          if [ -n "$AI_NOTES" ] && [ "$AI_NOTES" != "" ]; then
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            echo "$AI_NOTES" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "---" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "**Version:** ${{ steps.last-release.outputs.version }} → ${{ steps.parse-version.outputs.next_version }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            echo "## Release ${{ steps.parse-version.outputs.next_version }}" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "**Version:** ${{ steps.last-release.outputs.version }} → ${{ steps.parse-version.outputs.next_version }}" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "### Changes" >> $GITHUB_OUTPUT
+            echo "\`\`\`" >> $GITHUB_OUTPUT
+            echo "${{ steps.commits.outputs.commits_simple }}" >> $GITHUB_OUTPUT
+            echo "\`\`\`" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        if: steps.parse-version.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.parse-version.outputs.next_version }}
+          name: ${{ inputs.service-name }} v${{ steps.parse-version.outputs.next_version }}
+          body: ${{ steps.release-body.outputs.body }}
+          draft: false
+          prerelease: ${{ inputs.prerelease == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publish to NPM
+    runs-on: ubuntu-latest
+    needs: analyze-and-release
+    if: inputs.publish-npm == 'true' && inputs.prerelease != 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build
+        run: bun run build
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
