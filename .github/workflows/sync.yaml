@@ -31,28 +31,45 @@ jobs:
           git config --global user.name "${{ github.actor }}"
           git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           
+          # Use credential helper approach instead of URL embedding
+          git config --global credential.helper store
+          echo "https://x-access-token:${API_TOKEN}@github.com" > ~/.git-credentials
+          
           # Test if token works via API first
           echo "Testing token via API..."
-          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
-            -H "Authorization: token ${API_TOKEN}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/photon-hq/buildspace-private)
+          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" -H "Authorization: token ${API_TOKEN}" https://api.github.com/repos/photon-hq/buildspace-private)
           echo "API response code: $HTTP_CODE"
           cat /tmp/response.json | head -20
           
           if [ "$HTTP_CODE" != "200" ]; then
             echo "::error::Token cannot access buildspace-private via API. HTTP code: $HTTP_CODE"
-            echo "::error::Make sure SYNC_TOKEN has 'repo' scope and access to buildspace-private"
             exit 1
           fi
           
-          # Use credential helper for authentication (more reliable than URL embedding)
-          git config --global credential.helper store
-          echo "https://x-access-token:${API_TOKEN}@github.com" > ~/.git-credentials
+          echo "=== Debug Info ==="
+          echo "Git version: $(git --version)"
+          echo "Current branch: $(git branch --show-current)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Remotes before adding:"
+          git remote -v
           
-          # Add remote without token in URL (credential helper will handle auth)
-          git remote add private https://github.com/photon-hq/buildspace-private.git
+          # Embed token directly in URL (most reliable method)
+          echo "Adding remote..."
+          git remote add private "https://${API_TOKEN}@github.com/photon-hq/buildspace-private.git"
           
-          # Push with set-upstream for empty repos
-          git push private main:main --force --set-upstream || git push private main --force
+          echo "Remotes after adding:"
+          git remote -v | sed "s/${API_TOKEN}/***TOKEN***/g"
+          
+          # Try to fetch first to see if we can read
+          echo "Attempting to fetch from private remote..."
+          git fetch private 2>&1 || echo "Fetch failed (might be empty repo)"
+          
+          # Check what we're pushing
+          echo "Commits to push:"
+          git log --oneline -5
+          
+          # Push with verbose output
+          echo "Attempting push with verbose..."
+          GIT_CURL_VERBOSE=1 git push private main:main --force --set-upstream 2>&1 || \
+          GIT_CURL_VERBOSE=1 git push private main --force 2>&1
           
