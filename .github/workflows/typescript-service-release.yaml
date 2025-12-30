@@ -82,38 +82,23 @@ jobs:
             
             const pr = prs[0];
             const labels = pr.labels.map(l => l.name.toLowerCase());
-            
-            if (labels.includes('release')) {
-              console.log(`Found 'release' label on PR #${pr.number}. Proceeding with release.`);
-              core.setOutput('has_release_label', 'true');
-            } else {
-              console.log(`No 'release' label on PR #${pr.number}. Skipping release.`);
-              console.log(`Current labels: ${labels.join(', ') || 'none'}`);
-              core.setOutput('has_release_label', 'false');
-            }
 
-  analyze-and-release:
-    name: Analyze Commits & Create Release
+  get-release-info:
+    name: Get Release Info
     runs-on: ubuntu-latest
     needs: check-release-label
     if: needs.check-release-label.outputs.should_release == 'true'
     permissions:
-      contents: write
-      pull-requests: read
+      contents: read
+    outputs:
+      sha: ${{ steps.last-release.outputs.sha }}
+      version: ${{ steps.last-release.outputs.version }}
+      tag: ${{ steps.last-release.outputs.tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ inputs.bun-version }}
-
-      - name: Install dependencies
-        run: bun install
 
       - name: Get latest release SHA
         id: last-release
@@ -165,6 +150,22 @@ jobs:
               core.setOutput('version', '0.0.0');
             }
 
+  ai-determine-version:
+    name: AI Determine Version
+    runs-on: ubuntu-latest
+    needs: get-release-info
+    permissions:
+      contents: read
+    outputs:
+      should_release: ${{ steps.parse-version.outputs.should_release }}
+      next_version: ${{ steps.parse-version.outputs.next_version }}
+      final_version: ${{ steps.final-version.outputs.final_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: AI Determine new release version
         id: ai-version
         uses: openai/codex-action@v1
@@ -172,8 +173,8 @@ jobs:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt: |
             Analyze commits and determine next semantic version.
-            Current Version: ${{ steps.last-release.outputs.version }}
-            Last Release SHA: ${{ steps.last-release.outputs.sha }}
+            Current Version: ${{ needs.get-release-info.outputs.version }}
+            Last Release SHA: ${{ needs.get-release-info.outputs.sha }}
             Current SHA: ${{ github.sha }}
             
             Rules:
@@ -212,7 +213,7 @@ jobs:
           BASE_VERSION="${{ steps.parse-version.outputs.next_version }}"
           
           if [ "${{ inputs.prerelease }}" == "true" ]; then
-            # Append prerelease suffix (you can customize this)
+            # Append prerelease suffix
             FINAL_VERSION="${BASE_VERSION}-rc.${GITHUB_RUN_NUMBER}"
             echo "final_version=$FINAL_VERSION" >> $GITHUB_OUTPUT
             echo "Creating prerelease: $FINAL_VERSION"
@@ -222,9 +223,23 @@ jobs:
             echo "Creating release: $FINAL_VERSION"
           fi
 
+  ai-generate-notes:
+    name: AI Generate Release Notes
+    runs-on: ubuntu-latest
+    needs: [get-release-info, ai-determine-version]
+    if: needs.ai-determine-version.outputs.should_release == 'true'
+    permissions:
+      contents: read
+    outputs:
+      release_notes: ${{ steps.ai-notes.outputs.final-message }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Generate AI Release Notes
         id: ai-notes
-        if: steps.parse-version.outputs.should_release == 'true'
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -232,9 +247,9 @@ jobs:
             Generate release notes in markdown. NO title. Start with content directly.
             
             Service: ${{ inputs.service-name }}
-            Version: ${{ steps.last-release.outputs.version }} → ${{ steps.final-version.outputs.final_version }}
+            Version: ${{ needs.get-release-info.outputs.version }} → ${{ needs.ai-determine-version.outputs.final_version }}
             Current SHA: ${{ github.sha }}
-            Last Release SHA: ${{ steps.last-release.outputs.sha }}
+            Last Release SHA: ${{ needs.get-release-info.outputs.sha }}
             
             REQUIREMENTS:
             1. NO title - Start directly with content
@@ -246,18 +261,36 @@ jobs:
             7. Use emojis SPARINGLY - 1-2 total, prefer people emojis (🙋‍♀️🙋‍♂️👋)
             8. Be friendly and engaging
 
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [get-release-info, ai-determine-version, ai-generate-notes]
+    if: needs.ai-determine-version.outputs.should_release == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ inputs.bun-version }}
+
+      - name: Install dependencies
+        run: bun install
+
       - name: Prepare release body
         id: release-body
-        if: steps.parse-version.outputs.should_release == 'true'
         env:
-          AI_NOTES: ${{ steps.ai-notes.outputs.final-message }}
+          AI_NOTES: ${{ needs.ai-generate-notes.outputs.release_notes }}
         run: |
           # Build body with AI notes
           printf '%s\n' "$AI_NOTES" > /tmp/body.txt
           echo "" >> /tmp/body.txt
           echo "---" >> /tmp/body.txt
           echo "" >> /tmp/body.txt
-          echo "**Version:** ${{ steps.last-release.outputs.version }} → ${{ steps.final-version.outputs.final_version }}" >> /tmp/body.txt
+          echo "**Version:** ${{ needs.get-release-info.outputs.version }} → ${{ needs.ai-determine-version.outputs.final_version }}" >> /tmp/body.txt
           
           # Write to output using multiline format
           {
@@ -267,11 +300,10 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        if: steps.parse-version.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.final-version.outputs.final_version }}
-          name: ${{ inputs.service-name }} v${{ steps.final-version.outputs.final_version }}
+          tag_name: v${{ needs.ai-determine-version.outputs.final_version }}
+          name: ${{ inputs.service-name }} v${{ needs.ai-determine-version.outputs.final_version }}
           body: ${{ steps.release-body.outputs.body }}
           draft: false
           prerelease: ${{ inputs.prerelease == 'true' }}
@@ -281,7 +313,7 @@ jobs:
   publish:
     name: Publish to NPM
     runs-on: ubuntu-latest
-    needs: analyze-and-release
+    needs: create-release
     if: inputs.publish-npm == 'true' && inputs.prerelease != 'true'
     permissions:
       contents: read
