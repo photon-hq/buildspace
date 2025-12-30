@@ -12,50 +12,34 @@ on:
         required: false
         default: false
         description: "Whether this is a prerelease (appends -rc.N suffix)"
-      force-release:
-        type: boolean
-        required: false
-        default: false
-        description: "If true, always release (no 'none' option for AI)"
     outputs:
-      should_release:
-        description: "Whether a release should be created"
-        value: ${{ jobs.analyze.outputs.should_release }}
       version:
         description: "The determined version (e.g., 1.2.3 or 1.2.3-rc.5)"
-        value: ${{ jobs.analyze.outputs.version }}
+        value: ${{ jobs.generate.outputs.version }}
       release_notes:
         description: "AI-generated release notes in markdown"
-        value: ${{ jobs.notes.outputs.release_notes }}
-      last_release_sha:
-        description: "SHA of the last release"
-        value: ${{ jobs.analyze.outputs.last_sha }}
-      last_release_version:
-        description: "Version of the last release"
-        value: ${{ jobs.analyze.outputs.last_version }}
+        value: ${{ jobs.generate.outputs.release_notes }}
     secrets:
       OPENAI_API_KEY:
         required: true
         description: "OpenAI API key for AI-powered version detection and notes"
 
 jobs:
-  analyze:
-    name: Analyze Commits & Determine Version
+  generate:
+    name: Generate Version & Notes
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      should_release: ${{ steps.parse-version.outputs.should_release }}
-      version: ${{ steps.final-version.outputs.final_version }}
-      last_sha: ${{ steps.last-release.outputs.sha }}
-      last_version: ${{ steps.last-release.outputs.version }}
+      version: ${{ steps.version.outputs.final }}
+      release_notes: ${{ steps.ai-notes.outputs.final-message }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Get latest release info
+      - name: Get last release info
         id: last-release
         uses: actions/github-script@v7
         with:
@@ -76,121 +60,65 @@ jobs:
                 });
                 core.setOutput('sha', ref.object.sha);
                 core.setOutput('version', tagName.replace(/^v/, ''));
-                console.log(`📦 Last release: ${tagName} (${ref.object.sha.substring(0, 7)})`);
               } else {
-                // No releases exist, use first commit
                 const allCommits = await github.paginate(github.rest.repos.listCommits, {
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   per_page: 100
                 });
-                const firstCommit = allCommits[allCommits.length - 1];
-                core.setOutput('sha', firstCommit.sha);
+                core.setOutput('sha', allCommits[allCommits.length - 1].sha);
                 core.setOutput('version', '0.0.0');
-                console.log(`📦 No releases found. Starting from 0.0.0`);
               }
             } catch (error) {
-              console.log(`⚠️ Error getting release info: ${error.message}`);
               core.setOutput('sha', context.sha);
               core.setOutput('version', '0.0.0');
             }
 
-      - name: AI Determine new release version
+      - name: AI Determine Version
         id: ai-version
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          safety-strategy: read-only
           prompt: |
-            Analyze commits and determine next semantic version.
-            Current Version: ${{ steps.last-release.outputs.version }}
-            Last Release SHA: ${{ steps.last-release.outputs.sha }}
-            Current SHA: ${{ github.sha }}
+            Analyze commits between ${{ steps.last-release.outputs.sha }} and ${{ github.sha }}.
+            Current version: ${{ steps.last-release.outputs.version }}
+            Prerelease: ${{ inputs.prerelease }}
             
             Rules:
             - BREAKING CHANGE or ! = major bump
-            - feat: = minor bump
-            - fix:, perf:, or any other changes = patch bump
-            ${{ inputs.force-release && '- If no semantic commits found, default to patch bump' || '' }}
+            - feat: = minor bump  
+            - fix:, perf:, or other = patch bump
+            - Default to patch if unclear
+            - For prereleases: use same version logic, suffix will be added automatically
             
-            ${{ inputs.force-release && 'A release MUST happen. Respond with ONLY X.Y.Z (no other text).' || 'Respond with ONLY X.Y.Z or "none" if no release needed.' }}
+            Respond with ONLY X.Y.Z
 
-      - name: Parse AI version response
-        id: parse-version
+      - name: Parse Version
+        id: version
         run: |
-          AI_RESPONSE="${{ steps.ai-version.outputs.final-message }}"
-          echo "AI Response: $AI_RESPONSE"
-          
-          # Check for "none" response (only if not force-release)
-          if [ "${{ inputs.force-release }}" != "true" ] && echo "$AI_RESPONSE" | grep -qiE "none|skip|no release"; then
-            echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "next_version=none" >> $GITHUB_OUTPUT
-            echo "ℹ️ No release needed"
-            exit 0
-          fi
-          
-          # Extract version number
-          NEXT_VERSION=$(echo "$AI_RESPONSE" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          
-          if [ -z "$NEXT_VERSION" ]; then
-            echo "::error::AI did not return a valid version. Response: $AI_RESPONSE"
-            exit 1
-          fi
-          
-          echo "should_release=true" >> $GITHUB_OUTPUT
-          echo "next_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Next version: $NEXT_VERSION"
-
-      - name: Apply prerelease tag
-        id: final-version
-        if: steps.parse-version.outputs.should_release == 'true'
-        run: |
-          BASE_VERSION="${{ steps.parse-version.outputs.next_version }}"
+          NEXT=$(echo "${{ steps.ai-version.outputs.final-message }}" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          [ -z "$NEXT" ] && { echo "::error::Invalid version"; exit 1; }
           
           if [ "${{ inputs.prerelease }}" == "true" ]; then
-            FINAL_VERSION="${BASE_VERSION}-rc.${GITHUB_RUN_NUMBER}"
-            echo "🏷️ Prerelease: $FINAL_VERSION"
+            echo "final=${NEXT}-rc.${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
           else
-            FINAL_VERSION="$BASE_VERSION"
-            echo "🏷️ Release: $FINAL_VERSION"
+            echo "final=${NEXT}" >> $GITHUB_OUTPUT
           fi
-          
-          echo "final_version=$FINAL_VERSION" >> $GITHUB_OUTPUT
 
-  notes:
-    name: Generate Release Notes
-    runs-on: ubuntu-latest
-    needs: analyze
-    if: needs.analyze.outputs.should_release == 'true'
-    permissions:
-      contents: read
-    outputs:
-      release_notes: ${{ steps.ai-notes.outputs.final-message }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Generate AI Release Notes
+      - name: AI Generate Notes
         id: ai-notes
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt: |
-            Generate release notes in markdown. NO title. Start with content directly.
-            
-            Service: ${{ inputs.service-name }}
-            Version: ${{ needs.analyze.outputs.last_version }} → ${{ needs.analyze.outputs.version }}
-            Current SHA: ${{ github.sha }}
-            Last Release SHA: ${{ needs.analyze.outputs.last_sha }}
+            Generate release notes for ${{ inputs.service-name }} v${{ steps.version.outputs.final }}.
+            Changes from ${{ steps.last-release.outputs.sha }} to ${{ github.sha }}.
             
             REQUIREMENTS:
-            1. NO title - Start directly with content
-            2. Use plain language - Write like explaining to a friend
-            3. Keep it SHORT - 1-2 sentences per item max
-            4. Group logically - Use headers: ## New Features, ## Bug Fixes, ## Improvements
+            1. NO title - start with content directly
+            2. Plain language - like explaining to a friend
+            3. SHORT - 1-2 sentences per item
+            4. Group: ## New Features, ## Bug Fixes, ## Improvements
             5. Only include breaking changes if they exist
-            6. NO commit SHA or diff sections
-            7. Use emojis SPARINGLY - 1-2 total that add personality
-            8. Be friendly and engaging
-
+            6. NO commit SHAs
+            7. 1-2 emojis max for personality

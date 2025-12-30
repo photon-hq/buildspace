@@ -18,49 +18,34 @@ on:
         description: "Path to the crate if in a workspace (e.g., crates/client)"
       prerelease:
         type: boolean
-        required: false
-        default: false
+        required: true
         description: "Whether to create a prerelease"
       github-release:
         type: boolean
-        required: false
-        default: true
+        required: true
         description: "Whether to create a GitHub release"
-      targets:
-        type: string
-        required: false
-        default: "x86_64-unknown-linux-gnu,x86_64-apple-darwin,aarch64-apple-darwin,x86_64-pc-windows-msvc"
-        description: "Comma-separated list of Rust targets to build"
     secrets:
       OPENAI_API_KEY:
         required: true
-        description: "OpenAI API key for determining version and generating release notes"
+        description: "OpenAI API key for version and notes"
 
 jobs:
-  # Step 1: Check for release label
-  label-check:
-    uses: ./.github/workflows/label-check.yml
-    with:
-      label-name: "release"
-
-  # Step 2: Generate release info (version + notes)
   release-info:
-    needs: label-check
-    if: needs.label-check.outputs.exists == 'true'
+    if: inputs.github-release
     uses: ./.github/workflows/generate-release-info.yml
+    permissions:
+      contents: read
     with:
       service-name: ${{ inputs.service-name }}
       prerelease: ${{ inputs.prerelease }}
-      force-release: true  # If label exists, always release
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
-  # Step 3: Build binaries for all targets
-  build-binaries:
+  build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: release-info
-    if: needs.release-info.outputs.should_release == 'true'
+    if: inputs.github-release
     strategy:
       fail-fast: false
       matrix:
@@ -74,58 +59,49 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-
-      - name: Add target
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install dependencies (Linux)
+      - name: Install deps (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
-      - name: Build binary
+      - name: Build
+        shell: bash
         run: |
           if [ -n "${{ inputs.binary-path }}" ]; then
             cargo build --release --target ${{ matrix.target }} -p ${{ inputs.binary-name }}
           else
             cargo build --release --target ${{ matrix.target }}
           fi
-        shell: bash
 
-      - name: Prepare artifact (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Package
+        shell: bash
         run: |
           mkdir -p artifacts
-          cp target/${{ matrix.target }}/release/${{ inputs.binary-name }} artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
-          chmod +x artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/${{ inputs.binary-name }}.exe artifacts/${{ inputs.binary-name }}-${{ matrix.target }}.exe
+          else
+            cp target/${{ matrix.target }}/release/${{ inputs.binary-name }} artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
+            chmod +x artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
+          fi
 
-      - name: Prepare artifact (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          mkdir -p artifacts
-          cp target/${{ matrix.target }}/release/${{ inputs.binary-name }}.exe artifacts/${{ inputs.binary-name }}-${{ matrix.target }}.exe
-        shell: bash
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.binary-name }}-${{ matrix.target }}
           path: artifacts/*
 
-  # Step 4: Create GitHub Release with binaries
   github-release:
-    needs: [release-info, build-binaries]
-    if: inputs.github-release && needs.release-info.outputs.should_release == 'true'
+    needs: [release-info, build]
+    if: inputs.github-release
     uses: ./.github/workflows/create-github-release.yml
+    permissions:
+      contents: write
     with:
       version: ${{ needs.release-info.outputs.version }}
       title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
       notes: ${{ needs.release-info.outputs.release_notes }}
       prerelease: ${{ inputs.prerelease }}
-      artifact-name: ${{ inputs.binary-name }}
+      artifact-pattern: ${{ inputs.binary-name }}-*
