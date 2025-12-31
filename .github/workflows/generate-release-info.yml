@@ -118,7 +118,12 @@ jobs:
             1. NO title - start with content directly
             2. Plain language - like explaining to a friend
             3. SHORT - 1-2 sentences per item
-            4. Group: ## New Features, ## Bug Fixes, ## Improvements
+            4. Group: ## New Features, ## Bug Fixes, ## Improvement, if they exist. For example, 
+            if there are no new features, bug fixes, or improvements, don't include them.
             5. Only include breaking changes if they exist
-            6. NO commit SHAs
+            6. Include commit SHAs if necessary. If the commit is large, don't include it.
             7. 1-2 emojis max for personality
+            8. Code diffs ONLY if necessary. If the diff is large, don't include it. 
+
+            The end goal is clear business technical writing that is easy to understand, use, and bring 
+            delight to the user
