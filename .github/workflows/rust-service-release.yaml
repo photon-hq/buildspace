@@ -10,12 +10,12 @@ on:
       binary-name:
         type: string
         required: true
-        description: "The name of the binary to build (crate name)"
+        description: "The name of the crate/binary to build (from Cargo.toml, e.g., 'client')"
       binary-path:
         type: string
         required: false
         default: ""
-        description: "Path to the crate if in a workspace (e.g., crates/client)"
+        description: "Optional: Path to crate directory (e.g., 'crates/client'). If empty, builds from workspace root using -p flag."
       prerelease:
         type: boolean
         required: true
@@ -29,10 +29,18 @@ on:
         required: false
         default: ""
         description: "Compile-time env vars for .env file (e.g., 'BASE_URL=https://example.com')"
+      crates-release:
+        type: boolean
+        required: false
+        default: false
+        description: "Whether to publish to crates.io"
     secrets:
       OPENAI_API_KEY:
         required: true
         description: "OpenAI API key for version and notes"
+      CARGO_REGISTRY_TOKEN:
+        required: false
+        description: "Crates.io API token (required if crates-release is true)"
 
 jobs:
   release-info:
@@ -93,9 +101,12 @@ jobs:
         shell: bash
         run: |
           if [ -n "${{ inputs.binary-path }}" ]; then
-            cargo build --release --target ${{ matrix.target }} -p ${{ inputs.binary-name }}
-          else
+            # Build from crate directory
+            cd "${{ inputs.binary-path }}"
             cargo build --release --target ${{ matrix.target }}
+          else
+            # Build from workspace root using -p flag
+            cargo build --release --target ${{ matrix.target }} -p ${{ inputs.binary-name }}
           fi
 
       - name: Package
@@ -105,8 +116,8 @@ jobs:
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
             cp target/${{ matrix.target }}/release/${{ inputs.binary-name }}.exe artifacts/${{ inputs.binary-name }}-${{ matrix.target }}.exe
           else
-          cp target/${{ matrix.target }}/release/${{ inputs.binary-name }} artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
-          chmod +x artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
+            cp target/${{ matrix.target }}/release/${{ inputs.binary-name }} artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
+            chmod +x artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
           fi
 
       - uses: actions/upload-artifact@v4
@@ -126,3 +137,12 @@ jobs:
       notes: ${{ needs.release-info.outputs.release_notes }}
       prerelease: ${{ inputs.prerelease }}
       artifact-pattern: ${{ inputs.binary-name }}-*
+
+  crates-publish:
+    if: inputs.crates-release
+    uses: ./.github/workflows/publish-crates.yml
+    with:
+      crate-name: ${{ inputs.binary-name }}
+      crate-path: ${{ inputs.binary-path }}
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
