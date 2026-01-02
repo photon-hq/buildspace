@@ -1,0 +1,87 @@
+name: 'Rust Build'
+description: 'Build Rust binary for multiple targets'
+
+inputs:
+  binary-name:
+    description: 'The name of the crate/binary to build (from Cargo.toml)'
+    required: true
+  binary-path:
+    description: 'Optional: Path to crate directory (e.g., "crates/client"). If empty, builds from workspace root using -p flag.'
+    required: false
+    default: ''
+  target:
+    description: 'Target triple (e.g., x86_64-unknown-linux-gnu)'
+    required: true
+  build-env:
+    description: 'Compile-time env vars for .env file (e.g., "BASE_URL=https://example.com")'
+    required: false
+    default: ''
+
+outputs:
+  artifact-name:
+    description: 'Name of the artifact'
+    value: ${{ steps.package.outputs.artifact-name }}
+  artifact-path:
+    description: 'Path to the built artifact'
+    value: ${{ steps.package.outputs.artifact-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.target }}
+
+    - name: Install deps (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+    - name: Install deps (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install openssl@3
+
+    - name: Set OpenSSL env (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        OPENSSL_DIR=$(brew --prefix openssl@3)
+        echo "OPENSSL_DIR=${OPENSSL_DIR}" >> $GITHUB_ENV
+        echo "PKG_CONFIG_PATH=${OPENSSL_DIR}/lib/pkgconfig" >> $GITHUB_ENV
+
+    - name: Create .env file
+      if: inputs.build-env != ''
+      shell: bash
+      run: echo "${{ inputs.build-env }}" > .env
+
+    - name: Build
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.binary-path }}" ]; then
+          # Build from crate directory
+          cd "${{ inputs.binary-path }}"
+          cargo build --release --target ${{ inputs.target }}
+        else
+          # Build from workspace root using -p flag
+          cargo build --release --target ${{ inputs.target }} -p ${{ inputs.binary-name }}
+        fi
+
+    - name: Package
+      id: package
+      shell: bash
+      run: |
+        mkdir -p artifacts
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          ARTIFACT_NAME="${{ inputs.binary-name }}-${{ inputs.target }}.exe"
+          ARTIFACT_PATH="artifacts/$ARTIFACT_NAME"
+          cp target/${{ inputs.target }}/release/${{ inputs.binary-name }}.exe "$ARTIFACT_PATH"
+        else
+          ARTIFACT_NAME="${{ inputs.binary-name }}-${{ inputs.target }}"
+          ARTIFACT_PATH="artifacts/$ARTIFACT_NAME"
+          cp target/${{ inputs.target }}/release/${{ inputs.binary-name }} "$ARTIFACT_PATH"
+          chmod +x "$ARTIFACT_PATH"
+        fi
+        echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+        echo "artifact-path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT

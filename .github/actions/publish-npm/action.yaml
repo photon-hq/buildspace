@@ -1,0 +1,56 @@
+name: 'Publish to NPM'
+description: 'Publish a package to NPM registry'
+
+inputs:
+  bun-version:
+    description: 'Bun version to use'
+    required: false
+    default: 'latest'
+  node-version:
+    description: 'Node.js version'
+    required: false
+    default: '20'
+  working-directory:
+    description: 'Directory containing package.json'
+    required: false
+    default: '.'
+  build-command:
+    description: 'Build command'
+    required: false
+    default: 'bun run build'
+  tag:
+    description: "NPM tag (e.g., 'latest', 'beta')"
+    required: false
+    default: 'latest'
+  npm-token:
+    description: 'NPM authentication token'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: bun install
+
+    - name: Build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.build-command }}
+
+    - name: Publish
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
+      run: npm publish --tag ${{ inputs.tag }} --access public

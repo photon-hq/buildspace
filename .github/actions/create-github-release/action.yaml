@@ -1,0 +1,67 @@
+name: 'Create GitHub Release'
+description: 'Create a GitHub release with artifacts'
+
+inputs:
+  version:
+    description: 'The version to release (e.g., 1.2.3)'
+    required: true
+  title:
+    description: 'The release title'
+    required: true
+  notes:
+    description: 'Release notes in markdown'
+    required: false
+    default: ''
+  prerelease:
+    description: 'Whether this is a prerelease'
+    required: false
+    default: false
+  draft:
+    description: 'Whether to create as draft'
+    required: false
+    default: false
+  tag-prefix:
+    description: 'Prefix for the git tag'
+    required: false
+    default: 'v'
+  artifact-pattern:
+    description: 'Pattern to match artifacts to attach (leave empty for none)'
+    required: false
+    default: ''
+
+outputs:
+  url:
+    description: 'URL of the created release'
+    value: ${{ steps.gh-release.outputs.url }}
+  tag:
+    description: 'The created tag name'
+    value: ${{ inputs.tag-prefix }}${{ inputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Download artifacts
+      if: inputs.artifact-pattern != ''
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        pattern: ${{ inputs.artifact-pattern }}
+        merge-multiple: true
+
+    - name: Create Release
+      id: gh-release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ inputs.tag-prefix }}${{ inputs.version }}
+        name: ${{ inputs.title }}
+        body: |
+          ${{ inputs.notes }}
+          
+          ---
+          **Version:** ${{ inputs.version }}
+        draft: ${{ inputs.draft }}
+        prerelease: ${{ inputs.prerelease }}
+        files: ${{ inputs.artifact-pattern != '' && 'artifacts/*' || '' }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
