@@ -42,6 +42,11 @@ on:
         required: false
         default: "bun run build"
         description: "Build command"
+      dry-run:
+        type: boolean
+        required: false
+        default: false
+        description: "Run publish commands in dry-run mode (no actual publishing)"
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -119,4 +124,5 @@ jobs:
           tag: ${{ (inputs.prerelease || needs.check-labels.outputs.has_prerelease == 'true') && 'beta' || inputs.npm-tag }}
           working-directory: ${{ inputs.working-directory }}
           build-command: ${{ inputs.build-command }}
+          dry-run: ${{ inputs.dry-run }}
           npm-token: ${{ secrets.NPM_TOKEN }}

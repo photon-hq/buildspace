@@ -22,6 +22,10 @@ inputs:
     description: "[string] NPM tag (e.g., 'latest', 'beta')"
     required: false
     default: 'latest'
+  dry-run:
+    description: "[boolean: 'true'/'false'] Run npm publish --dry-run instead of actual publish"
+    required: false
+    default: 'false'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -53,4 +57,9 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
-      run: npm publish --tag ${{ inputs.tag }} --access public
+      run: |
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          npm publish --tag ${{ inputs.tag }} --access public --dry-run
+        else
+          npm publish --tag ${{ inputs.tag }} --access public
+        fi
