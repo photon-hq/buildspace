@@ -10,7 +10,7 @@ inputs:
     required: false
     default: 'false'
   openai-api-key:
-    description: '[string] OpenAI API key for AI-powered version detection and notes'
+    description: '[secret] OpenAI API key for AI-powered version detection and notes'
     required: true
 
 outputs:
