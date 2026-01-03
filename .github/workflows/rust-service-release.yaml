@@ -79,7 +79,7 @@ jobs:
         uses: photon-hq/buildspace/.github/actions/generate-release-info@main
         with:
           service-name: ${{ inputs.service-name }}
-          prerelease: ${{ (inputs.prerelease != '' && inputs.prerelease == 'true') || needs.check-labels.outputs.has_prerelease == 'true' }}
+          prerelease: ${{ inputs.prerelease != '' && inputs.prerelease == 'true' || inputs.prerelease == '' && needs.check-labels.outputs.has_prerelease == 'true' }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
   build:
@@ -127,7 +127,7 @@ jobs:
           version: ${{ needs.release-info.outputs.version }}
           title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
           notes: ${{ needs.release-info.outputs.release_notes }}
-          prerelease: ${{ (inputs.prerelease != '' && inputs.prerelease == 'true') || needs.check-labels.outputs.has_prerelease == 'true' }}
+          prerelease: ${{ inputs.prerelease != '' && inputs.prerelease == 'true' || inputs.prerelease == '' && needs.check-labels.outputs.has_prerelease == 'true' }}
           artifact-pattern: ${{ inputs.binary-name }}-*
 
   crates-publish:
