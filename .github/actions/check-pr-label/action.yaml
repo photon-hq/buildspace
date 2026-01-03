@@ -1,5 +1,5 @@
 name: 'Check PR Labels'
-description: 'Check PR labels and output flags for release decisions'
+description: 'Check PR labels and output flags for release decisions, with optional default labels on direct pushes via the "default-on-push" input'
 
 inputs:
   default-on-push:
