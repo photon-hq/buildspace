@@ -12,21 +12,6 @@ on:
         required: false
         default: "latest"
         description: "Bun version to use"
-      prerelease:
-        type: boolean
-        required: false
-        default: false
-        description: "Whether to create a prerelease"
-      github-release:
-        type: boolean
-        required: false
-        default: false
-        description: "Whether to create a GitHub release"
-      npm-release:
-        type: boolean
-        required: false
-        default: false
-        description: "Whether to publish to npm"
       npm-tag:
         type: string
         required: false
@@ -42,18 +27,38 @@ on:
         required: false
         default: "bun run build"
         description: "Build command"
+      labels-to-check:
+        type: string
+        required: false
+        default: '["github-release", "npm-release", "prerelease"]'
+        description: "JSON array of PR labels to check"
+      prerelease:
+        type: boolean
+        required: false
+        default: false
+        description: "Force prerelease (overrides label)"
+      github-release:
+        type: boolean
+        required: false
+        default: false
+        description: "Force GitHub release (overrides label)"
+      npm-release:
+        type: boolean
+        required: false
+        default: false
+        description: "Force npm publish (overrides label)"
       dry-run:
         type: boolean
         required: false
         default: false
-        description: "Run publish commands in dry-run mode (no actual publishing)"
+        description: "Run in dry-run mode (no actual publishing)"
     secrets:
       OPENAI_API_KEY:
         required: true
         description: "OpenAI API key for version and notes"
       NPM_TOKEN:
         required: false
-        description: "NPM token (required if npm-release is true)"
+        description: "NPM token (required if npm-release)"
 
 jobs:
   check-labels:
@@ -62,56 +67,55 @@ jobs:
       pull-requests: read
       contents: read
     outputs:
-      has_github_release: ${{ steps.check-labels.outputs.has_github_release }}
-      has_npm_release: ${{ steps.check-labels.outputs.has_npm_release }}
-      has_prerelease: ${{ steps.check-labels.outputs.has_prerelease }}
+      labels: ${{ steps.check.outputs.labels }}
     steps:
       - name: Check PR Labels
-        id: check-labels
+        id: check
         uses: photon-hq/buildspace/.github/actions/check-pr-label@main
+        with:
+          labels: ${{ inputs.labels-to-check }}
 
   release-info:
     needs: check-labels
     if: |
-      (needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release) ||
-      (needs.check-labels.outputs.has_npm_release == 'true' || inputs.npm-release)
+      fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release ||
+      fromJSON(needs.check-labels.outputs.labels).npm-release || inputs.npm-release
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.generate-release-info.outputs.version }}
-      release_notes: ${{ steps.generate-release-info.outputs.release_notes }}
+      version: ${{ steps.generate.outputs.version }}
+      release_notes: ${{ steps.generate.outputs.release_notes }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Generate Release Info
-        id: generate-release-info
+        id: generate
         uses: photon-hq/buildspace/.github/actions/generate-release-info@main
         with:
           service-name: ${{ inputs.service-name }}
-          prerelease: ${{ inputs.prerelease || needs.check-labels.outputs.has_prerelease == 'true' }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
   github-release:
     needs: [check-labels, release-info]
-    if: needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release
+    if: fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Create GitHub Release
-        id: create-release
         uses: photon-hq/buildspace/.github/actions/create-github-release@main
         with:
           version: ${{ needs.release-info.outputs.version }}
           title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
           notes: ${{ needs.release-info.outputs.release_notes }}
-          prerelease: ${{ inputs.prerelease || needs.check-labels.outputs.has_prerelease == 'true' }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
 
   npm-publish:
     needs: [check-labels, release-info]
-    if: needs.check-labels.outputs.has_npm_release == 'true' || inputs.npm-release
+    if: fromJSON(needs.check-labels.outputs.labels).npm-release || inputs.npm-release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -121,7 +125,7 @@ jobs:
         uses: photon-hq/buildspace/.github/actions/publish-npm@main
         with:
           bun-version: ${{ inputs.bun-version }}
-          tag: ${{ (inputs.prerelease || needs.check-labels.outputs.has_prerelease == 'true') && 'beta' || inputs.npm-tag }}
+          tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
           working-directory: ${{ inputs.working-directory }}
           build-command: ${{ inputs.build-command }}
           dry-run: ${{ inputs.dry-run }}
