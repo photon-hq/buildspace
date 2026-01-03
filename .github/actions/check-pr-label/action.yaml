@@ -1,0 +1,99 @@
+name: 'Check PR Labels'
+description: 'Check PR labels and output flags for release decisions, with optional default labels on direct pushes via the "default-on-push" input'
+
+inputs:
+  default-on-push:
+    description: '[string] Comma-separated list of labels to default to true on direct push (no PR found). Format: github-release,crates-release'
+    required: false
+    default: ''
+
+outputs:
+  has_github_release:
+    description: 'Whether PR has github-release label'
+    value: ${{ steps.check-labels.outputs.has_github_release }}
+  has_crates_release:
+    description: 'Whether PR has crates-release label'
+    value: ${{ steps.check-labels.outputs.has_crates_release }}
+  has_prerelease:
+    description: 'Whether PR has prerelease label'
+    value: ${{ steps.check-labels.outputs.has_prerelease }}
+  has_npm_release:
+    description: 'Whether PR has npm-release label'
+    value: ${{ steps.check-labels.outputs.has_npm_release }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check PR Labels
+      id: check-labels
+      uses: actions/github-script@v7
+      with:
+        script: |
+          // Always check these labels
+          const defaultOnPush = '${{ inputs.default-on-push }}'.split(',').map(l => l.trim().toLowerCase()).filter(Boolean);
+          
+          let pr = null;
+          let labels = [];
+          
+          // If this is a pull_request event, use it directly
+          if (context.eventName === 'pull_request') {
+            pr = context.payload.pull_request;
+            labels = (pr.labels || []).map(l => l.name.toLowerCase());
+            console.log(`PR event: Found PR #${pr.number} with labels: ${labels.join(', ') || 'none'}`);
+          } else {
+            // For push events, find the merged PR
+            try {
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed',
+                base: context.ref.replace('refs/heads/', ''),
+                sort: 'updated',
+                direction: 'desc',
+                per_page: 10
+              });
+              
+              // Find the PR that was merged to this commit
+              pr = prs.find(p => p.merge_commit_sha === context.sha);
+              
+              if (pr) {
+                const { data: prWithLabels } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pr.number
+                });
+                labels = (prWithLabels.labels || []).map(l => l.name.toLowerCase());
+                console.log(`Push event: Found merged PR #${pr.number} with labels: ${labels.join(', ') || 'none'}`);
+              } else {
+                console.log('No merged PR found for this commit.');
+              }
+            } catch (error) {
+              console.log(`Error finding PR: ${error.message}`);
+            }
+          }
+          
+          const labelsToCheck = ['github-release', 'crates-release', 'prerelease', 'npm-release'];
+
+          for (const label of defaultOnPush) {
+            if (labelsToCheck.includes(label)) {
+              labels.push(label);
+            }
+          }
+
+          const hasGithubRelease = labels.includes('github-release');
+          const hasCratesRelease = labels.includes('crates-release');
+          const hasPrerelease = labels.includes('prerelease');
+          const hasNpmRelease = labels.includes('npm-release');
+          
+          core.setOutput('has_github_release', hasGithubRelease ? 'true' : 'false');
+          core.setOutput('has_crates_release', hasCratesRelease ? 'true' : 'false');
+          core.setOutput('has_prerelease', hasPrerelease ? 'true' : 'false');
+          core.setOutput('has_npm_release', hasNpmRelease ? 'true' : 'false');
+          
+          return {
+            has_github_release: hasGithubRelease,
+            has_crates_release: hasCratesRelease,
+            has_prerelease: hasPrerelease,
+            has_npm_release: hasNpmRelease
+          };
+

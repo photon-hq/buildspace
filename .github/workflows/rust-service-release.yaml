@@ -18,12 +18,14 @@ on:
         description: "Optional: Path to crate directory (e.g., 'crates/client'). If empty, builds from workspace root using -p flag."
       prerelease:
         type: boolean
-        required: true
-        description: "Whether to create a prerelease"
+        required: false
+        default: false
+        description: "Whether to create a prerelease (overrides label check if provided)"
       github-release:
         type: boolean
-        required: true
-        description: "Whether to create a GitHub release"
+        required: false
+        default: false
+        description: "Whether to create a GitHub release (overrides label check if provided)"
       build-env:
         type: string
         required: false
@@ -33,7 +35,7 @@ on:
         type: boolean
         required: false
         default: false
-        description: "Whether to publish to crates.io"
+        description: "Whether to publish to crates.io (overrides label check if provided)"
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -43,22 +45,48 @@ on:
         description: "Crates.io API token (required if crates-release is true)"
 
 jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      has_github_release: ${{ steps.check-labels.outputs.has_github_release }}
+      has_crates_release: ${{ steps.check-labels.outputs.has_crates_release }}
+      has_prerelease: ${{ steps.check-labels.outputs.has_prerelease }}
+    steps:
+      - name: Check PR Labels
+        id: check-labels
+        uses: photon-hq/buildspace/.github/actions/check-pr-label@main
+
   release-info:
-    if: inputs.github-release
-    uses: ./.github/workflows/generate-release-info.yml
+    needs: check-labels
+    if: |
+      (needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release) ||
+      (needs.check-labels.outputs.has_crates_release == 'true' || inputs.crates-release)
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    with:
-      service-name: ${{ inputs.service-name }}
-      prerelease: ${{ inputs.prerelease }}
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    outputs:
+      version: ${{ steps.generate-release-info.outputs.version }}
+      release_notes: ${{ steps.generate-release-info.outputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Generate Release Info
+        id: generate-release-info
+        uses: photon-hq/buildspace/.github/actions/generate-release-info@main
+        with:
+          service-name: ${{ inputs.service-name }}
+          prerelease: ${{ inputs.prerelease || needs.check-labels.outputs.has_prerelease == 'true' }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    needs: release-info
-    if: inputs.github-release
+    needs: [check-labels, release-info]
+    if: needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release
     strategy:
       fail-fast: false
       matrix:
@@ -72,53 +100,13 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust Build
+        uses: photon-hq/buildspace/.github/actions/rust-build@main
         with:
-          targets: ${{ matrix.target }}
-
-      - name: Install deps (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Install deps (macOS)
-        if: matrix.os == 'macos-latest'
-        run: brew install openssl@3
-
-      - name: Set OpenSSL env (macOS)
-        if: matrix.os == 'macos-latest'
-        shell: bash
-        run: |
-          OPENSSL_DIR=$(brew --prefix openssl@3)
-          echo "OPENSSL_DIR=${OPENSSL_DIR}" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=${OPENSSL_DIR}/lib/pkgconfig" >> $GITHUB_ENV
-
-      - name: Create .env file
-        if: inputs.build-env != ''
-        shell: bash
-        run: echo "${{ inputs.build-env }}" > .env
-
-      - name: Build
-        shell: bash
-        run: |
-          if [ -n "${{ inputs.binary-path }}" ]; then
-            # Build from crate directory
-            cd "${{ inputs.binary-path }}"
-            cargo build --release --target ${{ matrix.target }}
-          else
-            # Build from workspace root using -p flag
-            cargo build --release --target ${{ matrix.target }} -p ${{ inputs.binary-name }}
-          fi
-
-      - name: Package
-        shell: bash
-        run: |
-          mkdir -p artifacts
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cp target/${{ matrix.target }}/release/${{ inputs.binary-name }}.exe artifacts/${{ inputs.binary-name }}-${{ matrix.target }}.exe
-          else
-            cp target/${{ matrix.target }}/release/${{ inputs.binary-name }} artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
-            chmod +x artifacts/${{ inputs.binary-name }}-${{ matrix.target }}
-          fi
+          binary-name: ${{ inputs.binary-name }}
+          binary-path: ${{ inputs.binary-path }}
+          target: ${{ matrix.target }}
+          build-env: ${{ inputs.build-env }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -126,23 +114,31 @@ jobs:
           path: artifacts/*
 
   github-release:
-    needs: [release-info, build]
-    if: inputs.github-release
-    uses: ./.github/workflows/create-github-release.yml
+    needs: [check-labels, release-info, build]
+    if: needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    with:
-      version: ${{ needs.release-info.outputs.version }}
-      title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
-      notes: ${{ needs.release-info.outputs.release_notes }}
-      prerelease: ${{ inputs.prerelease }}
-      artifact-pattern: ${{ inputs.binary-name }}-*
+    steps:
+      - name: Create GitHub Release
+        id: create-release
+        uses: photon-hq/buildspace/.github/actions/create-github-release@main
+        with:
+          version: ${{ needs.release-info.outputs.version }}
+          title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
+          notes: ${{ needs.release-info.outputs.release_notes }}
+          prerelease: ${{ inputs.prerelease || needs.check-labels.outputs.has_prerelease == 'true' }}
+          artifact-pattern: ${{ inputs.binary-name }}-*
 
   crates-publish:
-    if: inputs.crates-release
-    uses: ./.github/workflows/publish-crates.yml
-    with:
-      crate-name: ${{ inputs.binary-name }}
-      crate-path: ${{ inputs.binary-path }}
-    secrets:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    needs: [check-labels, release-info]
+    if: needs.check-labels.outputs.has_crates_release == 'true' || inputs.crates-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish to Crates.io
+        uses: photon-hq/buildspace/.github/actions/publish-crates@main
+        with:
+          crate-name: ${{ inputs.binary-name }}
+          crate-path: ${{ inputs.binary-path }}
+          cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
