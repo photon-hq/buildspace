@@ -21,10 +21,13 @@ runs:
     - name: Check PR Labels
       id: check-labels
       uses: actions/github-script@v7
+      env:
+        LABELS_INPUT: ${{ inputs.labels }}
+        DEFAULT_ON_PUSH: ${{ inputs.default-on-push }}
       with:
         script: |
-          const defaultOnPush = '${{ inputs.default-on-push }}'.split(',').map(l => l.trim().toLowerCase()).filter(Boolean);
-          const labelsToCheck = JSON.parse('${{ inputs.labels }}');
+          const defaultOnPush = (process.env.DEFAULT_ON_PUSH || '').split(',').map(l => l.trim().toLowerCase()).filter(Boolean);
+          const labelsToCheck = JSON.parse(process.env.LABELS_INPUT);
           
           let pr = null;
           let prLabels = [];
