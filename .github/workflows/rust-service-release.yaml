@@ -62,8 +62,8 @@ jobs:
   release-info:
     needs: check-labels
     if: |
-      (needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release == 'true') ||
-      (needs.check-labels.outputs.has_crates_release == 'true' || inputs.crates-release == 'true')
+      (inputs.github-release != '' && inputs.github-release == 'true' || inputs.github-release == '' && needs.check-labels.outputs.has_github_release == 'true') ||
+      (inputs.crates-release != '' && inputs.crates-release == 'true' || inputs.crates-release == '' && needs.check-labels.outputs.has_crates_release == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -86,7 +86,7 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: [check-labels, release-info]
-    if: needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release == 'true'
+    if: inputs.github-release != '' && inputs.github-release == 'true' || inputs.github-release == '' && needs.check-labels.outputs.has_github_release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -115,7 +115,7 @@ jobs:
 
   github-release:
     needs: [check-labels, release-info, build]
-    if: needs.check-labels.outputs.has_github_release == 'true' || inputs.github-release == 'true'
+    if: inputs.github-release != '' && inputs.github-release == 'true' || inputs.github-release == '' && needs.check-labels.outputs.has_github_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -132,7 +132,7 @@ jobs:
 
   crates-publish:
     needs: [check-labels, release-info]
-    if: needs.check-labels.outputs.has_crates_release == 'true' || inputs.crates-release == 'true'
+    if: inputs.crates-release != '' && inputs.crates-release == 'true' || inputs.crates-release == '' && needs.check-labels.outputs.has_crates_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
