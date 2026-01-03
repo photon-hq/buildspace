@@ -9,10 +9,6 @@ inputs:
     description: 'Optional: Path to crate directory (e.g., crates/client). If empty, publishes from workspace root using -p flag.'
     required: false
     default: ''
-  dry-run:
-    description: 'Run cargo publish --dry-run instead of actual publish'
-    required: false
-    default: false
   cargo-registry-token:
     description: 'Crates.io API token'
     required: true
@@ -32,18 +28,10 @@ runs:
           # Publish from crate directory
           echo "Publishing ${{ inputs.crate-name }} from ${{ inputs.crate-path }}..."
           cd "${{ inputs.crate-path }}"
-          if [ "${{ inputs.dry-run }}" == "true" ]; then
-            cargo publish --dry-run
-          else
-            cargo publish
-          fi
+          cargo publish
         else
           # Publish from workspace root using -p flag
           echo "Publishing ${{ inputs.crate-name }} from workspace root..."
-          if [ "${{ inputs.dry-run }}" == "true" ]; then
-            cargo publish --dry-run -p "${{ inputs.crate-name }}"
-          else
-            cargo publish -p "${{ inputs.crate-name }}"
-          fi
+          cargo publish -p "${{ inputs.crate-name }}"
         fi
 
