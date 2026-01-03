@@ -23,7 +23,7 @@ inputs:
     required: false
     default: 'latest'
   npm-token:
-    description: 'NPM authentication token'
+    description: '[secret] NPM authentication token'
     required: true
 
 runs:
