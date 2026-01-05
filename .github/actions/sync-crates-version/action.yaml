@@ -1,0 +1,68 @@
+name: 'Sync Crates Version'
+description: 'Sync version across all workspace crates using cargo-release'
+
+inputs:
+  version:
+    description: '[string] The version to set across all crates (e.g., 1.2.3)'
+    required: true
+  commit-changes:
+    description: "[boolean: 'true'/'false'] Whether to commit and push version changes"
+    required: false
+    default: 'true'
+  github-token:
+    description: '[secret] GitHub token for pushing commits (required if commit-changes is true)'
+    required: true
+
+outputs:
+  updated-crates:
+    description: 'JSON array of crate names that were updated'
+    value: ${{ steps.sync.outputs.updated-crates }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-release
+      shell: bash
+      run: cargo install cargo-release --locked
+
+    - name: Configure git
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Sync workspace version with cargo-release
+      id: sync
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        VERSION="${{ inputs.version }}"
+        PUSH_FLAG=""
+        
+        if [ "${{ inputs.commit-changes }}" != "true" ]; then
+          PUSH_FLAG="--no-push"
+        fi
+        
+        echo "Setting all workspace crates to version ${VERSION} using cargo-release..."
+        
+        # cargo-release handles: version bump, commit, push
+        # --no-publish: we handle publishing separately in publish-crates
+        # --no-tag: we create tags via GitHub release action
+        cargo release ${VERSION} \
+          --execute \
+          --no-confirm \
+          --no-publish \
+          --no-tag \
+          ${PUSH_FLAG}
+        
+        # Get updated crates for output
+        UPDATED_CRATES=$(cargo metadata --no-deps --format-version 1 | jq '[.packages[].name]')
+        echo "updated-crates=${UPDATED_CRATES}" >> $GITHUB_OUTPUT
+        
+        echo ""
+        echo "Updated crates to version ${VERSION}:"
+        cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | "  - \(.name): \(.version)"'
