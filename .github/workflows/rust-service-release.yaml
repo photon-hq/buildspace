@@ -16,6 +16,11 @@ on:
         required: false
         default: ""
         description: "Path to crate directory (e.g., 'crates/client')"
+      crates:
+        type: string
+        required: false
+        default: '[]'
+        description: "JSON array of crate paths to publish in order (e.g., '[\"crates/shared\", \"crates/client\"]'). Dependencies first."
       build-env:
         type: string
         required: false
@@ -137,16 +142,36 @@ jobs:
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           artifact-pattern: ${{ inputs.binary-name }}-*
 
-  crates-publish:
+  crates-sync-version:
     needs: [check-labels, release-info]
+    if: fromJSON(needs.check-labels.outputs.labels).crates-release || inputs.crates-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ github.token }}
+      - name: Sync Workspace Version
+        uses: photon-hq/buildspace/.github/actions/sync-crates-version@main
+        with:
+          version: ${{ needs.release-info.outputs.version }}
+          commit-changes: 'true'
+          github-token: ${{ github.token }}
+
+  crates-publish:
+    needs: [check-labels, release-info, crates-sync-version]
     if: fromJSON(needs.check-labels.outputs.labels).crates-release || inputs.crates-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - name: Pull latest version changes
+        run: git pull --ff-only origin ${{ github.ref_name }}
       - name: Publish to Crates.io
         uses: photon-hq/buildspace/.github/actions/publish-crates@main
         with:
-          crate-name: ${{ inputs.binary-name }}
-          crate-path: ${{ inputs.binary-path }}
+          crates: ${{ inputs.crates }}
           dry-run: ${{ inputs.dry-run }}
           cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}

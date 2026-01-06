@@ -1,14 +1,11 @@
 name: 'Publish to Crates.io'
-description: 'Publish a Rust crate to crates.io'
+description: 'Publish workspace crates to crates.io in dependency order'
 
 inputs:
-  crate-name:
-    description: '[string] The name of the crate to publish (from Cargo.toml)'
-    required: true
-  crate-path:
-    description: '[string] Optional: Path to crate directory (e.g., crates/client). If empty, publishes from workspace root using -p flag.'
+  crates:
+    description: '[array] JSON array of crate paths to publish (e.g., ["crates/shared", "crates/client"]). Order matters - publish dependencies first.'
     required: false
-    default: ''
+    default: '[]'
   dry-run:
     description: "[boolean: 'true'/'false'] Run cargo publish --dry-run instead of actual publish"
     required: false
@@ -23,27 +20,90 @@ runs:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Publish to crates.io
+    - name: Publish crates to crates.io
       shell: bash
       env:
         CARGO_REGISTRY_TOKEN: ${{ inputs.cargo-registry-token }}
       run: |
-        if [ -n "${{ inputs.crate-path }}" ]; then
-          # Publish from crate directory
-          echo "Publishing ${{ inputs.crate-name }} from ${{ inputs.crate-path }}..."
-          cd "${{ inputs.crate-path }}"
-          if [ "${{ inputs.dry-run }}" == "true" ]; then
-            cargo publish --dry-run
+        CRATES='${{ inputs.crates }}'
+        DRY_RUN="${{ inputs.dry-run }}"
+        
+        publish_crate() {
+          local crate_path="$1"
+          local crate_name
+          
+          if [ -n "$crate_path" ] && [ -f "${crate_path}/Cargo.toml" ]; then
+            crate_name=$(grep '^name = ' "${crate_path}/Cargo.toml" | head -1 | sed 's/name = "\(.*\)"/\1/')
+            echo "Publishing ${crate_name} from ${crate_path}..."
+            cd "$crate_path"
+            
+            if [ "$DRY_RUN" == "true" ]; then
+              cargo publish --dry-run --allow-dirty
+            else
+              # Retry logic for crates.io rate limiting
+              for i in 1 2 3; do
+                if cargo publish --allow-dirty; then
+                  echo "Successfully published ${crate_name}"
+                  break
+                else
+                  if [ $i -lt 3 ]; then
+                    echo "Publish failed, waiting 30s before retry..."
+                    sleep 30
+                  else
+                    echo "Failed to publish ${crate_name} after 3 attempts"
+                    exit 1
+                  fi
+                fi
+              done
+            fi
+            
+            cd - > /dev/null
+            
+            # Wait between publishes to avoid crates.io rate limiting
+            if [ "$DRY_RUN" != "true" ]; then
+              echo "Waiting 10s for crates.io index to update..."
+              sleep 10
+            fi
           else
-            cargo publish
+            # Publish from workspace root using -p flag
+            crate_name="$crate_path"
+            echo "Publishing ${crate_name} from workspace root..."
+            
+            if [ "$DRY_RUN" == "true" ]; then
+              cargo publish --dry-run -p "$crate_name" --allow-dirty
+            else
+              for i in 1 2 3; do
+                if cargo publish -p "$crate_name" --allow-dirty; then
+                  echo "Successfully published ${crate_name}"
+                  break
+                else
+                  if [ $i -lt 3 ]; then
+                    echo "Publish failed, waiting 30s before retry..."
+                    sleep 30
+                  else
+                    echo "Failed to publish ${crate_name} after 3 attempts"
+                    exit 1
+                  fi
+                fi
+              done
+              
+              echo "Waiting 10s for crates.io index to update..."
+              sleep 10
+            fi
           fi
-        else
-          # Publish from workspace root using -p flag
-          echo "Publishing ${{ inputs.crate-name }} from workspace root..."
-          if [ "${{ inputs.dry-run }}" == "true" ]; then
-            cargo publish --dry-run -p "${{ inputs.crate-name }}"
-          else
-            cargo publish -p "${{ inputs.crate-name }}"
-          fi
+        }
+        
+        if [ "$CRATES" == "[]" ] || [ -z "$CRATES" ]; then
+          echo "::error::No crates specified. Please provide crate paths in the 'crates' input."
+          exit 1
         fi
-
+        
+        echo "Publishing specified crates in order..."
+        
+        # Publish each crate in the specified order (dependencies first)
+        for crate_path in $(echo "$CRATES" | jq -r '.[]'); do
+          publish_crate "$crate_path"
+        done
+        
+        echo ""
+        echo "All crates published successfully!"
