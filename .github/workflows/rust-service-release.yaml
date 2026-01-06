@@ -29,23 +29,18 @@ on:
       labels-to-check:
         type: string
         required: false
-        default: '["github-release", "crates-release", "prerelease"]'
+        default: '["release", "prerelease"]'
         description: "JSON array of PR labels to check"
       prerelease:
         type: boolean
         required: false
         default: false
         description: "Force prerelease (overrides label)"
-      github-release:
+      release:
         type: boolean
         required: false
         default: false
-        description: "Force GitHub release (overrides label)"
-      crates-release:
-        type: boolean
-        required: false
-        default: false
-        description: "Force crates.io publish (overrides label)"
+        description: "Force release - does both GitHub release and crates.io publish"
       dry-run:
         type: boolean
         required: false
@@ -76,9 +71,7 @@ jobs:
 
   release-info:
     needs: check-labels
-    if: |
-      fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release ||
-      fromJSON(needs.check-labels.outputs.labels).crates-release || inputs.crates-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,7 +94,7 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     needs: [check-labels, release-info]
-    if: fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     strategy:
       fail-fast: false
       matrix:
@@ -128,7 +121,7 @@ jobs:
 
   github-release:
     needs: [check-labels, release-info, build]
-    if: fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -144,7 +137,7 @@ jobs:
 
   crates-sync-version:
     needs: [check-labels, release-info]
-    if: fromJSON(needs.check-labels.outputs.labels).crates-release || inputs.crates-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -161,7 +154,7 @@ jobs:
 
   crates-publish:
     needs: [check-labels, release-info, crates-sync-version]
-    if: fromJSON(needs.check-labels.outputs.labels).crates-release || inputs.crates-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
