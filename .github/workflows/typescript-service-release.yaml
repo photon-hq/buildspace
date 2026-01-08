@@ -17,6 +17,11 @@ on:
         required: false
         default: "latest"
         description: "NPM tag to publish with"
+      no-npm-publish:
+        type: boolean
+        required: false
+        default: false
+        description: "Do not publish to npm"
       working-directory:
         type: string
         required: false
@@ -30,23 +35,18 @@ on:
       labels-to-check:
         type: string
         required: false
-        default: '["github-release", "npm-release", "prerelease"]'
+        default: '["release", "prerelease"]'
         description: "JSON array of PR labels to check"
       prerelease:
         type: boolean
         required: false
         default: false
         description: "Force prerelease (overrides label)"
-      github-release:
+      release:
         type: boolean
         required: false
         default: false
-        description: "Force GitHub release (overrides label)"
-      npm-release:
-        type: boolean
-        required: false
-        default: false
-        description: "Force npm publish (overrides label)"
+        description: "Force release - does both GitHub release and npm publish"
       dry-run:
         type: boolean
         required: false
@@ -58,7 +58,7 @@ on:
         description: "OpenAI API key for version and notes"
       NPM_TOKEN:
         required: false
-        description: "NPM token (required if npm-release)"
+        description: "NPM token (required for npm publish)"
 
 jobs:
   check-labels:
@@ -77,9 +77,7 @@ jobs:
 
   release-info:
     needs: check-labels
-    if: |
-      fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release ||
-      fromJSON(needs.check-labels.outputs.labels).npm-release || inputs.npm-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,9 +96,37 @@ jobs:
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
-  github-release:
+  bump-version:
     needs: [check-labels, release-info]
-    if: fromJSON(needs.check-labels.outputs.labels).github-release || inputs.github-release
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ github.token }}
+      - name: Update package.json version
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          VERSION="${{ needs.release-info.outputs.version }}"
+          echo "Updating package.json to version ${VERSION}..."
+          npm version ${VERSION} --no-git-tag-version --allow-same-version
+          echo "Updated to version ${VERSION}"
+      - name: Commit and push
+        run: |
+          VERSION="${{ needs.release-info.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: bump version to ${VERSION}"
+            git push
+          fi
+
+  github-release:
+    needs: [check-labels, release-info, bump-version]
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,13 +140,17 @@ jobs:
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
 
   npm-publish:
-    needs: [check-labels, release-info]
-    if: fromJSON(needs.check-labels.outputs.labels).npm-release || inputs.npm-release
+    needs: [check-labels, release-info, bump-version]
+    if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.no-npm-publish != true
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+      - name: Pull latest changes
+        run: git pull --ff-only origin ${{ github.ref_name }}
       - name: Publish to NPM
         uses: photon-hq/buildspace/.github/actions/publish-npm@main
         with:
