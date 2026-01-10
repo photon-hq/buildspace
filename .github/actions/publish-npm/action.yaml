@@ -22,6 +22,10 @@ inputs:
     description: "[string] NPM tag (e.g., 'latest', 'beta')"
     required: false
     default: 'latest'
+  dry-run:
+    description: "[boolean] Run in dry-run mode (no actual publishing)"
+    required: false
+    default: 'false'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -53,4 +57,10 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
-      run: npm publish --tag ${{ inputs.tag }} --access public
+      run: |
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
+          npm publish --tag ${{ inputs.tag }} --access public --dry-run
+        else
+          npm publish --tag ${{ inputs.tag }} --access public
+        fi
