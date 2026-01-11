@@ -65,7 +65,7 @@ jobs:
     steps:
       - name: Check PR Labels
         id: check
-        uses: photon-hq/buildspace/.github/actions/check-pr-label@main
+        uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
           labels: ${{ inputs.labels-to-check }}
 
@@ -84,7 +84,7 @@ jobs:
           fetch-depth: 0
       - name: Generate Release Info
         id: generate
-        uses: photon-hq/buildspace/.github/actions/generate-release-info@main
+        uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
         with:
           service-name: ${{ inputs.service-name }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
@@ -108,7 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Rust Build
-        uses: photon-hq/buildspace/.github/actions/rust-build@main
+        uses: photon-hq/buildspace/.github/blocks/rust-build@main
         with:
           binary-name: ${{ inputs.binary-name }}
           binary-path: ${{ inputs.binary-path }}
@@ -127,7 +127,7 @@ jobs:
       contents: write
     steps:
       - name: Create GitHub Release
-        uses: photon-hq/buildspace/.github/actions/create-github-release@main
+        uses: photon-hq/buildspace/.github/blocks/create-github-release@main
         with:
           version: ${{ needs.release-info.outputs.version }}
           title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
@@ -146,7 +146,7 @@ jobs:
         with:
           token: ${{ github.token }}
       - name: Sync Workspace Version
-        uses: photon-hq/buildspace/.github/actions/sync-crates-version@main
+        uses: photon-hq/buildspace/.github/blocks/sync-crates-version@main
         with:
           version: ${{ needs.release-info.outputs.version }}
           commit-changes: 'true'
@@ -163,7 +163,7 @@ jobs:
       - name: Pull latest version changes
         run: git pull --ff-only origin ${{ github.ref_name }}
       - name: Publish to Crates.io
-        uses: photon-hq/buildspace/.github/actions/publish-crates@main
+        uses: photon-hq/buildspace/.github/blocks/publish-crates@main
         with:
           crates: ${{ inputs.crates }}
           dry-run: ${{ inputs.dry-run }}
