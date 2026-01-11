@@ -75,7 +75,7 @@ jobs:
     steps:
       - name: Check PR Labels
         id: check
-        uses: photon-hq/buildspace/.github/actions/check-pr-label@main
+        uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
           labels: ${{ inputs.labels-to-check }}
 
@@ -94,7 +94,7 @@ jobs:
           fetch-depth: 0
       - name: Generate Release Info
         id: generate
-        uses: photon-hq/buildspace/.github/actions/generate-release-info@main
+        uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
         with:
           service-name: ${{ inputs.service-name }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
@@ -140,7 +140,7 @@ jobs:
       contents: write
     steps:
       - name: Create GitHub Release
-        uses: photon-hq/buildspace/.github/actions/create-github-release@main
+        uses: photon-hq/buildspace/.github/blocks/create-github-release@main
         with:
           version: ${{ needs.release-info.outputs.version }}
           title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
@@ -159,7 +159,7 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
       - name: Publish to NPM
-        uses: photon-hq/buildspace/.github/actions/publish-npm@main
+        uses: photon-hq/buildspace/.github/blocks/publish-npm@main
         with:
           bun-version: ${{ inputs.bun-version }}
           tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}

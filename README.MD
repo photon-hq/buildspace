@@ -68,9 +68,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-    with:
-      service-name: my-service
-      binary-name: my-binary
+  with:
+    service-name: my-service
+    binary-name: my-binary
       # Order matters: dependencies first
       crates: '["crates/shared", "crates/client"]'
     secrets:
@@ -231,7 +231,7 @@ Individual composite actions that can be used independently or combined into cus
 
 ### check-pr-label
 
-**Path:** `.github/actions/check-pr-label/action.yaml`
+**Path:** `.github/blocks/check-pr-label/action.yaml`
 
 Checks PR labels and outputs boolean flags for release decisions. Works on both PR events and push events (looks up the merged PR).
 
@@ -251,7 +251,7 @@ Checks PR labels and outputs boolean flags for release decisions. Works on both 
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/check-pr-label@main
+- uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
   id: labels
   with:
     labels: '["release", "prerelease"]'
@@ -264,7 +264,7 @@ Checks PR labels and outputs boolean flags for release decisions. Works on both 
 
 ### generate-release-info
 
-**Path:** `.github/actions/generate-release-info/action.yaml`
+**Path:** `.github/blocks/generate-release-info/action.yaml`
 
 Generates a semantic version number and AI-written release notes by analyzing commit history since the last release.
 
@@ -297,7 +297,7 @@ Generates a semantic version number and AI-written release notes by analyzing co
   with:
     fetch-depth: 0  # Required for commit history
 
-- uses: photon-hq/buildspace/.github/actions/generate-release-info@main
+- uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
   id: info
   with:
     service-name: my-service
@@ -312,7 +312,7 @@ Generates a semantic version number and AI-written release notes by analyzing co
 
 ### determine-publish-version
 
-**Path:** `.github/actions/determine-publish-version/action.yaml`
+**Path:** `.github/blocks/determine-publish-version/action.yaml`
 
 Standalone action for determining the next semantic version. Lighter-weight alternative to `generate-release-info` when you don't need release notes.
 
@@ -333,7 +333,7 @@ Standalone action for determining the next semantic version. Lighter-weight alte
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/determine-publish-version@main
+- uses: photon-hq/buildspace/.github/blocks/determine-publish-version@main
   id: version
   with:
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -345,7 +345,7 @@ Standalone action for determining the next semantic version. Lighter-weight alte
 
 ### create-github-release
 
-**Path:** `.github/actions/create-github-release/action.yaml`
+**Path:** `.github/blocks/create-github-release/action.yaml`
 
 Creates a GitHub Release with optional artifact attachments.
 
@@ -371,7 +371,7 @@ Creates a GitHub Release with optional artifact attachments.
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/create-github-release@main
+- uses: photon-hq/buildspace/.github/blocks/create-github-release@main
   with:
     version: "1.2.3"
     title: "My Service v1.2.3"
@@ -386,7 +386,7 @@ Creates a GitHub Release with optional artifact attachments.
 
 ### rust-build
 
-**Path:** `.github/actions/rust-build/action.yaml`
+**Path:** `.github/blocks/rust-build/action.yaml`
 
 Builds a Rust binary for a specific target platform.
 
@@ -417,7 +417,7 @@ Builds a Rust binary for a specific target platform.
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/rust-build@main
+- uses: photon-hq/buildspace/.github/blocks/rust-build@main
   with:
     binary-name: my-cli
     binary-path: crates/client
@@ -434,7 +434,7 @@ Builds a Rust binary for a specific target platform.
 
 ### typescript-build
 
-**Path:** `.github/actions/typescript-build/action.yaml`
+**Path:** `.github/blocks/typescript-build/action.yaml`
 
 Builds a TypeScript project using Bun.
 
@@ -449,7 +449,7 @@ Builds a TypeScript project using Bun.
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/typescript-build@main
+- uses: photon-hq/buildspace/.github/blocks/typescript-build@main
   with:
     bun-version: "1.1"
     build-command: "npm run build"
@@ -459,7 +459,7 @@ Builds a TypeScript project using Bun.
 
 ### sync-crates-version
 
-**Path:** `.github/actions/sync-crates-version/action.yaml`
+**Path:** `.github/blocks/sync-crates-version/action.yaml`
 
 Syncs version across all workspace crates using `cargo-edit`. Automatically commits and pushes version changes.
 
@@ -484,7 +484,7 @@ Syncs version across all workspace crates using `cargo-edit`. Automatically comm
   with:
     token: ${{ github.token }}
 
-- uses: photon-hq/buildspace/.github/actions/sync-crates-version@main
+- uses: photon-hq/buildspace/.github/blocks/sync-crates-version@main
   with:
     version: "1.2.3"
     github-token: ${{ github.token }}
@@ -494,7 +494,7 @@ Syncs version across all workspace crates using `cargo-edit`. Automatically comm
 
 ### publish-crates
 
-**Path:** `.github/actions/publish-crates/action.yaml`
+**Path:** `.github/blocks/publish-crates/action.yaml`
 
 Publishes workspace crates to crates.io in dependency order. Includes retry logic and rate limit handling.
 
@@ -509,7 +509,7 @@ Publishes workspace crates to crates.io in dependency order. Includes retry logi
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/publish-crates@main
+- uses: photon-hq/buildspace/.github/blocks/publish-crates@main
   with:
     # Shared first (dependency)
     crates: '["crates/shared", "crates/client"]'
@@ -522,7 +522,7 @@ Publishes workspace crates to crates.io in dependency order. Includes retry logi
 
 ### publish-npm
 
-**Path:** `.github/actions/publish-npm/action.yaml`
+**Path:** `.github/blocks/publish-npm/action.yaml`
 
 Publishes a package to npm. Handles dependencies installation, build, and publish.
 
@@ -541,7 +541,7 @@ Publishes a package to npm. Handles dependencies installation, build, and publis
 #### Usage
 
 ```yaml
-- uses: photon-hq/buildspace/.github/actions/publish-npm@main
+- uses: photon-hq/buildspace/.github/blocks/publish-npm@main
   with:
     tag: latest
     build-command: "npm run build"
@@ -568,7 +568,7 @@ Control releases by adding labels to your PR before merging:
 ```
 buildspace/
 ├── .github/
-│   ├── actions/                    # Composite actions (building blocks)
+│   ├── blocks/                     # Composite actions (building blocks)
 │   │   ├── check-pr-label/         # PR label detection
 │   │   ├── create-github-release/  # GitHub Release creation
 │   │   ├── determine-publish-version/ # AI version detection (standalone)
@@ -588,7 +588,7 @@ buildspace/
 
 This secition addresses `rust-service-release` and `typescript-service-release`.
 
-These workflows are complete for fully ai-powered and automated releases from versioning to version notes to publishing. These workflows are built upon the building block actions in the 'actions' folder 
+These workflows are complete for fully ai-powered and automated releases from versioning to version notes to publishing. These workflows are built upon the building blocks in the `.github/blocks` folder 
 
 Both workflows share the same initial steps, then diverge for language-specific publishing. The following 
 diagram is most accurate. 
