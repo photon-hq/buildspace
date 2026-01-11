@@ -71,7 +71,8 @@ jobs:
     with:
       service-name: my-service
       binary-name: my-binary
-      crates: '["crates/shared", "crates/client"]'  # Order matters: dependencies first
+      # Order matters: dependencies first
+      crates: '["crates/shared", "crates/client"]'
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
