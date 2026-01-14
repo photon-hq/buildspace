@@ -37,14 +37,27 @@ runs:
         app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
 
-    - name: Configure git remote with token
+    - name: Configure git credentials
       shell: bash
       env:
         APP_TOKEN: ${{ steps.app-token.outputs.token }}
         FALLBACK_TOKEN: ${{ inputs.github-token }}
       run: |
         TOKEN="${APP_TOKEN:-$FALLBACK_TOKEN}"
-        git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
+        
+        # Debug: show which token we're using
+        if [ -n "$APP_TOKEN" ]; then
+          echo "Using GitHub App token"
+        else
+          echo "Using fallback github.token"
+        fi
+        
+        # Clear any existing credentials
+        git config --local --unset-all http.https://github.com/.extraheader || true
+        
+        # Set up authorization header (this is what actions/checkout uses)
+        AUTH=$(echo -n "x-access-token:${TOKEN}" | base64)
+        git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH}"
 
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
