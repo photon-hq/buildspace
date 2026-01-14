@@ -53,6 +53,12 @@ on:
       CARGO_REGISTRY_TOKEN:
         required: false
         description: "Crates.io API token (required if crates-release)"
+      APP_ID:
+        required: false
+        description: "GitHub App ID for pushing to protected branches"
+      APP_PRIVATE_KEY:
+        required: false
+        description: "GitHub App private key for pushing to protected branches"
 
 jobs:
   check-labels:
@@ -143,14 +149,15 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-        with:
-          token: ${{ github.token }}
+
       - name: Sync Workspace Version
         uses: photon-hq/buildspace/.github/blocks/sync-crates-version@main
         with:
           version: ${{ needs.release-info.outputs.version }}
           commit-changes: 'true'
           github-token: ${{ github.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   crates-publish:
     needs: [check-labels, release-info, crates-sync-version]

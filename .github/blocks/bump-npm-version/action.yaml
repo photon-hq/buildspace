@@ -1,0 +1,70 @@
+name: 'Bump NPM Version'
+description: 'Bump version in package.json and push to repository'
+
+inputs:
+  version:
+    description: '[string] The version to set (e.g., 1.2.3)'
+    required: true
+  working-directory:
+    description: '[string] Directory containing package.json'
+    required: false
+    default: '.'
+  github-token:
+    description: '[secret] GitHub token (fallback if no app credentials provided)'
+    required: true
+  app-id:
+    description: '[secret] GitHub App ID for pushing to protected branches (optional)'
+    required: false
+    default: ''
+  app-private-key:
+    description: '[secret] GitHub App private key for pushing to protected branches (optional)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate App Token
+      id: app-token
+      if: ${{ inputs.app-id != '' && inputs.app-private-key != '' }}
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+
+    - name: Configure git remote with token
+      shell: bash
+      env:
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        FALLBACK_TOKEN: ${{ inputs.github-token }}
+      run: |
+        TOKEN="${APP_TOKEN:-$FALLBACK_TOKEN}"
+        git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
+
+    - name: Pull latest changes
+      shell: bash
+      run: git pull --ff-only origin ${{ github.ref_name }}
+
+    - name: Update package.json version
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        VERSION="${{ inputs.version }}"
+        echo "Updating package.json to version ${VERSION}..."
+        npm version ${VERSION} --no-git-tag-version --allow-same-version
+        echo "Updated to version ${VERSION}"
+
+    - name: Commit and push
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        git config user.name "photon-release[bot]"
+        git config user.email "photon-release[bot]@users.noreply.github.com"
+        git add -A
+        if ! git diff --staged --quiet; then
+          git commit -m "chore: bump version to ${VERSION}"
+          git pull --rebase origin ${{ github.ref_name }}
+          git push
+        else
+          echo "No changes to commit"
+        fi

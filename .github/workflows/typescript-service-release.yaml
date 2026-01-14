@@ -59,6 +59,12 @@ on:
       NPM_TOKEN:
         required: false
         description: "NPM token (required for npm publish)"
+      APP_ID:
+        required: false
+        description: "GithHub App ID only needed if you have protected branches that need to be pushed to"
+      APP_PRIVATE_KEY:
+        required: false
+        description: "GitHub App private key for pushing to protected branches"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -109,28 +115,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          token: ${{ github.token }}
           ref: ${{ github.ref }}
-      - name: Pull latest changes
-        run: git pull --ff-only origin ${{ github.ref_name }}
-      - name: Update package.json version
-        working-directory: ${{ inputs.working-directory }}
-        run: |
-          VERSION="${{ needs.release-info.outputs.version }}"
-          echo "Updating package.json to version ${VERSION}..."
-          npm version ${VERSION} --no-git-tag-version --allow-same-version
-          echo "Updated to version ${VERSION}"
-      - name: Commit and push
-        run: |
-          VERSION="${{ needs.release-info.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: bump version to ${VERSION}"
-            git pull --rebase origin ${{ github.ref_name }}
-            git push
-          fi
+
+      - name: Bump Versiongit add
+        uses: photon-hq/buildspace/.github/blocks/bump-npm-version@main
+        with:
+          version: ${{ needs.release-info.outputs.version }}
+          working-directory: ${{ inputs.working-directory }}
+          github-token: ${{ github.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   github-release:
     needs: [check-labels, release-info, bump-version]

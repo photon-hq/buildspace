@@ -12,6 +12,14 @@ inputs:
   github-token:
     description: '[secret] GitHub token for pushing commits (required if commit-changes is true)'
     required: true
+  app-id:
+    description: '[secret] GitHub App ID for pushing to protected branches (optional)'
+    required: false
+    default: ''
+  app-private-key:
+    description: '[secret] GitHub App private key for pushing to protected branches (optional)'
+    required: false
+    default: ''
 
 outputs:
   updated-crates:
@@ -21,6 +29,23 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Generate App Token
+      id: app-token
+      if: ${{ inputs.app-id != '' && inputs.app-private-key != '' }}
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+
+    - name: Configure git remote with token
+      shell: bash
+      env:
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        FALLBACK_TOKEN: ${{ inputs.github-token }}
+      run: |
+        TOKEN="${APP_TOKEN:-$FALLBACK_TOKEN}"
+        git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
+
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
 
@@ -32,8 +57,8 @@ runs:
     - name: Configure git
       shell: bash
       run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git config user.name "photon-release[bot]"
+        git config user.email "photon-release[bot]@users.noreply.github.com"
 
     - name: Sync workspace version
       id: sync
