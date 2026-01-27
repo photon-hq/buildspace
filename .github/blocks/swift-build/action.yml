@@ -39,4 +39,4 @@ runs:
       run: |
         swift build -c release
         cp ".build/release/${{ inputs.binary-name }}" /artifacts
-        echo "binary-path=$BIN_PATH" >> $GITHUB_OUTPUT
+        echo "binary-path=.build/release/${{ inputs.binary-name }}" >> $GITHUB_OUTPUT
