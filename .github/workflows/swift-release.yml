@@ -21,7 +21,6 @@ on:
         required: false
       OPENAI_API_KEY:
         required: true
-        description: "OpenAI API key for version and notes"
 
 jobs:
   check-labels:
@@ -58,13 +57,13 @@ jobs:
 
   build:
     needs: prepare-release
-    if: fromJSON(needs.check-labels.outputs.labels).release
     runs-on: macos-latest
     steps:
       - name: Swift Build
         id: build
         uses: photon-hq/buildspace/.github/blocks/swift-build@main
         with:
+          binary-name: ${{ inputs.package-name }}
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}
             ${{ secrets.SECRET_ENV_VARS }}

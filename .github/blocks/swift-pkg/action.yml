@@ -25,19 +25,19 @@ runs:
       shell: bash
       run: |
         mkdir -p /tmp/pkgroot/usr/local/bin
-        cp ${{inputs.swift-binary-path}} /tmp/pkgroot/usr/local/bin
+        cp ${{ inputs.swift-binary-path }} /tmp/pkgroot/usr/local/bin
         mkdir -p /artifacts
     - name: Create package
       shell: bash
       run: |
         pkgbuild --root /tmp/pkgroot \
-            --identifier ${{inputs.identifier}} \
+            --identifier ${{ inputs.identifier }} \
             --install-location / \
-            --version ${{inputs.version}} \
-            "${{inputs.package-name}}-component.pkg"
+            --version ${{ inputs.version }} \
+            "${{ inputs.package-name }}-component.pkg"
     - name: Sign package
       shell: bash
-      run: productbuild --package "${{inputs.package-name}}-component.pkg" --sign "${{inputs.developer-id-installer}}" "${{inputs.package-name}}.pkg"
+      run: productbuild --package "${{ inputs.package-name }}-component.pkg" --sign "${{ inputs.developer-id-installer }}" "${{ inputs.package-name }}.pkg"
     - name: Prepare artifact
       shell: bash
-      run: cp "${{inputs.package-name}}.pkg" /artifacts
+      run: cp "${{ inputs.package-name }}.pkg" /artifacts

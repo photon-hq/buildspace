@@ -5,6 +5,9 @@ inputs:
   swift-version:
     description: "Swift version to use"
     required: false
+  binary-name:
+    description: "Name of the binary to build"
+    required: false
   compile-env:
     description: "Env values to set when compiling"
     required: false
@@ -22,7 +25,6 @@ runs:
     - uses: swift-actions/setup-swift@v3
       with:
         swift-version: "${{ inputs.swift-version }}"
-    - uses: actions/checkout@v5
     - name: Prepare .env
       if: inputs.compile-env != ''
       shell: bash
@@ -35,6 +37,6 @@ runs:
       shell: bash
       id: build
       run: |
-        BIN_PATH="$(swift build --show-bin-path -c release)"
-        cp $BIN_PATH /artifacts
+        swift build -c release
+        cp ".build/release/${{ inputs.binary-name }}" /artifacts
         echo "binary-path=$BIN_PATH" >> $GITHUB_OUTPUT
