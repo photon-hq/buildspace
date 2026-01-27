@@ -64,8 +64,11 @@ runs:
     - name: Sign package
       shell: bash
       run: |
+        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+        security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
         productbuild --package "${{ inputs.package-name }}-component.pkg" \
             --sign "${{ inputs.developer-id-installer-name }}" \
+            --keychain "$KEYCHAIN_PATH" \
             "${{ inputs.package-name }}.pkg"
 
     - name: Prepare artifact
