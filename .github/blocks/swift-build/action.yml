@@ -18,6 +18,7 @@ outputs:
 runs:
   using: composite
   steps:
+    - uses: actions/checkout@v5
     - uses: swift-actions/setup-swift@v3
       with:
         swift-version: "${{ inputs.swift-version }}"
@@ -27,7 +28,6 @@ runs:
       shell: bash
       run: |
         echo "${{ inputs.compile-env }}" > .env
-        source .env
     - name: Create artifacts directory
       run: mkdir -p /artifacts
       shell: bash
