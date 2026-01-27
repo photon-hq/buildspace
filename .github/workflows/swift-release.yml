@@ -1,4 +1,4 @@
-name: Swift Package Installer Release
+name: Swift Distribution Package Release
 on:
   workflow_call:
     inputs:
@@ -6,11 +6,22 @@ on:
         type: string
         required: true
         description: "The name of the service to release"
+      package-name:
+        type: string
+        required: true
+        description: "The name of the package to release"
+      identifier:
+        type: string
+        required: true
+        description: "The identifier of the package to release"
     secrets:
       DEVELOPER_ID_INSTALLER:
         required: true
       SECRET_ENV_VARS:
         required: false
+      OPENAI_API_KEY:
+        required: true
+        description: "OpenAI API key for version and notes"
 
 jobs:
   check-labels:
@@ -51,6 +62,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Swift Build
+        id: build
         uses: photon-hq/buildspace/.github/blocks/swift-build@main
         with:
           compile-env: |-
@@ -59,14 +71,18 @@ jobs:
       - name: Swift Package
         uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
         with:
-
+          swift-binary-path: ${{ steps.build.outputs.binary-path }}
+          package-name: ${{ inputs.package-name }}
+          developer-id-installer: ${{ secrets.DEVELOPER_ID_INSTALLER }}
+          identifier: ${{ inputs.identifier }}
+          version: ${{ needs.prepare-release.outputs.version }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.binary-name }}
+          name: ${{ inputs.service-name }}
           path: /artifacts/*
 
   github-release:
-    needs: build
+    needs: [build, prepare-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -77,5 +93,5 @@ jobs:
           version: ${{ needs.prepare-release.outputs.version }}
           title: "${{ inputs.service-name }} v${{ needs.prepare-release.outputs.version }}"
           notes: ${{ needs.prepare-release.outputs.release_notes }}
-          artifact-pattern: ${{ inputs.binary-name }}
+          artifact-pattern: ${{ inputs.service-name }}
 
