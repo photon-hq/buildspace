@@ -1,4 +1,4 @@
-name: 'Generate Release Info'
+name: 'Generate Release Note'
 description: 'Generate version number and release notes using AI'
 
 inputs:
