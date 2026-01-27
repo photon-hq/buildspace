@@ -14,30 +14,60 @@ inputs:
   package-name:
     required: true
     description: "Package name"
-  developer-id-installer:
+  developer-id-installer-base64:
     required: true
-    description: "Developer ID Installer certificate name"
+    description: "Base64-encoded Developer ID Installer certificate (.p12)"
+  developer-id-installer-password:
+    required: true
+    description: "Password for the .p12 certificate"
+  developer-id-installer-name:
+    required: true
+    description: "Certificate name (e.g., 'Developer ID Installer: Company (TEAMID)')"
 
 runs:
   using: "composite"
   steps:
+    - name: Install certificate
+      shell: bash
+      env:
+        CERT_BASE64: ${{ inputs.developer-id-installer-base64 }}
+        CERT_PASSWORD: ${{ inputs.developer-id-installer-password }}
+      run: |
+        KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+        
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        
+        echo "$CERT_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
+        security import $RUNNER_TEMP/cert.p12 -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security list-keychain -d user -s "$KEYCHAIN_PATH"
+
     - name: Prepare
       shell: bash
       run: |
-        mkdir -p /tmp/pkgroot/usr/local/bin
-        cp ${{ inputs.swift-binary-path }} /tmp/pkgroot/usr/local/bin
+        mkdir -p tmp/pkgroot/usr/local/bin
+        cp ${{ inputs.swift-binary-path }} tmp/pkgroot/usr/local/bin
         mkdir -p artifacts
+
     - name: Create package
       shell: bash
       run: |
-        pkgbuild --root /tmp/pkgroot \
+        pkgbuild --root tmp/pkgroot \
             --identifier ${{ inputs.identifier }} \
             --install-location / \
             --version ${{ inputs.version }} \
             "${{ inputs.package-name }}-component.pkg"
+
     - name: Sign package
       shell: bash
-      run: productbuild --package "${{ inputs.package-name }}-component.pkg" --sign "${{ inputs.developer-id-installer }}" "${{ inputs.package-name }}.pkg"
+      run: |
+        productbuild --package "${{ inputs.package-name }}-component.pkg" \
+            --sign "${{ inputs.developer-id-installer-name }}" \
+            "${{ inputs.package-name }}.pkg"
+
     - name: Prepare artifact
       shell: bash
       run: cp "${{ inputs.package-name }}.pkg" artifacts
