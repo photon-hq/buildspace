@@ -6,15 +6,14 @@
 [![NPM](https://img.shields.io/badge/NPM-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/)
 [![Crates.io](https://img.shields.io/badge/Crates.io-FFC832?logo=rust&logoColor=black)](https://crates.io/)
 
-**Reusable GitHub Actions workflows and composite actions for automated releases at Photon.**
+**Reusable GitHub Actions blocks and workflows for fast shipping teams**
 
-Buildspace provides battle-tested CI/CD building blocks that handle semantic versioning, release notes generation, multi-platform builds, and publishing to npm/crates.io, all powered by AI.
+Buildspace packages battle-tested, AI-powered CI/CD building blocks, like generating release notes, bumping versions, publishing, plus ready-made workflows built from those blocks, so teams can either compose custom automations or plug in the prebuilt recipes with only a few inputs.
 
 ---
 
 ## 📖 Table of Contents
 
-- [Features](#-features)
 - [Quick Start](#-quick-start)
 - [Workflows](#-workflows)
   - [Rust Service Release](#rust-service-release)
@@ -33,19 +32,6 @@ Buildspace provides battle-tested CI/CD building blocks that handle semantic ver
 - [Architecture](#-architecture)
 - [Contributing](#-contributing)
 - [License](#-license)
-
----
-
-## ✨ Features
-
-| Feature | Description |
-|---------|-------------|
-| 🤖 **AI-Powered Versioning** | Automatically determines semantic version bumps from commit history |
-| 📝 **Smart Release Notes** | Generates human-readable release notes using AI |
-| 🔨 **Multi-Platform Builds** | Cross-compiles Rust binaries for Linux, macOS, and Windows |
-| 📦 **Unified Publishing** | Publishes to npm, crates.io, and GitHub Releases in one workflow |
-| 🏷️ **Label-Driven Releases** | Control releases via PR labels—no manual version management |
-| 🔄 **Workspace Version Sync** | Keeps all crates/packages in a monorepo at the same version |
 
 ---
 
