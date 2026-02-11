@@ -15,10 +15,6 @@ on:
         required: false
         description: "Path to scripts directory containing preinstall/postinstall scripts"
     secrets:
-      DEVELOPER_ID_INSTALLER_BASE64:
-        required: true
-      DEVELOPER_ID_INSTALLER_PASSWORD:
-        required: true
       DEVELOPER_ID_INSTALLER_NAME:
         required: true
       SECRET_ENV_VARS:
@@ -78,8 +74,6 @@ jobs:
         with:
           swift-binary-path: ${{ steps.build.outputs.binary-path }}
           package-name: ${{ inputs.package-name }}
-          developer-id-installer-base64: ${{ secrets.DEVELOPER_ID_INSTALLER_BASE64 }}
-          developer-id-installer-password: ${{ secrets.DEVELOPER_ID_INSTALLER_PASSWORD }}
           developer-id-installer-name: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
           identifier: ${{ inputs.identifier }}
           version: ${{ needs.prepare-release.outputs.version }}
