@@ -1,0 +1,86 @@
+name: Dylib Release
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        type: string
+        required: true
+        description: "Path to .xcworkspace"
+      scheme:
+        type: string
+        required: true
+        description: "Xcode scheme to build"
+      dylib-name:
+        type: string
+        required: true
+        description: "Name of the output dylib (e.g., BlueBubblesHelper)"
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      labels: ${{ steps.check.outputs.labels }}
+    steps:
+      - name: Check PR Labels
+        id: check
+        uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
+        with:
+          labels: '["release"]'
+
+  prepare-release:
+    needs: check-labels
+    if: fromJSON(needs.check-labels.outputs.labels).release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.generate.outputs.version }}
+      release_notes: ${{ steps.generate.outputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Generate Release Info
+        id: generate
+        uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
+        with:
+          service-name: ${{ inputs.dylib-name }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+  build:
+    needs: prepare-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install CocoaPods
+        uses: photon-hq/buildspace/.github/blocks/install-cocoapods@main
+      - name: Build dylib
+        uses: photon-hq/buildspace/.github/blocks/build-dylib@main
+        with:
+          workspace: ${{ inputs.workspace }}
+          scheme: ${{ inputs.scheme }}
+          output-name: ${{ inputs.dylib-name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.dylib-name }}
+          path: artifacts/*
+
+  github-release:
+    needs: [build, prepare-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: photon-hq/buildspace/.github/blocks/create-github-release@main
+        with:
+          version: ${{ needs.prepare-release.outputs.version }}
+          title: "${{ inputs.dylib-name }} v${{ needs.prepare-release.outputs.version }}"
+          notes: ${{ needs.prepare-release.outputs.release_notes }}
+          artifact-pattern: ${{ inputs.dylib-name }}

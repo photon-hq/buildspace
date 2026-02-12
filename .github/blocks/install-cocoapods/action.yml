@@ -1,0 +1,23 @@
+name: "Install CocoaPods"
+description: "Cache and install CocoaPods dependencies"
+
+inputs:
+  project-directory:
+    description: "Directory containing the Podfile"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cache CocoaPods
+      uses: actions/cache@v5
+      with:
+        path: ${{ inputs.project-directory }}/Pods
+        key: pods-${{ hashFiles(format('{0}/Podfile.lock', inputs.project-directory)) }}
+        restore-keys: pods-
+
+    - name: Install CocoaPods
+      shell: bash
+      run: |
+        gem install cocoapods --no-document
+        pod install --project-directory=${{ inputs.project-directory }}
