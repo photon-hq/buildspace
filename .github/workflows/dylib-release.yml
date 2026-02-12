@@ -64,6 +64,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install CocoaPods
         uses: photon-hq/buildspace/.github/blocks/install-cocoapods@main
+        with:
+          project-directory: ${{ inputs.project-directory }}
       - name: Build dylib
         uses: photon-hq/buildspace/.github/blocks/build-dylib@main
         with:
