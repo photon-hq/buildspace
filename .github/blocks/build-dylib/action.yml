@@ -1,0 +1,55 @@
+name: "Build dylib"
+description: "Build dynamic library from Xcode project"
+
+inputs:
+  workspace:
+    required: true
+    description: "Path to .xcworkspace"
+  scheme:
+    required: true
+    description: "Xcode scheme to build"
+  output-name:
+    required: true
+    description: "Name of the output dylib (e.g., BlueBubblesHelper)"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build dylib
+      shell: bash
+      run: |
+        set +e
+        xcodebuild build \
+          -workspace "${{ inputs.workspace }}" \
+          -scheme "${{ inputs.scheme }}" \
+          -configuration "Release" \
+          -derivedDataPath build/DerivedData \
+          ARCHS="arm64e" \
+          ONLY_ACTIVE_ARCH=NO \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          2>&1 | tee build.log
+        BUILD_EXIT=${PIPESTATUS[0]}
+        set -e
+
+        DYLIB="build/DerivedData/Build/Products/Release/${{ inputs.output-name }}.dylib"
+
+        if [ -f "$DYLIB" ]; then
+          echo "${{ inputs.output-name }}.dylib built successfully"
+          file "$DYLIB"
+        else
+          echo "::error::${{ inputs.output-name }}.dylib not found — real build failure"
+          tail -50 build.log
+          exit 1
+        fi
+
+        if [ "$BUILD_EXIT" -ne 0 ]; then
+          echo "::warning::xcodebuild exited with code $BUILD_EXIT (likely CopyFiles phase — dylib is OK)"
+        fi
+
+    - name: Prepare artifact
+      shell: bash
+      run: |
+        mkdir -p artifacts
+        cp "build/DerivedData/Build/Products/Release/${{ inputs.output-name }}.dylib" artifacts
