@@ -46,6 +46,16 @@ on:
         required: false
         default: false
         description: "Run in dry-run mode (no actual publishing)"
+      tap-repo:
+        type: string
+        required: false
+        default: ""
+        description: "Homebrew tap repository to update (e.g., 'photon-hq/homebrew-photon'). Leave empty to skip."
+      tap-formula:
+        type: string
+        required: false
+        default: ""
+        description: "Formula name in the tap to update (e.g., 'jamf-package-updater'). Required if tap-repo is set."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -175,3 +185,20 @@ jobs:
           crates: ${{ inputs.crates }}
           dry-run: ${{ inputs.dry-run }}
           cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  update-tap:
+    needs: [check-labels, release-info, github-release]
+    if: |
+      (fromJSON(needs.check-labels.outputs.labels).release || inputs.release)
+      && inputs.tap-repo != ''
+      && inputs.tap-formula != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew Tap
+        uses: photon-hq/buildspace/.github/blocks/update-tap@main
+        with:
+          formula-name: ${{ inputs.tap-formula }}
+          version: ${{ needs.release-info.outputs.version }}
+          tap-repo: ${{ inputs.tap-repo }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}

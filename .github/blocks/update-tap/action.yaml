@@ -3,28 +3,46 @@ description: 'Update a formula version in the Homebrew tap (auto-calculates SHA2
 
 inputs:
   formula-name:
-    description: '[string] Name of the formula (e.g., "notebooklm-kit")'
+    description: '[string] Name of the formula (e.g., "jamf-package-updater")'
     required: true
   version:
     description: '[string] Version number (e.g., "1.2.3")'
     required: true
   tap-repo:
-    description: '[string] The tap repository (e.g., "photon-hq/tap")'
-    required: false
-    default: 'photon-hq/tap'
-  tap-token:
-    description: '[string] GitHub PAT or App token with write access to tap repo (e.g., secrets.TAP_GITHUB_TOKEN)'
+    description: '[string] The tap repository (e.g., "photon-hq/homebrew-photon")'
+    required: true
+  app-id:
+    description: '[secret] GitHub App ID for pushing to the tap repository'
+    required: true
+  app-private-key:
+    description: '[secret] GitHub App private key for pushing to the tap repository'
     required: true
 
 runs:
   using: 'composite'
   steps:
+    - name: Extract tap repo name
+      id: tap-info
+      shell: bash
+      run: |
+        TAP_REPO_NAME=$(echo "${{ inputs.tap-repo }}" | cut -d'/' -f2)
+        echo "repo-name=${TAP_REPO_NAME}" >> $GITHUB_OUTPUT
+
+    - name: Generate App Token
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ steps.tap-info.outputs.repo-name }}
+
     - name: Checkout tap repository
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.tap-repo }}
-        token: ${{ inputs.tap-token }}
-        path: tap-repo
+        token: ${{ steps.app-token.outputs.token }}
+        path: _homebrew_tap
 
     - name: Update formula
       shell: bash
@@ -32,127 +50,117 @@ runs:
         FORMULA_NAME: ${{ inputs.formula-name }}
         VERSION: ${{ inputs.version }}
       run: |
-        FORMULA_FILE="tap-repo/Formula/${FORMULA_NAME}.rb"
-        
-        if [ ! -f "$FORMULA_FILE" ]; then
-          echo "Formula not found: $FORMULA_FILE"
+        FORMULA="_homebrew_tap/Formula/${FORMULA_NAME}.rb"
+
+        if [ ! -f "$FORMULA" ]; then
+          echo "::error::Formula not found: $FORMULA"
           echo "Please create the formula manually first, then use this action for updates."
           exit 1
         fi
-        
-        echo "Updating formula: $FORMULA_FILE to v$VERSION"
-        
+
+        echo "Updating formula: $FORMULA to v$VERSION"
+
         # Detect formula type
-        if grep -q "registry.npmjs.org" "$FORMULA_FILE"; then
+        if grep -q "registry.npmjs.org" "$FORMULA"; then
           FORMULA_TYPE="npm"
-        elif grep -q 'depends_on "go"' "$FORMULA_FILE"; then
+        elif grep -q 'depends_on "go"' "$FORMULA"; then
           FORMULA_TYPE="go"
-        elif grep -q "on_macos do" "$FORMULA_FILE"; then
-          FORMULA_TYPE="rust"
+        elif grep -q "on_macos do\|on_linux do" "$FORMULA"; then
+          FORMULA_TYPE="rust-prebuilt"
         else
-          echo "Unknown formula type"
+          echo "::error::Unknown formula type"
           exit 1
         fi
-        
+
         echo "Detected formula type: $FORMULA_TYPE"
-        
-        # Function to get sha256
+
         get_sha256() {
-          curl -sL "$1" | shasum -a 256 | cut -d' ' -f1
+          curl -fsSL "$1" | shasum -a 256 | cut -d' ' -f1
         }
-        
+
         case "$FORMULA_TYPE" in
           npm)
-            # Extract package name
-            PACKAGE=$(grep -o 'registry.npmjs.org/[^/]*' "$FORMULA_FILE" | head -1 | cut -d'/' -f2)
+            PACKAGE=$(grep -o 'registry.npmjs.org/[^/]*' "$FORMULA" | head -1 | cut -d'/' -f2)
             NEW_URL="https://registry.npmjs.org/${PACKAGE}/-/${PACKAGE}-${VERSION}.tgz"
             echo "Fetching: $NEW_URL"
             SHA256=$(get_sha256 "$NEW_URL")
             echo "SHA256: $SHA256"
-            
-            # Update formula
-            sed -i.bak "s|/-/${PACKAGE}-[^\"]*\.tgz|/-/${PACKAGE}-${VERSION}.tgz|g" "$FORMULA_FILE"
-            sed -i.bak "s|sha256 \"[a-f0-9]*\"|sha256 \"${SHA256}\"|g" "$FORMULA_FILE"
-            rm -f "$FORMULA_FILE.bak"
+
+            sed -i.bak "s|/-/${PACKAGE}-[^\"]*\.tgz|/-/${PACKAGE}-${VERSION}.tgz|g" "$FORMULA"
+            sed -i.bak "s|sha256 \"[a-f0-9]*\"|sha256 \"${SHA256}\"|g" "$FORMULA"
+            rm -f "$FORMULA.bak"
             ;;
-            
+
           go)
-            # Extract repo URL
-            REPO_URL=$(grep -o 'https://github.com/[^/]*/[^/]*' "$FORMULA_FILE" | head -1)
+            REPO_URL=$(grep -o 'https://github.com/[^/]*/[^/]*' "$FORMULA" | head -1)
             NEW_URL="${REPO_URL}/archive/refs/tags/v${VERSION}.tar.gz"
             echo "Fetching: $NEW_URL"
             SHA256=$(get_sha256 "$NEW_URL")
             echo "SHA256: $SHA256"
-            
-            # Update formula
-            sed -i.bak "s|/archive/refs/tags/v[^\"]*|/archive/refs/tags/v${VERSION}.tar.gz|g" "$FORMULA_FILE"
-            sed -i.bak "s|sha256 \"[a-f0-9]*\"|sha256 \"${SHA256}\"|g" "$FORMULA_FILE"
-            rm -f "$FORMULA_FILE.bak"
+
+            sed -i.bak "s|/archive/refs/tags/v[^\"]*|/archive/refs/tags/v${VERSION}.tar.gz|g" "$FORMULA"
+            sed -i.bak "s|sha256 \"[a-f0-9]*\"|sha256 \"${SHA256}\"|g" "$FORMULA"
+            rm -f "$FORMULA.bak"
             ;;
-            
-          rust)
+
+          rust-prebuilt)
             # Update version
-            sed -i.bak "s|version \"[^\"]*\"|version \"${VERSION}\"|g" "$FORMULA_FILE"
-            
-            # Update URLs and hashes for each platform
-            # This is simplified - assumes URL pattern has /v{version}/ in it
-            sed -i.bak "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$FORMULA_FILE"
-            
-            # Get new SHA256 for each URL and update
-            # ARM64
-            ARM_URL=$(grep -A1 "on_arm do" "$FORMULA_FILE" | grep -o 'https://[^"]*' | head -1)
+            sed -i.bak "s|version \"[^\"]*\"|version \"${VERSION}\"|g" "$FORMULA"
+
+            # Update release URLs
+            sed -i.bak "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$FORMULA"
+
+            # Compute SHA256 for each platform URL
+            ARM_URL=$(grep -A1 "on_arm do" "$FORMULA" | grep -o 'https://[^"]*' | head -1)
             if [ -n "$ARM_URL" ]; then
               echo "Fetching ARM64: $ARM_URL"
               ARM_SHA=$(get_sha256 "$ARM_URL")
               echo "ARM64 SHA256: $ARM_SHA"
             fi
-            
-            # Intel macOS  
-            INTEL_URL=$(grep -A1 "on_intel do" "$FORMULA_FILE" | grep -o 'https://[^"]*' | head -1)
+
+            INTEL_URL=$(grep -A1 "on_intel do" "$FORMULA" | grep -o 'https://[^"]*' | head -1)
             if [ -n "$INTEL_URL" ]; then
               echo "Fetching Intel: $INTEL_URL"
               INTEL_SHA=$(get_sha256 "$INTEL_URL")
               echo "Intel SHA256: $INTEL_SHA"
             fi
-            
-            # Linux
-            LINUX_URL=$(grep -A2 "on_linux do" "$FORMULA_FILE" | grep -o 'https://[^"]*' | head -1)
+
+            LINUX_URL=$(grep -A2 "on_linux do" "$FORMULA" | grep -o 'https://[^"]*' | head -1)
             if [ -n "$LINUX_URL" ]; then
               echo "Fetching Linux: $LINUX_URL"
               LINUX_SHA=$(get_sha256 "$LINUX_URL")
               echo "Linux SHA256: $LINUX_SHA"
             fi
-            
-            # Update hashes using awk for multi-platform formulas
-            # This is complex, so we use a temp file approach
+
+            # Update per-platform SHA256 hashes
             awk -v arm_sha="$ARM_SHA" -v intel_sha="$INTEL_SHA" -v linux_sha="$LINUX_SHA" '
               /on_arm do/ { in_arm=1 }
               /on_intel do/ && !in_linux { in_intel=1 }
               /on_linux do/ { in_linux=1; in_intel=0 }
-              /sha256/ && in_arm { gsub(/sha256 "[a-f0-9]+"/, "sha256 \"" arm_sha "\""); in_arm=0 }
-              /sha256/ && in_intel && !in_linux { gsub(/sha256 "[a-f0-9]+"/, "sha256 \"" intel_sha "\""); in_intel=0 }
-              /sha256/ && in_linux { gsub(/sha256 "[a-f0-9]+"/, "sha256 \"" linux_sha "\""); in_linux=0 }
+              /sha256/ && in_arm { gsub(/sha256 "[a-f0-9A-Z]+"/, "sha256 \"" arm_sha "\""); in_arm=0 }
+              /sha256/ && in_intel && !in_linux { gsub(/sha256 "[a-f0-9A-Z]+"/, "sha256 \"" intel_sha "\""); in_intel=0 }
+              /sha256/ && in_linux { gsub(/sha256 "[a-f0-9A-Z]+"/, "sha256 \"" linux_sha "\""); in_linux=0 }
               { print }
-            ' "$FORMULA_FILE" > "$FORMULA_FILE.tmp" && mv "$FORMULA_FILE.tmp" "$FORMULA_FILE"
-            
-            rm -f "$FORMULA_FILE.bak"
+            ' "$FORMULA" > "$FORMULA.tmp" && mv "$FORMULA.tmp" "$FORMULA"
+
+            rm -f "$FORMULA.bak"
             ;;
         esac
-        
+
         echo ""
         echo "--- Updated formula ---"
-        cat "$FORMULA_FILE"
+        cat "$FORMULA"
         echo "--- End ---"
 
     - name: Commit and push
       shell: bash
-      working-directory: tap-repo
+      working-directory: _homebrew_tap
       run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
+        git config user.name "photon-release[bot]"
+        git config user.email "photon-release[bot]@users.noreply.github.com"
+
         git add Formula/
-        
+
         if git diff --staged --quiet; then
           echo "No changes to commit"
         else
