@@ -67,7 +67,7 @@ runs:
         elif grep -q 'depends_on "go"' "$FORMULA"; then
           FORMULA_TYPE="go"
         elif grep -q "on_macos do\|on_linux do" "$FORMULA"; then
-          FORMULA_TYPE="rust-prebuilt"
+          FORMULA_TYPE="prebuilt"
         else
           echo "::error::Unknown formula type"
           exit 1
@@ -76,7 +76,17 @@ runs:
         echo "Detected formula type: $FORMULA_TYPE"
 
         get_sha256() {
-          curl -fsSL -H "Authorization: token ${GH_TOKEN}" "$1" | shasum -a 256 | cut -d' ' -f1
+          local url="$1"
+          local tmpdir=$(mktemp -d)
+          # Parse GitHub release URL: https://github.com/OWNER/REPO/releases/download/TAG/ASSET
+          local path="${url#https://github.com/}"
+          local repo=$(echo "$path" | cut -d'/' -f1-2)
+          local tag=$(echo "$path" | cut -d'/' -f5)
+          local asset=$(echo "$path" | cut -d'/' -f6-)
+
+          gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmpdir" >/dev/null 2>&1
+          shasum -a 256 "$tmpdir/$asset" | cut -d' ' -f1
+          rm -rf "$tmpdir"
         }
 
         case "$FORMULA_TYPE" in
@@ -104,7 +114,7 @@ runs:
             rm -f "$FORMULA.bak"
             ;;
 
-          rust-prebuilt)
+          prebuilt)
             # Update version
             sed -i.bak "s|version \"[^\"]*\"|version \"${VERSION}\"|g" "$FORMULA"
 
