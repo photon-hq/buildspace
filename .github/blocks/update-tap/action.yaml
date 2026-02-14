@@ -35,7 +35,7 @@ runs:
         app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
         owner: ${{ github.repository_owner }}
-        repositories: ${{ steps.tap-info.outputs.repo-name }}
+        repositories: ${{ steps.tap-info.outputs.repo-name }},${{ github.event.repository.name }}
 
     - name: Checkout tap repository
       uses: actions/checkout@v4
