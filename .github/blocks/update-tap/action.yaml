@@ -49,6 +49,7 @@ runs:
       env:
         FORMULA_NAME: ${{ inputs.formula-name }}
         VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
       run: |
         FORMULA="_homebrew_tap/Formula/${FORMULA_NAME}.rb"
 
@@ -75,7 +76,7 @@ runs:
         echo "Detected formula type: $FORMULA_TYPE"
 
         get_sha256() {
-          curl -fsSL "$1" | shasum -a 256 | cut -d' ' -f1
+          curl -fsSL -H "Authorization: token ${GH_TOKEN}" "$1" | shasum -a 256 | cut -d' ' -f1
         }
 
         case "$FORMULA_TYPE" in
