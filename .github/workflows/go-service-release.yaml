@@ -1,0 +1,163 @@
+name: Go Binary Release
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        type: string
+        required: true
+        description: "The name of the service to release"
+      binary-name:
+        type: string
+        required: true
+        description: "Output binary name"
+      go-version:
+        type: string
+        required: false
+        default: 'stable'
+        description: "Go version to use"
+      build-flags:
+        type: string
+        required: false
+        default: ''
+        description: "Additional go build flags"
+      ldflags:
+        type: string
+        required: false
+        default: '-s -w'
+        description: "Linker flags"
+      labels-to-check:
+        type: string
+        required: false
+        default: '["release", "prerelease"]'
+        description: "JSON array of PR labels to check"
+      prerelease:
+        type: boolean
+        required: false
+        default: false
+        description: "Force prerelease (overrides label)"
+      release:
+        type: boolean
+        required: false
+        default: false
+        description: "Force release"
+      tap-repo:
+        type: string
+        required: false
+        default: ""
+        description: "Homebrew tap repository to update (e.g., 'photon-hq/homebrew-tap'). Leave empty to skip."
+      tap-formula:
+        type: string
+        required: false
+        default: ""
+        description: "Formula name in the tap to update (e.g., 'blackhole'). Required if tap-repo is set."
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+        description: "OpenAI API key for version and notes"
+      APP_ID:
+        required: false
+        description: "GitHub App ID for pushing to protected branches"
+      APP_PRIVATE_KEY:
+        required: false
+        description: "GitHub App private key for pushing to protected branches"
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      labels: ${{ steps.check.outputs.labels }}
+    steps:
+      - name: Check PR Labels
+        id: check
+        uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
+        with:
+          labels: ${{ inputs.labels-to-check }}
+
+  release-info:
+    needs: check-labels
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.generate.outputs.version }}
+      release_notes: ${{ steps.generate.outputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Generate Release Info
+        id: generate
+        uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
+        with:
+          service-name: ${{ inputs.service-name }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ${{ matrix.os }}
+    needs: [check-labels, release-info]
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            os: macos-latest
+          - goos: linux
+            goarch: amd64
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Go Build
+        uses: photon-hq/buildspace/.github/blocks/go-build@main
+        with:
+          binary-name: ${{ inputs.binary-name }}
+          go-version: ${{ inputs.go-version }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          build-flags: ${{ inputs.build-flags }}
+          ldflags: ${{ inputs.ldflags }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.binary-name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: artifacts/*
+
+  github-release:
+    needs: [check-labels, release-info, build]
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: photon-hq/buildspace/.github/blocks/create-github-release@main
+        with:
+          version: ${{ needs.release-info.outputs.version }}
+          title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
+          notes: ${{ needs.release-info.outputs.release_notes }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
+          artifact-pattern: ${{ inputs.binary-name }}-*
+
+  update-tap:
+    needs: [check-labels, release-info, github-release]
+    if: |
+      (fromJSON(needs.check-labels.outputs.labels).release || inputs.release)
+      && inputs.tap-repo != ''
+      && inputs.tap-formula != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew Tap
+        uses: photon-hq/buildspace/.github/blocks/update-tap@main
+        with:
+          formula-name: ${{ inputs.tap-formula }}
+          version: ${{ needs.release-info.outputs.version }}
+          tap-repo: ${{ inputs.tap-repo }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}

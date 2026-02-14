@@ -1,0 +1,66 @@
+name: 'Go Build'
+description: 'Build Go binary for a target platform'
+
+inputs:
+  binary-name:
+    description: '[string] Output binary name'
+    required: true
+  go-version:
+    description: '[string] Go version to use'
+    required: false
+    default: 'stable'
+  goos:
+    description: '[string] Target OS (e.g., darwin, linux, windows)'
+    required: true
+  goarch:
+    description: '[string] Target architecture (e.g., amd64, arm64)'
+    required: true
+  build-flags:
+    description: '[string] Additional go build flags (e.g., "-tags netgo")'
+    required: false
+    default: ''
+  ldflags:
+    description: '[string] Linker flags (e.g., "-s -w -X main.version=1.0.0")'
+    required: false
+    default: '-s -w'
+
+outputs:
+  artifact-name:
+    description: 'Name of the artifact'
+    value: ${{ steps.package.outputs.artifact-name }}
+  artifact-path:
+    description: 'Path to the built artifact'
+    value: ${{ steps.package.outputs.artifact-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Build
+      shell: bash
+      env:
+        GOOS: ${{ inputs.goos }}
+        GOARCH: ${{ inputs.goarch }}
+        CGO_ENABLED: '0'
+      run: |
+        go build ${{ inputs.build-flags }} -ldflags "${{ inputs.ldflags }}" -o "${{ inputs.binary-name }}" .
+
+    - name: Package
+      id: package
+      shell: bash
+      run: |
+        mkdir -p artifacts
+        SUFFIX=""
+        if [ "${{ inputs.goos }}" == "windows" ]; then
+          SUFFIX=".exe"
+        fi
+        ARTIFACT_NAME="${{ inputs.binary-name }}-${{ inputs.goos }}-${{ inputs.goarch }}${SUFFIX}"
+        ARTIFACT_PATH="artifacts/$ARTIFACT_NAME"
+        mv "${{ inputs.binary-name }}${SUFFIX}" "$ARTIFACT_PATH"
+        chmod +x "$ARTIFACT_PATH"
+        echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+        echo "artifact-path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
