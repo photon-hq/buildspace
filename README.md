@@ -18,6 +18,7 @@ BuildSpace packages battle-tested, AI-powered CI/CD building blocks, like genera
 - [Workflows](#-workflows)
   - [Rust Service Release](#rust-service-release)
   - [TypeScript Service Release](#typescript-service-release)
+  - [Swift Package PR Build](#swift-package-pr-build)
 - [Actions](#-actions)
   - [check-pr-label](#check-pr-label)
   - [generate-release-info](#generate-release-info)
@@ -28,6 +29,7 @@ BuildSpace packages battle-tested, AI-powered CI/CD building blocks, like genera
   - [sync-crates-version](#sync-crates-version)
   - [publish-crates](#publish-crates)
   - [publish-npm](#publish-npm)
+  - [comment-on-pr](#comment-on-pr)
 - [PR Labels](#-pr-labels)
 - [Architecture](#-architecture)
 - [Contributing](#-contributing)
@@ -204,6 +206,59 @@ jobs:
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+---
+
+### Swift Package PR Build
+
+**File:** `.github/workflows/swift-pkg-pr.yml`
+
+Builds a macOS `.pkg` distribution package for every PR commit and reports status directly in the PR as a living comment (updated in place — not spammy). If a build is already running when a new commit is pushed, the old run is automatically cancelled.
+
+#### How It Works
+
+1. On every commit to a PR, posts a "⏳ Building…" comment (or updates the existing one)
+2. Builds the Swift binary with `swift-build`
+3. Creates a `.pkg` with `swift-pkg`, versioned as `pr.<PR#>.<run#>`
+4. Uploads the `.pkg` as an Actions artifact (7-day retention)
+5. Updates the PR comment to ✅ success (with artifact name + link) or ❌ failure (with log link)
+
+Concurrent runs for the same PR are cancelled via `concurrency: cancel-in-progress: true`.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `package-name` | string | ✅ | — | Name of the Swift binary / package |
+| `identifier` | string | ✅ | — | Package identifier (e.g. `com.example.mytool`) |
+| `scripts-path` | string | ❌ | `""` | Path to scripts directory with preinstall/postinstall scripts |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `DEVELOPER_ID_INSTALLER_NAME` | ✅ | Developer ID Installer certificate name |
+| `SECRET_ENV_VARS` | ❌ | Compile-time env vars written to `.env` |
+
+#### Example
+
+```yaml
+# .github/workflows/pr.yml  (in consuming repo)
+name: PR
+
+on:
+  pull_request:
+
+jobs:
+  swift-pkg:
+    uses: photon-hq/buildspace/.github/workflows/swift-pkg-pr.yml@main
+    with:
+      package-name: my-tool
+      identifier: com.example.my-tool
+    secrets:
+      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+      SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
 ```
 
 ---
@@ -535,6 +590,32 @@ Publishes a package to npm. Handles dependencies installation, build, and publis
 
 ---
 
+### comment-on-pr
+
+**Path:** `.github/blocks/comment-on-pr/action.yaml`
+
+Posts or updates a single comment on a pull request. When a `comment-key` is provided it embeds an HTML marker in the comment body so subsequent calls with the same key will edit the existing comment rather than creating a new one — keeping your PR timeline clean.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `message` | string | ✅ | — | Comment body (markdown supported) |
+| `comment-key` | string | ❌ | `""` | Unique key used to find and update an existing comment |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
+  with:
+    comment-key: my-build-status
+    message: |
+      ## Build Status
+      ✅ All checks passed for commit ${{ github.sha }}
+```
+
+---
+
 ## 🏷️ PR Labels
 
 Control releases by adding labels to your PR before merging:
@@ -555,17 +636,22 @@ buildspace/
 ├── .github/
 │   ├── blocks/                     # Composite actions (building blocks)
 │   │   ├── check-pr-label/         # PR label detection
+│   │   ├── comment-on-pr/          # Post/update PR comments
 │   │   ├── create-github-release/  # GitHub Release creation
 │   │   ├── determine-publish-version/ # AI version detection (standalone)
 │   │   ├── generate-release-info/  # AI version + release notes
 │   │   ├── publish-crates/         # crates.io publishing
 │   │   ├── publish-npm/            # npm publishing
 │   │   ├── rust-build/             # Cross-platform Rust builds
+│   │   ├── swift-build/            # Swift binary builds
+│   │   ├── swift-pkg/              # macOS .pkg creation
 │   │   ├── sync-crates-version/    # Workspace version sync
 │   │   └── typescript-build/       # TypeScript builds
 │   │
 │   └── workflows/                  # Reusable workflows (full pipelines)
 │       ├── rust-service-release.yaml      # Complete Rust release pipeline
+│       ├── swift-pkg-pr.yml               # Swift .pkg build on every PR commit
+│       ├── swift-release.yml              # Swift .pkg release pipeline
 │       └── typescript-service-release.yaml # Complete TS release pipeline
 ```
 
