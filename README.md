@@ -66,8 +66,7 @@ jobs:
 
 ### TypeScript Project
 
-Create `.github/workflows/release.yaml`:
-
+Create `.github/workflows/release.yaml
 ```yaml
 name: Release
 
