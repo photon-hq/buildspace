@@ -68,6 +68,7 @@ jobs:
           binary-name: ${{ inputs.package-name }}
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}
+            DEPLOYMENT_ENVIRONMENT=production
             ${{ secrets.SECRET_ENV_VARS }}
       - name: Swift Package
         uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
