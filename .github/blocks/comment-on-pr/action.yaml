@@ -15,10 +15,13 @@ runs:
   steps:
     - name: Post or update PR comment
       uses: actions/github-script@v7
+      env:
+        COMMENT_MESSAGE: ${{ inputs.message }}
+        COMMENT_KEY: ${{ inputs.comment-key }}
       with:
         script: |
-          const message = `${{ inputs.message }}`;
-          const commentKey = `${{ inputs.comment-key }}`;
+          const message = process.env.COMMENT_MESSAGE;
+          const commentKey = process.env.COMMENT_KEY;
           const pr = context.payload.pull_request;
 
           if (!pr) {
