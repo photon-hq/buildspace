@@ -14,6 +14,16 @@ on:
         type: string
         required: false
         description: "Path to scripts directory containing preinstall/postinstall scripts"
+      jamf-url:
+        type: string
+        required: false
+        default: ""
+        description: "Jamf Pro instance URL (e.g. https://acme.jamfcloud.com). Leave empty to skip Jamf upload."
+      jamf-package-name:
+        type: string
+        required: false
+        default: ""
+        description: "Package name to match in Jamf Pro. If omitted, the tool uses the file stem of the .pkg."
     secrets:
       DEVELOPER_ID_INSTALLER_NAME:
         required: true
@@ -21,6 +31,10 @@ on:
         required: false
       OPENAI_API_KEY:
         required: true
+      JAMF_CLIENT_ID:
+        required: false
+      JAMF_CLIENT_SECRET:
+        required: false
 
 jobs:
   check-labels:
@@ -97,4 +111,16 @@ jobs:
           title: "${{ inputs.package-name }} v${{ needs.prepare-release.outputs.version }}"
           notes: ${{ needs.prepare-release.outputs.release_notes }}
           artifact-pattern: ${{ inputs.package-name }}
+
+  jamf-upload:
+    needs: build
+    if: inputs.jamf-url != ''
+    uses: photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@main
+    with:
+      artifact_name: ${{ inputs.package-name }}
+      package_name: ${{ inputs.jamf-package-name }}
+      jamf_url: ${{ inputs.jamf-url }}
+    secrets:
+      JAMF_CLIENT_ID: ${{ secrets.JAMF_CLIENT_ID }}
+      JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}
 
