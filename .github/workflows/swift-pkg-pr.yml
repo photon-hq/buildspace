@@ -54,6 +54,7 @@ jobs:
         with:
           binary-name: ${{ inputs.package-name }}
           compile-env: |-
+            VERSION=PR-${{ github.event.pull_request.number }}
             DEPLOYMENT_ENVIRONMENT=development
             ${{ secrets.SECRET_ENV_VARS }}
 
