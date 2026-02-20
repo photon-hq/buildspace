@@ -19,6 +19,11 @@ on:
         required: false
         default: ""
         description: "Jamf Pro instance URL (e.g. https://acme.jamfcloud.com). Leave empty to skip Jamf upload."
+      jamf-package_priority:
+        type: string
+        required: false
+        default: ""
+        description: "Priority of the package in Jamf Pro. Leave empty to use default priority."
       jamf-package-name:
         type: string
         required: false
@@ -120,6 +125,7 @@ jobs:
       artifact_name: ${{ inputs.package-name }}
       package_name: ${{ inputs.jamf-package-name }}
       jamf_url: ${{ inputs.jamf-url }}
+      package_priority: ${{ inputs.jamf-package-priority }}
     secrets:
       JAMF_CLIENT_ID: ${{ secrets.JAMF_CLIENT_ID }}
       JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}
