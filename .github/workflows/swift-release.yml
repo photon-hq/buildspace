@@ -19,7 +19,7 @@ on:
         required: false
         default: ""
         description: "Jamf Pro instance URL (e.g. https://acme.jamfcloud.com). Leave empty to skip Jamf upload."
-      jamf-package_priority:
+      jamf-package-priority:
         type: string
         required: false
         default: ""
