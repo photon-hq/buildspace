@@ -85,6 +85,7 @@ jobs:
         uses: photon-hq/buildspace/.github/blocks/swift-build@main
         with:
           binary-name: ${{ inputs.package-name }}
+          use-cache: "false"
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}
             DEPLOYMENT_ENVIRONMENT=production

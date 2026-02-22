@@ -9,6 +9,10 @@ inputs:
     description: "Env values to set when compiling"
     required: false
     default: ""
+  use-cache:
+    description: "Cache SwiftPM dependencies (disable for release builds)"
+    required: false
+    default: "true"
 
 outputs:
   binary-path:
@@ -20,6 +24,16 @@ runs:
   steps:
     - uses: actions/checkout@v5
     - uses: swift-actions/setup-swift@v3
+    - name: Cache SwiftPM dependencies
+      if: inputs.use-cache == 'true'
+      uses: actions/cache@v5
+      with:
+        path: |
+          .build/checkouts
+          .build/repositories
+          .build/artifacts
+        key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+        restore-keys: swiftpm-${{ runner.os }}-
     - name: Prepare .env
       if: inputs.compile-env != ''
       shell: bash
