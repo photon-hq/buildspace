@@ -78,11 +78,21 @@ runs:
         get_sha256() {
           local url="$1"
           local tmpdir=$(mktemp -d)
-          # Parse GitHub release URL: https://github.com/OWNER/REPO/releases/download/TAG/ASSET
-          local path="${url#https://github.com/}"
-          local repo=$(echo "$path" | cut -d'/' -f1-2)
-          local tag=$(echo "$path" | cut -d'/' -f5)
-          local asset=$(echo "$path" | cut -d'/' -f6-)
+          local repo tag asset
+
+          if echo "$url" | grep -q "gitgate.internal"; then
+            # Gitgate URL: http://gitgate.internal/release/OWNER/REPO/TAG/ASSET
+            local path="${url#*gitgate.internal/release/}"
+            repo=$(echo "$path" | cut -d'/' -f1-2)
+            tag=$(echo "$path" | cut -d'/' -f3)
+            asset=$(echo "$path" | cut -d'/' -f4-)
+          else
+            # GitHub URL: https://github.com/OWNER/REPO/releases/download/TAG/ASSET
+            local path="${url#https://github.com/}"
+            repo=$(echo "$path" | cut -d'/' -f1-2)
+            tag=$(echo "$path" | cut -d'/' -f5)
+            asset=$(echo "$path" | cut -d'/' -f6-)
+          fi
 
           gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmpdir" >/dev/null 2>&1
           shasum -a 256 "$tmpdir/$asset" | cut -d' ' -f1
@@ -118,25 +128,26 @@ runs:
             # Update version
             sed -i.bak "s|version \"[^\"]*\"|version \"${VERSION}\"|g" "$FORMULA"
 
-            # Update release URLs
+            # Update release URLs (handles both GitHub and gitgate formats)
             sed -i.bak "s|/releases/download/v[^/]*/|/releases/download/v${VERSION}/|g" "$FORMULA"
+            sed -i.bak "s|/release/\([^/]*/[^/]*/\)v[^/]*/|/release/\1v${VERSION}/|g" "$FORMULA"
 
-            # Compute SHA256 for each platform URL
-            ARM_URL=$(grep -A1 "on_arm do" "$FORMULA" | grep -o 'https://[^"]*' | head -1)
+            # Compute SHA256 for each platform URL (match both http:// and https://)
+            ARM_URL=$(grep -A1 "on_arm do" "$FORMULA" | grep -o 'https\?://[^"]*' | head -1)
             if [ -n "$ARM_URL" ]; then
               echo "Fetching ARM64: $ARM_URL"
               ARM_SHA=$(get_sha256 "$ARM_URL")
               echo "ARM64 SHA256: $ARM_SHA"
             fi
 
-            INTEL_URL=$(grep -A1 "on_intel do" "$FORMULA" | grep -o 'https://[^"]*' | head -1)
+            INTEL_URL=$(grep -A1 "on_intel do" "$FORMULA" | grep -o 'https\?://[^"]*' | head -1)
             if [ -n "$INTEL_URL" ]; then
               echo "Fetching Intel: $INTEL_URL"
               INTEL_SHA=$(get_sha256 "$INTEL_URL")
               echo "Intel SHA256: $INTEL_SHA"
             fi
 
-            LINUX_URL=$(grep -A2 "on_linux do" "$FORMULA" | grep -o 'https://[^"]*' | head -1)
+            LINUX_URL=$(grep -A2 "on_linux do" "$FORMULA" | grep -o 'https\?://[^"]*' | head -1)
             if [ -n "$LINUX_URL" ]; then
               echo "Fetching Linux: $LINUX_URL"
               LINUX_SHA=$(get_sha256 "$LINUX_URL")
