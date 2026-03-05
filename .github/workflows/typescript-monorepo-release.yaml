@@ -1,0 +1,191 @@
+name: TypeScript Monorepo Release
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        type: string
+        required: true
+        description: "Display name for the monorepo (used in release title)"
+      packages:
+        type: string
+        required: true
+        description: 'JSON array of packages, e.g. [{"name":"photon","path":"packages/photon"},{"name":"@photon/openai-compatible","path":"packages/openai-compatible"}]'
+      bun-version:
+        type: string
+        required: false
+        default: "latest"
+        description: "Bun version to use"
+      npm-tag:
+        type: string
+        required: false
+        default: "latest"
+        description: "NPM tag to publish with"
+      build-command:
+        type: string
+        required: false
+        default: "bun run build"
+        description: "Build command to run in each package directory (ignored if root-build-command is set)"
+      root-build-command:
+        type: string
+        required: false
+        default: ""
+        description: "Build command to run once at repo root (e.g., 'turbo build'). Takes precedence over per-package build-command."
+      include-dependents:
+        type: boolean
+        required: false
+        default: false
+        description: "Also release downstream dependents of changed packages"
+      labels-to-check:
+        type: string
+        required: false
+        default: '["release", "prerelease"]'
+        description: "JSON array of PR labels to check"
+      prerelease:
+        type: boolean
+        required: false
+        default: false
+        description: "Force prerelease (overrides label)"
+      release:
+        type: boolean
+        required: false
+        default: false
+        description: "Force release - does both GitHub release and npm publish"
+      dry-run:
+        type: boolean
+        required: false
+        default: false
+        description: "Run in dry-run mode (no actual publishing)"
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+        description: "OpenAI API key for version and notes"
+      NPM_TOKEN:
+        required: true
+        description: "NPM token for publishing"
+      APP_ID:
+        required: false
+        description: "GitHub App ID for pushing to protected branches"
+      APP_PRIVATE_KEY:
+        required: false
+        description: "GitHub App private key for pushing to protected branches"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      labels: ${{ steps.check.outputs.labels }}
+    steps:
+      - name: Check PR Labels
+        id: check
+        uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
+        with:
+          labels: ${{ inputs.labels-to-check }}
+
+  detect-changes:
+    needs: check-labels
+    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release || inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents:  read
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+      has-changes: ${{ steps.detect.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect Changed Packages
+        id: detect
+        uses: photon-hq/buildspace/.github/blocks/detect-changed-packages@main
+        with:
+          packages: ${{ inputs.packages }}
+          include-dependents: ${{ inputs.include-dependents }}
+
+  bump-versions:
+    needs: [check-labels, detect-changes]
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      versions: ${{ steps.bump.outputs.versions }}
+      release-notes: ${{ steps.bump.outputs.release-notes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bump Monorepo Versions
+        id: bump
+        uses: photon-hq/buildspace/.github/blocks/bump-monorepo-versions@main
+        with:
+          changed-packages: ${{ needs.detect-changes.outputs.changed }}
+          service-name: ${{ inputs.service-name }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          github-token: ${{ github.token }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  github-release:
+    needs: [check-labels, detect-changes, bump-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v5
+      - name: Build release title
+        id: title
+        shell: bash
+        env:
+          VERSIONS_JSON: ${{ needs.bump-versions.outputs.versions }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+        run: |
+          PARTS=$(echo "$VERSIONS_JSON" | jq -r 'to_entries | map("\(.key)@\(.value)") | join(", ")')
+          echo "title=${SERVICE_NAME} release (${PARTS})" >> "$GITHUB_OUTPUT"
+          TAG_DATE=$(date +%Y-%m-%d)
+          EXISTING=$(git tag -l "release/${TAG_DATE}.*" 2>/dev/null | wc -l | tr -d ' ')
+          echo "tag=release/${TAG_DATE}.${EXISTING}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: photon-hq/buildspace/.github/blocks/create-github-release@main
+        with:
+          version: ${{ steps.title.outputs.tag }}
+          title: ${{ steps.title.outputs.title }}
+          notes: ${{ needs.bump-versions.outputs.release-notes }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
+          tag-prefix: ""
+
+  npm-publish:
+    needs: [check-labels, detect-changes, bump-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Publish NPM Packages
+        uses: photon-hq/buildspace/.github/blocks/publish-npm-packages@main
+        with:
+          changed-packages: ${{ needs.detect-changes.outputs.changed }}
+          bun-version: ${{ inputs.bun-version }}
+          tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
+          build-command: ${{ inputs.build-command }}
+          root-build-command: ${{ inputs.root-build-command }}
+          dry-run: ${{ inputs.dry-run }}
+          npm-token: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,202 @@
+name: 'Detect Changed Packages'
+description: 'Detect which monorepo packages changed since the last release and output them in topological order'
+
+inputs:
+  packages:
+    description: '[string] JSON array of packages, e.g. [{"name":"photon","path":"packages/photon"}]'
+    required: true
+  include-dependents:
+    description: "[boolean: 'true'/'false'] Also include downstream dependents of changed packages"
+    required: false
+    default: 'false'
+
+outputs:
+  changed:
+    description: 'JSON array of changed packages in topological order (dependencies first)'
+    value: ${{ steps.detect.outputs.changed }}
+  has-changes:
+    description: 'Whether any packages have changes'
+    value: ${{ steps.detect.outputs.has-changes }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get last release SHA
+      id: last-release
+      uses: actions/github-script@v7
+      with:
+        script: |
+          try {
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1
+            });
+
+            if (releases.length > 0) {
+              const tagName = releases[0].tag_name;
+              const { data: ref } = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tagName}`
+              });
+              core.setOutput('sha', ref.object.sha);
+              console.log(`Last release: ${tagName} (${ref.object.sha})`);
+            } else {
+              const { execSync } = require('child_process');
+              try {
+                const revListOutput = execSync('git rev-list --max-parents=0 HEAD', {
+                  encoding: 'utf8'
+                });
+                const roots = revListOutput
+                  .split('\n')
+                  .map(line => line.trim())
+                  .filter(line => line.length > 0);
+                const firstSha = roots[roots.length - 1];
+                core.setOutput('sha', firstSha);
+                console.log(`No releases found. Using first commit from git history: ${firstSha}`);
+              } catch (gitError) {
+                console.log(`No releases and failed to determine first commit via git: ${gitError.message}. Falling back to current SHA.`);
+                core.setOutput('sha', context.sha);
+              }
+            }
+          } catch (error) {
+            core.setOutput('sha', context.sha);
+            console.log(`Error finding last release: ${error.message}. Using current SHA.`);
+          }
+
+    - name: Detect changes and topological sort
+      id: detect
+      shell: bash
+      env:
+        PACKAGES_JSON: ${{ inputs.packages }}
+        INCLUDE_DEPENDENTS: ${{ inputs.include-dependents }}
+        LAST_RELEASE_SHA: ${{ steps.last-release.outputs.sha }}
+      run: |
+        set -euo pipefail
+
+        CHANGED_FILES=$(git diff --name-only "${LAST_RELEASE_SHA}..HEAD" 2>/dev/null || git diff --name-only HEAD~1..HEAD)
+
+        echo "Changed files since last release:"
+        echo "$CHANGED_FILES"
+        echo "---"
+
+        PACKAGES=$(echo "$PACKAGES_JSON" | jq -c '.')
+        PKG_COUNT=$(echo "$PACKAGES" | jq 'length')
+
+        declare -A CHANGED_SET
+        declare -A PKG_BY_NAME
+        declare -A PKG_PATH_BY_NAME
+        declare -A DEPS
+
+        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
+          PKG_NAME=$(echo "$PACKAGES" | jq -r ".[$i].name")
+          PKG_PATH=$(echo "$PACKAGES" | jq -r ".[$i].path")
+          PKG_BY_NAME["$PKG_NAME"]="$i"
+          PKG_PATH_BY_NAME["$PKG_NAME"]="$PKG_PATH"
+
+          HAS_CHANGE=false
+          while IFS= read -r file; do
+            if [[ "$file" == "$PKG_PATH"/* ]]; then
+              HAS_CHANGE=true
+              break
+            fi
+          done <<< "$CHANGED_FILES"
+
+          if [ "$HAS_CHANGE" = true ]; then
+            CHANGED_SET["$PKG_NAME"]=1
+            echo "Package '$PKG_NAME' ($PKG_PATH) has changes"
+          fi
+        done
+
+        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
+          PKG_NAME=$(echo "$PACKAGES" | jq -r ".[$i].name")
+          PKG_PATH=$(echo "$PACKAGES" | jq -r ".[$i].path")
+          PKG_JSON_PATH="$PKG_PATH/package.json"
+
+          if [ -f "$PKG_JSON_PATH" ]; then
+            PKG_DEPS=$(jq -r '(.dependencies // {} | keys[]) , (.devDependencies // {} | keys[])' "$PKG_JSON_PATH" 2>/dev/null || true)
+            DEP_LIST=""
+            while IFS= read -r dep; do
+              [ -z "$dep" ] && continue
+              if [[ -v "PKG_BY_NAME[$dep]" ]]; then
+                DEP_LIST="${DEP_LIST:+$DEP_LIST,}$dep"
+              fi
+            done <<< "$PKG_DEPS"
+            DEPS["$PKG_NAME"]="$DEP_LIST"
+          fi
+        done
+
+        if [ "$INCLUDE_DEPENDENTS" = "true" ]; then
+          ADDED=true
+          while [ "$ADDED" = true ]; do
+            ADDED=false
+            for PKG_NAME in "${!PKG_BY_NAME[@]}"; do
+              if [[ -v "CHANGED_SET[$PKG_NAME]" ]]; then
+                continue
+              fi
+              IFS=',' read -ra DEP_ARR <<< "${DEPS[$PKG_NAME]:-}"
+              for dep in "${DEP_ARR[@]}"; do
+                [ -z "$dep" ] && continue
+                if [[ -v "CHANGED_SET[$dep]" ]]; then
+                  CHANGED_SET["$PKG_NAME"]=1
+                  ADDED=true
+                  echo "Package '$PKG_NAME' added as dependent of '$dep'"
+                  break
+                fi
+              done
+            done
+          done
+        fi
+
+        if [ ${#CHANGED_SET[@]} -eq 0 ]; then
+          echo "No packages changed"
+          echo "changed=[]" >> "$GITHUB_OUTPUT"
+          echo "has-changes=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        SORTED=()
+        declare -A VISITED
+        declare -A IN_STACK
+
+        visit() {
+          local node="$1"
+          if [[ -v "IN_STACK[$node]" ]]; then
+            echo "::error::Circular dependency detected involving '$node'"
+            exit 1
+          fi
+          if [[ -v "VISITED[$node]" ]]; then
+            return
+          fi
+          IN_STACK["$node"]=1
+          IFS=',' read -ra DEP_ARR <<< "${DEPS[$node]:-}"
+          for dep in "${DEP_ARR[@]}"; do
+            [ -z "$dep" ] && continue
+            if [[ -v "CHANGED_SET[$dep]" ]]; then
+              visit "$dep"
+            fi
+          done
+          unset 'IN_STACK[$node]'
+          VISITED["$node"]=1
+          SORTED+=("$node")
+        }
+
+        for PKG_NAME in $(printf '%s\n' "${!CHANGED_SET[@]}" | sort); do
+          visit "$PKG_NAME"
+        done
+
+        RESULT="["
+        for i in "${!SORTED[@]}"; do
+          NAME="${SORTED[$i]}"
+          PATH_VAL="${PKG_PATH_BY_NAME[$NAME]}"
+          [ "$i" -gt 0 ] && RESULT+=","
+          RESULT+="{\"name\":\"$NAME\",\"path\":\"$PATH_VAL\"}"
+        done
+        RESULT+="]"
+
+        echo "Topologically sorted changed packages:"
+        echo "$RESULT" | jq .
+
+        echo "changed=$RESULT" >> "$GITHUB_OUTPUT"
+        echo "has-changes=true" >> "$GITHUB_OUTPUT"

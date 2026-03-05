@@ -1,4 +1,4 @@
-# BuildSpace
+git # BuildSpace
 
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
@@ -18,12 +18,16 @@ BuildSpace packages battle-tested, AI-powered CI/CD building blocks, like genera
 - [Workflows](#-workflows)
   - [Rust Service Release](#rust-service-release)
   - [TypeScript Service Release](#typescript-service-release)
+  - [TypeScript Monorepo Release](#typescript-monorepo-release)
   - [Swift Package PR Build](#swift-package-pr-build)
 - [Actions](#-actions)
   - [check-pr-label](#check-pr-label)
   - [generate-release-info](#generate-release-info)
   - [determine-publish-version](#determine-publish-version)
   - [create-github-release](#create-github-release)
+  - [detect-changed-packages](#detect-changed-packages)
+  - [bump-monorepo-versions](#bump-monorepo-versions)
+  - [publish-npm-packages](#publish-npm-packages)
   - [rust-build](#rust-build)
   - [typescript-build](#typescript-build)
   - [sync-crates-version](#sync-crates-version)
@@ -85,6 +89,32 @@ jobs:
   with:
       service-name: my-package
       build-command: "npm run build"
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+### TypeScript Monorepo
+
+Create `.github/workflows/release.yaml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    uses: photon-hq/buildspace/.github/workflows/typescript-monorepo-release.yaml@main
+    permissions:
+      contents: write
+      pull-requests: read
+    with:
+      service-name: photon-ts
+      packages: '[{"name":"photon","path":"packages/photon"},{"name":"@photon/openai-compatible","path":"packages/openai-compatible"}]'
+      root-build-command: "turbo build"
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -210,6 +240,23 @@ jobs:
 
 ---
 
+### TypeScript Monorepo Release
+
+**File:** `.github/workflows/typescript-monorepo-release.yaml`
+
+A complete release pipeline for TypeScript/JavaScript monorepos that:
+1. Checks PR labels for release triggers
+2. Detects which packages changed since the last release
+3. Topologically sorts changed packages (dependencies before dependents)
+4. Uses a single AI call to determine versions and generate combined release notes for all changed packages
+5. Bumps each package's `package.json` and commits
+6. Creates a single GitHub Release with a `release/YYYY-MM-DD.N` tag
+7. Publishes all changed packages to npm in dependency order
+
+Each package is independently versioned — no lockstep.
+
+---
+
 ### Swift Package PR Build
 
 **File:** `.github/workflows/swift-pkg-pr.yml`
@@ -225,6 +272,79 @@ Builds a macOS `.pkg` distribution package for every PR commit and reports statu
 5. Updates the PR comment to ✅ success (with artifact name + link) or ❌ failure (with log link)
 
 Concurrent runs for the same PR are cancelled via `concurrency: cancel-in-progress: true`.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `service-name` | string | ✅ | — | Display name for the monorepo (used in release title) |
+| `packages` | string | ✅ | — | JSON array of packages: `[{"name":"pkg","path":"packages/pkg"}]` |
+| `bun-version` | string | ❌ | `latest` | Bun version to use |
+| `npm-tag` | string | ❌ | `latest` | npm tag (e.g., `latest`, `beta`, `next`) |
+| `build-command` | string | ❌ | `bun run build` | Build command per package (ignored if `root-build-command` is set) |
+| `root-build-command` | string | ❌ | `""` | Build command at repo root (e.g., `turbo build`) |
+| `include-dependents` | boolean | ❌ | `false` | Also release downstream dependents of changed packages |
+| `labels-to-check` | string | ❌ | `["release", "prerelease"]` | PR labels that trigger releases |
+| `prerelease` | boolean | ❌ | `false` | Force prerelease (adds `-rc.N` suffix, publishes as `beta`) |
+| `release` | boolean | ❌ | `false` | Force release (bypasses label check) |
+| `dry-run` | boolean | ❌ | `false` | Test without actually publishing |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `OPENAI_API_KEY` | ✅ | OpenAI API key for AI-powered versioning and notes |
+| `NPM_TOKEN` | ✅ | npm authentication token |
+| `APP_ID` | ❌ | GitHub App ID (for protected branches) |
+| `APP_PRIVATE_KEY` | ❌ | GitHub App private key (for protected branches) |
+
+#### Example with All Options
+
+```yaml
+jobs:
+  release:
+    uses: photon-hq/buildspace/.github/workflows/typescript-monorepo-release.yaml@main
+    permissions:
+      contents: write
+      pull-requests: read
+    with:
+      service-name: photon-ts
+      packages: '[{"name":"photon","path":"packages/photon"},{"name":"@photon/openai-compatible","path":"packages/openai-compatible"},{"name":"create-photon","path":"packages/create-photon"}]'
+      bun-version: "1.1"
+      npm-tag: latest
+      root-build-command: "turbo build"
+      include-dependents: true
+      prerelease: false
+      dry-run: false
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+#### How It Works
+
+```
+PR merged with "release" label
+        │
+        ▼
+┌─────────────┐     ┌───────────────────┐     ┌─────────────────┐
+│ Check Labels │────▶│ Detect Changed    │────▶│ Bump Versions   │
+│              │     │ Packages (topo-   │     │ (single AI call │
+│              │     │ sorted by deps)   │     │  for all pkgs)  │
+└─────────────┘     └───────────────────┘     └────────┬────────┘
+                                                       │
+                                              ┌────────┴────────┐
+                                              │                 │
+                                              ▼                 ▼
+                                     ┌──────────────┐  ┌─────────────┐
+                                     │GitHub Release │  │ npm Publish │
+                                     │(combined tag) │  │ (in order)  │
+                                     └──────────────┘  └─────────────┘
+```
+
+---
+
+### Swift Package PR Build (continued)
 
 #### Inputs
 
@@ -420,6 +540,137 @@ Creates a GitHub Release with optional artifact attachments.
       - Added awesome feature
       - Fixed annoying bug
     artifact-pattern: "my-binary-*"
+```
+
+---
+
+### detect-changed-packages
+
+**Path:** `.github/blocks/detect-changed-packages/action.yaml`
+
+Detects which monorepo packages have changed since the last GitHub Release and outputs them in topological (dependency) order. Optionally includes downstream dependents.
+
+#### How It Works
+
+1. Finds the last GitHub Release tag SHA
+2. Runs `git diff --name-only` to get changed files
+3. Maps changed files to packages using the provided `packages` JSON
+4. Optionally adds downstream dependents by reading each package's `package.json` dependencies
+5. Topologically sorts the result (dependencies before dependents)
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `packages` | string | ✅ | — | JSON array: `[{"name":"pkg","path":"packages/pkg"}]` |
+| `include-dependents` | boolean | ❌ | `false` | Also include packages that depend on changed packages |
+
+#### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `changed` | JSON | Array of changed packages in topological order |
+| `has-changes` | boolean | Whether any packages have changes |
+
+#### Usage
+
+```yaml
+- uses: actions/checkout@v5
+  with:
+    fetch-depth: 0
+
+- uses: photon-hq/buildspace/.github/blocks/detect-changed-packages@main
+  id: detect
+  with:
+    packages: '[{"name":"photon","path":"packages/photon"},{"name":"@photon/openai","path":"packages/openai"}]'
+    include-dependents: true
+
+- if: steps.detect.outputs.has-changes == 'true'
+  run: echo "Changed packages: ${{ steps.detect.outputs.changed }}"
+```
+
+---
+
+### bump-monorepo-versions
+
+**Path:** `.github/blocks/bump-monorepo-versions/action.yaml`
+
+Determines versions for all changed monorepo packages using a single AI call, bumps each `package.json`, and commits/pushes the result.
+
+#### How It Works
+
+1. Gathers commits scoped to each package's path via `git log -- <path>`
+2. Sends a single prompt containing all packages and their scoped commits to OpenAI
+3. Parses the AI response for per-package versions and combined release notes
+4. Runs `npm version` in each package directory
+5. Commits all bumps in one commit and pushes
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `changed-packages` | string | ✅ | — | JSON array from `detect-changed-packages` output |
+| `service-name` | string | ✅ | — | Service name for commit messages |
+| `prerelease` | boolean | ❌ | `false` | Append `-rc.N` suffix to versions |
+| `openai-api-key` | secret | ✅ | — | OpenAI API key |
+| `github-token` | secret | ✅ | — | GitHub token (fallback) |
+| `app-id` | secret | ❌ | `""` | GitHub App ID (for protected branches) |
+| `app-private-key` | secret | ❌ | `""` | GitHub App private key |
+
+#### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `versions` | JSON | Object mapping package names to new versions |
+| `release-notes` | string | Combined AI-generated release notes |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/bump-monorepo-versions@main
+  id: bump
+  with:
+    changed-packages: ${{ steps.detect.outputs.changed }}
+    service-name: photon-ts
+    openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+    github-token: ${{ github.token }}
+```
+
+---
+
+### publish-npm-packages
+
+**Path:** `.github/blocks/publish-npm-packages/action.yaml`
+
+Builds and publishes multiple monorepo packages to npm in dependency order. Supports both per-package builds and a single root build command.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `changed-packages` | string | ✅ | — | JSON array of packages in topological order |
+| `bun-version` | string | ❌ | `latest` | Bun version |
+| `node-version` | string | ❌ | `20` | Node.js version |
+| `tag` | string | ❌ | `latest` | npm tag |
+| `build-command` | string | ❌ | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
+| `root-build-command` | string | ❌ | `""` | Build once at repo root (e.g., `turbo build`) |
+| `dry-run` | boolean | ❌ | `false` | Run `npm publish --dry-run` |
+| `npm-token` | secret | ✅ | — | npm authentication token |
+
+#### Usage
+
+```yaml
+- uses: actions/checkout@v5
+  with:
+    ref: ${{ github.ref_name }}
+    fetch-depth: 0
+
+- uses: photon-hq/buildspace/.github/blocks/publish-npm-packages@main
+  with:
+    changed-packages: ${{ steps.detect.outputs.changed }}
+    root-build-command: "turbo build"
+    tag: latest
+    npm-token: ${{ secrets.NPM_TOKEN }}
 ```
 
 ---
@@ -634,30 +885,36 @@ Control releases by adding labels to your PR before merging:
 ```
 buildspace/
 ├── .github/
-│   ├── blocks/                     # Composite actions (building blocks)
-│   │   ├── check-pr-label/         # PR label detection
-│   │   ├── comment-on-pr/          # Post/update PR comments
-│   │   ├── create-github-release/  # GitHub Release creation
+│   ├── blocks/                        # Composite actions (building blocks)
+│   │   ├── bump-monorepo-versions/    # AI version bump for monorepos (single call)
+│   │   ├── check-pr-label/            # PR label detection
+│   │   ├── comment-on-pr/             # Post/update PR comments
+│   │   ├── create-github-release/     # GitHub Release creation
+│   │   ├── detect-changed-packages/   # Monorepo change detection + topo-sort
 │   │   ├── determine-publish-version/ # AI version detection (standalone)
-│   │   ├── generate-release-info/  # AI version + release notes
-│   │   ├── publish-crates/         # crates.io publishing
-│   │   ├── publish-npm/            # npm publishing
-│   │   ├── rust-build/             # Cross-platform Rust builds
-│   │   ├── swift-build/            # Swift binary builds
-│   │   ├── swift-pkg/              # macOS .pkg creation
-│   │   ├── sync-crates-version/    # Workspace version sync
-│   │   └── typescript-build/       # TypeScript builds
+│   │   ├── generate-release-info/     # AI version + release notes
+│   │   ├── publish-crates/            # crates.io publishing
+│   │   ├── publish-npm/               # npm publishing (single package)
+│   │   ├── publish-npm-packages/      # npm publishing (monorepo, ordered)
+│   │   ├── rust-build/                # Cross-platform Rust builds
+│   │   ├── swift-build/               # Swift binary builds
+│   │   ├── swift-pkg/                 # macOS .pkg creation
+│   │   ├── sync-crates-version/       # Workspace version sync
+│   │   └── typescript-build/          # TypeScript builds
 │   │
-│   └── workflows/                  # Reusable workflows (full pipelines)
-│       ├── rust-service-release.yaml      # Complete Rust release pipeline
-│       ├── swift-pkg-pr.yml               # Swift .pkg build on every PR commit
-│       ├── swift-release.yml              # Swift .pkg release pipeline
-│       └── typescript-service-release.yaml # Complete TS release pipeline
+│   └── workflows/                     # Reusable workflows (full pipelines)
+│       ├── rust-service-release.yaml            # Complete Rust release pipeline
+│       ├── swift-pkg-pr.yml                     # Swift .pkg build on every PR commit
+│       ├── swift-release.yml                    # Swift .pkg release pipeline
+│       ├── typescript-monorepo-release.yaml     # Complete TS monorepo pipeline
+│       └── typescript-service-release.yaml      # Complete TS release pipeline
 ```
 
 ### How Releases Work
 
-This secition addresses `rust-service-release` and `typescript-service-release`.
+#### Single-Package Workflows
+
+This section addresses `rust-service-release` and `typescript-service-release`.
 
 These workflows are complete for fully ai-powered and automated releases from versioning to version notes to publishing. These workflows are built upon the building blocks in the `.github/blocks` folder 
 
@@ -710,6 +967,16 @@ diagram is most accurate.
 ║                                        ║
 ╚════════════════════════════════════════╝
 ```
+
+#### Monorepo Workflow
+
+The `typescript-monorepo-release` workflow extends the single-package pattern to handle multiple independently-versioned packages. Key differences:
+
+- **Change detection** — only packages with file changes (and optionally their dependents) are released
+- **Topological ordering** — packages are processed in dependency order so downstream consumers see new versions of their dependencies
+- **Single AI call** — one prompt contains all packages and their scoped commits, producing versions and notes in one shot
+- **Date-based tags** — since there's no single version, releases use `release/YYYY-MM-DD.N` tags
+- **`workspace:*` protocol** — left untouched; Bun/npm resolves these to real versions at pack-time
 
 ---
 
