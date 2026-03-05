@@ -1,0 +1,251 @@
+name: 'Bump Monorepo Versions'
+description: 'Determine versions for changed monorepo packages using AI, bump package.json files, commit and push'
+
+inputs:
+  changed-packages:
+    description: '[string] JSON array of changed packages from detect-changed-packages (e.g. [{"name":"photon","path":"packages/photon"}])'
+    required: true
+  service-name:
+    description: '[string] Service name for commit messages and release notes'
+    required: true
+  prerelease:
+    description: "[boolean: 'true'/'false'] Whether this is a prerelease (appends -rc.N suffix)"
+    required: false
+    default: 'false'
+  openai-api-key:
+    description: '[secret] OpenAI API key for AI-powered version detection and notes'
+    required: true
+  github-token:
+    description: '[secret] GitHub token (fallback if no app credentials provided)'
+    required: true
+  app-id:
+    description: '[secret] GitHub App ID for pushing to protected branches (optional)'
+    required: false
+    default: ''
+  app-private-key:
+    description: '[secret] GitHub App private key for pushing to protected branches (optional)'
+    required: false
+    default: ''
+
+outputs:
+  versions:
+    description: 'JSON object mapping package names to their new versions (e.g. {"photon":"1.2.0","@photon/openai":"0.5.0"})'
+    value: ${{ steps.apply-versions.outputs.versions }}
+  release-notes:
+    description: 'Combined AI-generated release notes for all bumped packages'
+    value: ${{ steps.ai-release.outputs.final-message }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get last release SHA
+      id: last-release
+      uses: actions/github-script@v7
+      with:
+        script: |
+          try {
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 1
+            });
+
+            if (releases.length > 0) {
+              const tagName = releases[0].tag_name;
+              const { data: ref } = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${tagName}`
+              });
+              core.setOutput('sha', ref.object.sha);
+            } else {
+              const { execSync } = require('child_process');
+              try {
+                const revListOutput = execSync('git rev-list --max-parents=0 HEAD', {
+                  encoding: 'utf8'
+                });
+                const roots = revListOutput
+                  .split('\n')
+                  .map(line => line.trim())
+                  .filter(line => line.length > 0);
+                core.setOutput('sha', roots[roots.length - 1]);
+              } catch (gitError) {
+                console.log(`Failed to find root commit: ${gitError.message}. Falling back to current SHA.`);
+                core.setOutput('sha', context.sha);
+              }
+            }
+          } catch (error) {
+            core.setOutput('sha', context.sha);
+          }
+
+    - name: Gather per-package commit logs
+      id: commit-logs
+      shell: bash
+      env:
+        CHANGED_JSON: ${{ inputs.changed-packages }}
+        LAST_SHA: ${{ steps.last-release.outputs.sha }}
+      run: |
+        set -euo pipefail
+
+        PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
+        PROMPT_PARTS=""
+
+        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
+          NAME=$(echo "$CHANGED_JSON" | jq -r ".[$i].name")
+          PKG_PATH=$(echo "$CHANGED_JSON" | jq -r ".[$i].path")
+          CURRENT_VER=$(jq -r '.version // "0.0.0"' "$PKG_PATH/package.json")
+
+          COMMITS=$(git log --oneline "${LAST_SHA}..HEAD" -- "$PKG_PATH" 2>/dev/null || git log --oneline HEAD~10..HEAD -- "$PKG_PATH")
+
+          PROMPT_PARTS="${PROMPT_PARTS}
+        Package: ${NAME}
+        Current version: ${CURRENT_VER}
+        Path: ${PKG_PATH}
+        Commits:
+        ${COMMITS}
+        ---"
+        done
+
+        EOF_MARKER=$(openssl rand -hex 16)
+        echo "prompt<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+        echo "$PROMPT_PARTS" >> "$GITHUB_OUTPUT"
+        echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+
+    - name: AI determine versions and release notes
+      id: ai-release
+      uses: openai/codex-action@v1
+      with:
+        openai-api-key: ${{ inputs.openai-api-key }}
+        safety-strategy: read-only
+        prompt: |
+          You are a release manager for the "${{ inputs.service-name }}" monorepo.
+          Prerelease: ${{ inputs.prerelease }}
+
+          For each package below, determine the next semantic version based on its commits.
+          Rules:
+          - BREAKING CHANGE or ! after type = major bump
+          - feat: = minor bump
+          - fix:, perf:, or other = patch bump
+          - Default to patch if unclear
+          - Each package is versioned independently
+          - For prereleases: use same version logic, suffix will be added automatically
+
+          ${{ steps.commit-logs.outputs.prompt }}
+
+          Respond in exactly this format (no extra text before or after each section):
+
+          VERSIONS_JSON
+          {"package-name":"X.Y.Z", ...}
+          END_VERSIONS_JSON
+
+          RELEASE_NOTES
+          (write combined release notes for all packages below, grouped by package.
+           Plain language, 1-2 sentences per item, 1-2 emojis max.
+           Group by: ## New Features, ## Bug Fixes, ## Improvements as applicable.
+           Note that we only need these groups if they are applicable. For example, do not mention a bug fixes section if there were no bug fixes
+           Prefix each item with the package name in bold.)
+          END_RELEASE_NOTES
+
+    - name: Apply versions
+      id: apply-versions
+      shell: bash
+      env:
+        AI_OUTPUT: ${{ steps.ai-release.outputs.final-message }}
+        CHANGED_JSON: ${{ inputs.changed-packages }}
+        PRERELEASE: ${{ inputs.prerelease }}
+      run: |
+        set -euo pipefail
+
+        VERSIONS_LINE=$(echo "$AI_OUTPUT" | sed -n '/^VERSIONS_JSON$/,/^END_VERSIONS_JSON$/p' | grep -v '^VERSIONS_JSON$' | grep -v '^END_VERSIONS_JSON$' | tr -d '\n')
+
+        if [ -z "$VERSIONS_LINE" ]; then
+          echo "::error::Could not parse VERSIONS_JSON from AI output"
+          echo "AI output was:"
+          echo "$AI_OUTPUT"
+          exit 1
+        fi
+
+        echo "$VERSIONS_LINE" | jq . > /dev/null 2>&1 || {
+          echo "::error::VERSIONS_JSON is not valid JSON: $VERSIONS_LINE"
+          exit 1
+        }
+
+        echo "Parsed versions: $VERSIONS_LINE"
+
+        PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
+        COMMIT_PARTS=""
+
+        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
+          NAME=$(echo "$CHANGED_JSON" | jq -r ".[$i].name")
+          PKG_PATH=$(echo "$CHANGED_JSON" | jq -r ".[$i].path")
+          RAW_VER=$(echo "$VERSIONS_LINE" | jq -r --arg name "$NAME" '.[$name] // empty')
+
+          if [ -z "$RAW_VER" ]; then
+            echo "::warning::No version found for '$NAME' in AI output, skipping"
+            continue
+          fi
+
+          SEMVER=$(echo "$RAW_VER" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          if [ -z "$SEMVER" ]; then
+            echo "::error::Could not parse semver from '$RAW_VER' for package '$NAME'"
+            exit 1
+          fi
+
+          if [ "$PRERELEASE" = "true" ]; then
+            FINAL_VER="${SEMVER}-rc.${GITHUB_RUN_NUMBER}"
+          else
+            FINAL_VER="$SEMVER"
+          fi
+
+          echo "Bumping $NAME to $FINAL_VER in $PKG_PATH"
+          (cd "$PKG_PATH" && npm version "$FINAL_VER" --no-git-tag-version --allow-same-version)
+
+          COMMIT_PARTS="${COMMIT_PARTS:+$COMMIT_PARTS, }${NAME}@${FINAL_VER}"
+        done
+
+        if [ "$PRERELEASE" = "true" ]; then
+          FINAL_VERSIONS=$(echo "$VERSIONS_LINE" | jq --arg suffix "-rc.${GITHUB_RUN_NUMBER}" '
+            with_entries(.value = ((.value | capture("(?<v>[0-9]+\\.[0-9]+\\.[0-9]+)")).v + $suffix))
+          ')
+        else
+          FINAL_VERSIONS="$VERSIONS_LINE"
+        fi
+
+        echo "versions=$FINAL_VERSIONS" >> "$GITHUB_OUTPUT"
+        echo "commit-message=chore: release ${COMMIT_PARTS}" >> "$GITHUB_OUTPUT"
+
+    - name: Generate App Token
+      id: app-token
+      if: ${{ inputs.app-id != '' && inputs.app-private-key != '' }}
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+
+    - name: Configure git and push
+      shell: bash
+      env:
+        APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        FALLBACK_TOKEN: ${{ inputs.github-token }}
+        COMMIT_MSG: ${{ steps.apply-versions.outputs.commit-message }}
+      run: |
+        set -euo pipefail
+
+        TOKEN="${APP_TOKEN:-$FALLBACK_TOKEN}"
+        git config --local --unset-all http.https://github.com/.extraheader || true
+        AUTH=$(echo -n "x-access-token:${TOKEN}" | base64)
+        git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH}"
+
+        git config user.name "photon-release[bot]"
+        git config user.email "photon-release[bot]@users.noreply.github.com"
+
+        git add -A
+        if ! git diff --staged --quiet; then
+          git commit -m "$COMMIT_MSG"
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push
+        else
+          echo "No changes to commit"
+        fi

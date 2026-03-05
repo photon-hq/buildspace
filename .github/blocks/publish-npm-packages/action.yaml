@@ -1,0 +1,95 @@
+name: 'Publish NPM Packages'
+description: 'Build and publish multiple monorepo packages to npm in dependency order'
+
+inputs:
+  changed-packages:
+    description: '[string] JSON array of packages in topological order (e.g. [{"name":"photon","path":"packages/photon"}])'
+    required: true
+  bun-version:
+    description: '[string] Bun version to use'
+    required: false
+    default: 'latest'
+  node-version:
+    description: '[string] Node.js version'
+    required: false
+    default: '20'
+  tag:
+    description: "[string] NPM tag (e.g., 'latest', 'beta')"
+    required: false
+    default: 'latest'
+  build-command:
+    description: '[string] Build command to run in each package directory (ignored if root-build-command is set)'
+    required: false
+    default: 'bun run build'
+  root-build-command:
+    description: '[string] Build command to run once at repo root (e.g., "turbo build"). Takes precedence over per-package build-command.'
+    required: false
+    default: ''
+  dry-run:
+    description: "[boolean: 'true'/'false'] Run in dry-run mode (no actual publishing)"
+    required: false
+    default: 'false'
+  npm-token:
+    description: '[secret] NPM authentication token'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Install dependencies
+      shell: bash
+      run: bun install
+
+    - name: Build (root)
+      if: ${{ inputs.root-build-command != '' }}
+      shell: bash
+      run: ${{ inputs.root-build-command }}
+
+    - name: Build and publish packages
+      shell: bash
+      env:
+        CHANGED_JSON: ${{ inputs.changed-packages }}
+        BUILD_CMD: ${{ inputs.build-command }}
+        ROOT_BUILD_CMD: ${{ inputs.root-build-command }}
+        TAG: ${{ inputs.tag }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
+      run: |
+        set -euo pipefail
+
+        PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
+
+        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
+          NAME=$(echo "$CHANGED_JSON" | jq -r ".[$i].name")
+          PKG_PATH=$(echo "$CHANGED_JSON" | jq -r ".[$i].path")
+
+          echo "========================================="
+          echo "Publishing $NAME ($PKG_PATH)"
+          echo "========================================="
+
+          if [ -z "$ROOT_BUILD_CMD" ]; then
+            echo "Building $NAME..."
+            (cd "$PKG_PATH" && $BUILD_CMD)
+          fi
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: would publish $NAME with tag $TAG"
+            (cd "$PKG_PATH" && npm publish --tag "$TAG" --access public --dry-run)
+          else
+            echo "Publishing $NAME with tag $TAG"
+            (cd "$PKG_PATH" && npm publish --tag "$TAG" --access public)
+          fi
+
+          echo ""
+        done
+
+        echo "All packages published successfully"
