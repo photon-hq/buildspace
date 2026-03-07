@@ -109,6 +109,13 @@ runs:
           fi
         done
 
+        if [ ${#CHANGED_SET[@]} -eq 0 ]; then
+          echo "No packages changed"
+          echo "changed=[]" >> "$GITHUB_OUTPUT"
+          echo "has-changes=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
         for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
           PKG_NAME=$(echo "$PACKAGES" | jq -r ".[$i].name")
           PKG_PATH=$(echo "$PACKAGES" | jq -r ".[$i].path")
@@ -147,13 +154,6 @@ runs:
               done
             done
           done
-        fi
-
-        if [ ${#CHANGED_SET[@]} -eq 0 ]; then
-          echo "No packages changed"
-          echo "changed=[]" >> "$GITHUB_OUTPUT"
-          echo "has-changes=false" >> "$GITHUB_OUTPUT"
-          exit 0
         fi
 
         SORTED=()
