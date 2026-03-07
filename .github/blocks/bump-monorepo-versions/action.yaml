@@ -33,7 +33,7 @@ outputs:
     value: ${{ steps.apply-versions.outputs.versions }}
   release-notes:
     description: 'Combined AI-generated release notes for all bumped packages'
-    value: ${{ steps.ai-release.outputs.final-message }}
+    value: ${{ steps.apply-versions.outputs.release-notes }}
 
 runs:
   using: 'composite'
@@ -214,6 +214,12 @@ runs:
 
         echo "versions=$FINAL_VERSIONS" >> "$GITHUB_OUTPUT"
         echo "commit-message=chore: release ${COMMIT_PARTS}" >> "$GITHUB_OUTPUT"
+
+        NOTES=$(echo "$AI_OUTPUT" | sed -n '/^RELEASE_NOTES$/,/^END_RELEASE_NOTES$/p' | grep -v '^RELEASE_NOTES$' | grep -v '^END_RELEASE_NOTES$')
+        EOF_MARKER=$(openssl rand -hex 16)
+        echo "release-notes<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+        echo "$NOTES" >> "$GITHUB_OUTPUT"
+        echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
 
     - name: Generate App Token
       id: app-token
