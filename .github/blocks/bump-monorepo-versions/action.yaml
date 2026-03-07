@@ -198,7 +198,8 @@ runs:
           fi
 
           echo "Bumping $NAME to $FINAL_VER in $PKG_PATH"
-          (cd "$PKG_PATH" && npm version "$FINAL_VER" --no-git-tag-version --allow-same-version)
+          jq --arg ver "$FINAL_VER" '.version = $ver' "$PKG_PATH/package.json" > "$PKG_PATH/package.json.tmp"
+          mv "$PKG_PATH/package.json.tmp" "$PKG_PATH/package.json"
 
           COMMIT_PARTS="${COMMIT_PARTS:+$COMMIT_PARTS, }${NAME}@${FINAL_VER}"
         done
