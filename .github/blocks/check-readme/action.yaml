@@ -1,0 +1,107 @@
+name: 'Check README'
+description: 'Use AI to check if the README is up to date with the changes in a PR'
+
+inputs:
+  openai-api-key:
+    description: '[secret] OpenAI API key for AI-powered README analysis'
+    required: true
+
+outputs:
+  up-to-date:
+    description: "[boolean: 'true'/'false'] Whether the README appears up to date with the PR changes"
+    value: ${{ steps.parse.outputs.up-to-date }}
+  explanation:
+    description: '[string] AI explanation of why the README may or may not need updating'
+    value: ${{ steps.parse.outputs.explanation }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get changed files
+      id: changed-files
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: files } = await github.rest.pulls.listFiles({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number,
+            per_page: 100
+          });
+
+          const names = files.map(f => f.filename);
+          const readmePath = 'README.md';
+          const readmeChanged = names.includes(readmePath);
+
+          core.setOutput('files', names.join('\n'));
+          core.setOutput('readme-changed', readmeChanged.toString());
+
+    - name: AI Check README
+      id: ai-check
+      if: steps.changed-files.outputs.readme-changed == 'false'
+      uses: openai/codex-action@v1
+      with:
+        openai-api-key: ${{ inputs.openai-api-key }}
+        model: gpt-5.4
+        safety-strategy: read-only
+        prompt: |
+          You are reviewing a pull request to determine if the README (README.md) needs to be updated.
+
+          The following files were changed in this PR:
+          ${{ steps.changed-files.outputs.files }}
+
+          Read the README at "README.md" and skim the changed files to understand the nature of the changes.
+
+          Determine whether the README should be updated to reflect these changes. Consider:
+          - New or removed features, commands, APIs, or configuration options
+          - Changed installation steps, dependencies, or setup instructions
+          - Renamed or restructured modules that the README references
+          - New environment variables or changed defaults
+
+          Do NOT flag the README as needing an update for:
+          - Internal refactors that don't change public behavior
+          - Test-only changes
+          - CI/CD or build config tweaks
+          - Bug fixes that don't alter documented behavior
+          - Minor code style or formatting changes
+
+          Respond in EXACTLY this format (two lines, nothing else):
+          VERDICT: UP_TO_DATE or NEEDS_UPDATE
+          REASON: <one sentence explanation>
+
+    - name: Parse AI output
+      id: parse
+      shell: bash
+      run: |
+        README_CHANGED="${{ steps.changed-files.outputs.readme-changed }}"
+
+        if [ "$README_CHANGED" == "true" ]; then
+          echo "up-to-date=true" >> $GITHUB_OUTPUT
+          echo "explanation=README was updated in this PR." >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        RAW_OUTPUT="${{ steps.ai-check.outputs.final-message }}"
+        echo "Raw AI output: '${RAW_OUTPUT}'"
+
+        if [ -z "$RAW_OUTPUT" ]; then
+          echo "::warning::AI check produced no output — defaulting to up-to-date."
+          echo "up-to-date=true" >> $GITHUB_OUTPUT
+          echo "explanation=Could not determine README status (AI produced no output)." >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        VERDICT=$(echo "$RAW_OUTPUT" | grep -oE '(UP_TO_DATE|NEEDS_UPDATE)' | head -1)
+        REASON=$(echo "$RAW_OUTPUT" | grep -i 'REASON:' | sed 's/^.*REASON:[[:space:]]*//')
+
+        if [ "$VERDICT" == "UP_TO_DATE" ]; then
+          echo "up-to-date=true" >> $GITHUB_OUTPUT
+        else
+          echo "up-to-date=false" >> $GITHUB_OUTPUT
+        fi
+
+        if [ -n "$REASON" ]; then
+          echo "explanation=${REASON}" >> $GITHUB_OUTPUT
+        else
+          echo "explanation=${RAW_OUTPUT}" >> $GITHUB_OUTPUT
+        fi
