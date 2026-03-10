@@ -29,30 +29,26 @@ runs:
             per_page: 100
           });
 
-          const names = files.map(f => f.filename);
-          const readmePath = 'README.md';
-          const readmeChanged = names.includes(readmePath);
-
-          core.setOutput('files', names.join('\n'));
-          core.setOutput('readme-changed', readmeChanged.toString());
+          core.setOutput('files', files.map(f => f.filename).join('\n'));
 
     - name: AI Check README
       id: ai-check
-      if: steps.changed-files.outputs.readme-changed == 'false'
       uses: openai/codex-action@v1
       with:
         openai-api-key: ${{ inputs.openai-api-key }}
         model: gpt-5.4
         safety-strategy: read-only
         prompt: |
-          You are reviewing a pull request to determine if the README (README.md) needs to be updated.
+          You are reviewing a pull request to determine if the README (README.md) is up to date.
 
           The following files were changed in this PR:
           ${{ steps.changed-files.outputs.files }}
 
           Read the README at "README.md" and skim the changed files to understand the nature of the changes.
 
-          Determine whether the README should be updated to reflect these changes. Consider:
+          Determine whether the README accurately reflects the current state of the codebase
+          after these changes. Even if the README was modified in this PR, verify the updates
+          are sufficient. Consider:
           - New or removed features, commands, APIs, or configuration options
           - Changed installation steps, dependencies, or setup instructions
           - Renamed or restructured modules that the README references
@@ -73,14 +69,6 @@ runs:
       id: parse
       shell: bash
       run: |
-        README_CHANGED="${{ steps.changed-files.outputs.readme-changed }}"
-
-        if [ "$README_CHANGED" == "true" ]; then
-          echo "up-to-date=true" >> $GITHUB_OUTPUT
-          echo "explanation=README was updated in this PR." >> $GITHUB_OUTPUT
-          exit 0
-        fi
-
         RAW_OUTPUT="${{ steps.ai-check.outputs.final-message }}"
         echo "Raw AI output: '${RAW_OUTPUT}'"
 
