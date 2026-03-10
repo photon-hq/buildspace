@@ -1,4 +1,4 @@
-git # BuildSpace
+# BuildSpace
 
 [![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-2088FF?logo=github-actions&logoColor=white)](https://github.com/features/actions)
 [![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
@@ -6,22 +6,30 @@ git # BuildSpace
 [![NPM](https://img.shields.io/badge/NPM-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/)
 [![Crates.io](https://img.shields.io/badge/Crates.io-FFC832?logo=rust&logoColor=black)](https://crates.io/)
 
-**Reusable GitHub Actions blocks and workflows for fast shipping teams**
+**Reusable GitHub Actions blocks and workflows for fast shipping teams.**
 
-BuildSpace packages battle-tested, AI-powered CI/CD building blocks, like generating release notes, bumping versions, publishing, plus ready-made workflows built from those blocks, so teams can either compose custom automations or plug in the prebuilt recipes with only a few inputs.
+BuildSpace gives you two layers of CI/CD automation:
+
+- **Workflows** — plug-and-play release pipelines. Point a workflow at your repo, provide a few secrets, and you're done. Most teams only need this.
+- **Blocks** — the composable actions that workflows are built from. Use them to assemble custom pipelines when the prebuilt workflows don't fit.
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 
-- [Quick Start](#-quick-start)
-- [Workflows](#-workflows)
+- [Quick Start](#quick-start)
+- [Prerequisites](#prerequisites)
+- [Workflows](#workflows)
   - [Rust Service Release](#rust-service-release)
   - [TypeScript Service Release](#typescript-service-release)
   - [TypeScript Monorepo Release](#typescript-monorepo-release)
+  - [Go Binary Release](#go-binary-release)
+  - [Swift Release](#swift-release)
   - [Swift Package PR Build](#swift-package-pr-build)
-- [Actions](#-actions)
+  - [Check README](#check-readme)
+- [Blocks (Composite Actions)](#blocks-composite-actions)
   - [check-pr-label](#check-pr-label)
+  - [check-readme](#check-readme-1)
   - [generate-release-info](#generate-release-info)
   - [determine-publish-version](#determine-publish-version)
   - [create-github-release](#create-github-release)
@@ -34,14 +42,25 @@ BuildSpace packages battle-tested, AI-powered CI/CD building blocks, like genera
   - [publish-crates](#publish-crates)
   - [publish-npm](#publish-npm)
   - [comment-on-pr](#comment-on-pr)
-- [PR Labels](#-pr-labels)
-- [Architecture](#-architecture)
-- [Contributing](#-contributing)
-- [License](#-license)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
+
+### Which workflow do I need?
+
+| I have a... | Use this workflow | Trigger |
+|---|---|---|
+| Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
+| Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
+| TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
+| Go binary | [`go-binary-release`](#go-binary-release) | PR label `release` |
+| Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` |
+| Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
+| Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
 
 ### Rust Project
 
@@ -60,10 +79,9 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-  with:
-    service-name: my-service
-    binary-name: my-binary
-      # Order matters: dependencies first
+    with:
+      service-name: my-service
+      binary-name: my-binary
       crates: '["crates/shared", "crates/client"]'
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -72,7 +90,8 @@ jobs:
 
 ### TypeScript Project
 
-Create `.github/workflows/release.yaml
+Create `.github/workflows/release.yaml`:
+
 ```yaml
 name: Release
 
@@ -86,7 +105,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-  with:
+    with:
       service-name: my-package
       build-command: "npm run build"
     secrets:
@@ -120,46 +139,93 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-Then just add a `release` label to your PR, merge, and watch the magic happen! ✨
+### README Freshness Check
+
+Add to any repo's `.github/workflows/ci.yaml`:
+
+```yaml
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  check-readme:
+    uses: photon-hq/buildspace/.github/workflows/check-readme.yaml@main
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+Then add a `release` label to your PR, merge, and watch the magic happen.
 
 ---
 
-## 📋 Workflows
+## Prerequisites
+
+### Required Secrets
+
+Every workflow needs at least `OPENAI_API_KEY` for AI-powered versioning and release notes. Add additional secrets depending on where you publish:
+
+| Secret | Needed for | Where to get it |
+|--------|-----------|-----------------|
+| `OPENAI_API_KEY` | All workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
+| `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
+| `DEVELOPER_ID_INSTALLER_NAME` | Swift `.pkg` signing | Apple Developer portal |
+
+Add these in your repo's **Settings > Secrets and variables > Actions**.
+
+### PR Labels
+
+Control releases by adding labels to your PR before merging:
+
+| Label | Effect |
+|-------|--------|
+| `release` | Triggers a full release (GitHub Release + package publish) |
+| `prerelease` | Creates a prerelease with `-rc.N` suffix and `beta` npm tag |
+
+**No label = no release.** PRs without labels merge without triggering any release jobs.
+
+### Permissions
+
+Workflows that create releases or push commits need `contents: write`. Workflows that read PR labels need `pull-requests: read`. Workflows that post comments need `pull-requests: write`. Each workflow section below lists the exact permissions required.
+
+---
+
+## Workflows
+
+Ready-to-use release pipelines. Each workflow composes the lower-level [blocks](#blocks-composite-actions) internally — you don't need to know about individual blocks unless you're building a custom pipeline.
+
+---
 
 ### Rust Service Release
 
 **File:** `.github/workflows/rust-service-release.yaml`
 
-A complete release pipeline for Rust services that:
-1. Checks PR labels for release triggers
-2. Generates version and release notes using AI
-3. Builds binaries for Linux (x86_64), macOS (ARM64), and Windows
-4. Syncs version across all workspace crates
-5. Publishes to crates.io
-6. Creates a GitHub Release with attached binaries
+Complete release pipeline for Rust services: checks PR labels, generates version and release notes with AI, builds binaries for Linux (x86_64), macOS (ARM64), and Windows, syncs version across all workspace crates, publishes to crates.io, and creates a GitHub Release with attached binaries.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `service-name` | string | ✅ | — | Display name for the service (used in release title) |
-| `binary-name` | string | ✅ | — | Name of the binary from `Cargo.toml` |
-| `binary-path` | string | ❌ | `""` | Path to crate directory (e.g., `crates/client`) |
-| `crates` | string | ❌ | `[]` | JSON array of crate paths to publish in dependency order |
-| `build-env` | string | ❌ | `""` | Compile-time env vars (e.g., `BASE_URL=https://...`) |
-| `labels-to-check` | string | ❌ | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | ❌ | `false` | Force prerelease (adds `-rc.N` suffix) |
-| `release` | boolean | ❌ | `false` | Force release (bypasses label check) |
-| `dry-run` | boolean | ❌ | `false` | Test without actually publishing |
+| `service-name` | string | Yes | — | Display name for the service |
+| `binary-name` | string | Yes | — | Name of the binary from `Cargo.toml` |
+| `binary-path` | string | No | `""` | Path to crate directory (e.g., `crates/client`) |
+| `crates` | string | No | `[]` | JSON array of crate paths to publish in dependency order |
+| `build-env` | string | No | `""` | Compile-time env vars (e.g., `BASE_URL=https://...`) |
+| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
+| `prerelease` | boolean | No | `false` | Force prerelease (adds `-rc.N` suffix) |
+| `release` | boolean | No | `false` | Force release (bypasses label check) |
+| `dry-run` | boolean | No | `false` | Test without actually publishing |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
-| `OPENAI_API_KEY` | ✅ | OpenAI API key for AI-powered versioning and notes |
-| `CARGO_REGISTRY_TOKEN` | ❌ | crates.io API token (required for publishing) |
+| `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
+| `CARGO_REGISTRY_TOKEN` | No | crates.io API token (required for publishing) |
 
-#### Example with All Options
+#### Example
 
 ```yaml
 jobs:
@@ -174,8 +240,6 @@ jobs:
       binary-path: crates/client
       crates: '["crates/shared", "crates/client"]'
       build-env: "API_URL=https://api.example.com"
-      prerelease: false
-      dry-run: false
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -187,36 +251,31 @@ jobs:
 
 **File:** `.github/workflows/typescript-service-release.yaml`
 
-A complete release pipeline for TypeScript/JavaScript packages that:
-1. Checks PR labels for release triggers
-2. Generates version and release notes using AI
-3. Bumps `package.json` version and commits
-4. Creates a GitHub Release
-5. Publishes to npm
+Complete release pipeline for a single TypeScript/JavaScript package: checks PR labels, generates version and release notes with AI, bumps `package.json`, creates a GitHub Release, and publishes to npm.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `service-name` | string | ✅ | — | Display name for the service |
-| `bun-version` | string | ❌ | `latest` | Bun version to use |
-| `npm-tag` | string | ❌ | `latest` | npm tag (e.g., `latest`, `beta`, `next`) |
-| `no-npm-publish` | boolean | ❌ | `false` | Skip npm publishing (GitHub Release only) |
-| `working-directory` | string | ❌ | `.` | Directory containing `package.json` |
-| `build-command` | string | ❌ | `bun run build` | Build command to run |
-| `labels-to-check` | string | ❌ | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | ❌ | `false` | Force prerelease (adds `-rc.N` suffix) |
-| `release` | boolean | ❌ | `false` | Force release (bypasses label check) |
-| `dry-run` | boolean | ❌ | `false` | Test without actually publishing |
+| `service-name` | string | Yes | — | Display name for the service |
+| `bun-version` | string | No | `latest` | Bun version to use |
+| `npm-tag` | string | No | `latest` | npm dist-tag (e.g., `latest`, `beta`, `next`) |
+| `no-npm-publish` | boolean | No | `false` | Skip npm publishing (GitHub Release only) |
+| `working-directory` | string | No | `.` | Directory containing `package.json` |
+| `build-command` | string | No | `bun run build` | Build command to run |
+| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
+| `prerelease` | boolean | No | `false` | Force prerelease |
+| `release` | boolean | No | `false` | Force release (bypasses label check) |
+| `dry-run` | boolean | No | `false` | Test without actually publishing |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
-| `OPENAI_API_KEY` | ✅ | OpenAI API key for AI-powered versioning and notes |
-| `NPM_TOKEN` | ❌ | npm authentication token (required for publishing) |
+| `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
+| `NPM_TOKEN` | No | npm auth token (required for publishing) |
 
-#### Example with All Options
+#### Example
 
 ```yaml
 jobs:
@@ -227,12 +286,7 @@ jobs:
       pull-requests: read
     with:
       service-name: notebooklm-kit
-      bun-version: "1.1"
-      npm-tag: latest
-      working-directory: "."
       build-command: "npm run build"
-      prerelease: false
-      dry-run: false
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -244,61 +298,34 @@ jobs:
 
 **File:** `.github/workflows/typescript-monorepo-release.yaml`
 
-A complete release pipeline for TypeScript/JavaScript monorepos that:
-1. Checks PR labels for release triggers
-2. Detects which packages changed since the last release
-3. Topologically sorts changed packages (dependencies before dependents)
-4. Uses a single AI call to determine versions and generate combined release notes for all changed packages
-5. Bumps each package's `package.json` and commits
-6. Creates a single GitHub Release with a `release/YYYY-MM-DD.N` tag
-7. Publishes all changed packages to npm in dependency order
-
-Each package is independently versioned — no lockstep.
-
----
-
-### Swift Package PR Build
-
-**File:** `.github/workflows/swift-pkg-pr.yml`
-
-Builds a macOS `.pkg` distribution package for every PR commit and reports status directly in the PR as a living comment (updated in place — not spammy). If a build is already running when a new commit is pushed, the old run is automatically cancelled.
-
-#### How It Works
-
-1. On every commit to a PR, posts a "⏳ Building…" comment (or updates the existing one)
-2. Builds the Swift binary with `swift-build`
-3. Creates a `.pkg` with `swift-pkg`, versioned as `pr.<PR#>.<run#>`
-4. Uploads the `.pkg` as an Actions artifact (7-day retention)
-5. Updates the PR comment to ✅ success (with artifact name + link) or ❌ failure (with log link)
-
-Concurrent runs for the same PR are cancelled via `concurrency: cancel-in-progress: true`.
+Complete release pipeline for TypeScript/JavaScript monorepos with independently-versioned packages. Detects which packages changed since the last release, topologically sorts them by dependency order, uses a single AI call to determine all versions and generate combined release notes, bumps each `package.json`, creates a GitHub Release with a `release/YYYY-MM-DD.N` tag, and publishes all changed packages to npm in dependency order.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `service-name` | string | ✅ | — | Display name for the monorepo (used in release title) |
-| `packages` | string | ✅ | — | JSON array of packages: `[{"name":"pkg","path":"packages/pkg"}]` |
-| `bun-version` | string | ❌ | `latest` | Bun version to use |
-| `npm-tag` | string | ❌ | `latest` | npm tag (e.g., `latest`, `beta`, `next`) |
-| `build-command` | string | ❌ | `bun run build` | Build command per package (ignored if `root-build-command` is set) |
-| `root-build-command` | string | ❌ | `""` | Build command at repo root (e.g., `turbo build`) |
-| `include-dependents` | boolean | ❌ | `false` | Also release downstream dependents of changed packages |
-| `labels-to-check` | string | ❌ | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | ❌ | `false` | Force prerelease (adds `-rc.N` suffix, publishes as `beta`) |
-| `release` | boolean | ❌ | `false` | Force release (bypasses label check) |
-| `dry-run` | boolean | ❌ | `false` | Test without actually publishing |
+| `service-name` | string | Yes | — | Display name for the monorepo |
+| `packages` | string | Yes | — | JSON array of packages: `[{"name":"pkg","path":"packages/pkg"}]` |
+| `bun-version` | string | No | `latest` | Bun version to use |
+| `npm-tag` | string | No | `latest` | npm dist-tag |
+| `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
+| `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
+| `include-dependents` | boolean | No | `false` | Also release downstream dependents of changed packages |
+| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
+| `prerelease` | boolean | No | `false` | Force prerelease |
+| `release` | boolean | No | `false` | Force release (bypasses label check) |
+| `dry-run` | boolean | No | `false` | Test without actually publishing |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
-| `OPENAI_API_KEY` | ✅ | OpenAI API key for AI-powered versioning and notes |
-| `NPM_TOKEN` | ✅ | npm authentication token |
-| `APP_ID` | ❌ | GitHub App ID (for protected branches) |
-| `APP_PRIVATE_KEY` | ❌ | GitHub App private key (for protected branches) |
+| `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
+| `NPM_TOKEN` | Yes | npm authentication token |
+| `APP_ID` | No | GitHub App ID (for pushing to protected branches) |
+| `APP_PRIVATE_KEY` | No | GitHub App private key (for pushing to protected branches) |
 
-#### Example with All Options
+#### Example
 
 ```yaml
 jobs:
@@ -309,13 +336,14 @@ jobs:
       pull-requests: read
     with:
       service-name: photon-ts
-      packages: '[{"name":"photon","path":"packages/photon"},{"name":"@photon/openai-compatible","path":"packages/openai-compatible"},{"name":"create-photon","path":"packages/create-photon"}]'
-      bun-version: "1.1"
-      npm-tag: latest
+      packages: |
+        [
+          {"name":"photon","path":"packages/photon"},
+          {"name":"@photon/openai-compatible","path":"packages/openai-compatible"},
+          {"name":"create-photon","path":"packages/create-photon"}
+        ]
       root-build-command: "turbo build"
       include-dependents: true
-      prerelease: false
-      dry-run: false
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -344,27 +372,122 @@ PR merged with "release" label
 
 ---
 
-### Swift Package PR Build (continued)
+### Go Binary Release
+
+**File:** `.github/workflows/go-service-release.yaml`
+
+Complete release pipeline for Go binaries: checks PR labels, generates version and release notes with AI, cross-compiles for Linux (x64/ARM64), macOS (ARM64), and Windows (x64), and creates a GitHub Release with attached binaries.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `package-name` | string | ✅ | — | Name of the Swift binary / package |
-| `identifier` | string | ✅ | — | Package identifier (e.g. `com.example.mytool`) |
-| `scripts-path` | string | ❌ | `""` | Path to scripts directory with preinstall/postinstall scripts |
+| `service-name` | string | Yes | — | Display name for the service |
+| `binary-name` | string | Yes | — | Output binary name |
+| `go-version` | string | No | `stable` | Go version to use |
+| `build-flags` | string | No | `""` | Additional `go build` flags |
+| `ldflags` | string | No | `-s -w` | Linker flags |
+| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
+| `prerelease` | boolean | No | `false` | Force prerelease |
+| `release` | boolean | No | `false` | Force release (bypasses label check) |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
-| `DEVELOPER_ID_INSTALLER_NAME` | ✅ | Developer ID Installer certificate name |
-| `SECRET_ENV_VARS` | ❌ | Compile-time env vars written to `.env` |
+| `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
 
 #### Example
 
 ```yaml
-# .github/workflows/pr.yml  (in consuming repo)
+jobs:
+  release:
+    uses: photon-hq/buildspace/.github/workflows/go-service-release.yaml@main
+    permissions:
+      contents: write
+      pull-requests: read
+    with:
+      service-name: my-go-tool
+      binary-name: my-go-tool
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+---
+
+### Swift Release
+
+**File:** `.github/workflows/swift-release.yml`
+
+Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a signed `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `package-name` | string | Yes | — | Name of the Swift binary / package |
+| `identifier` | string | Yes | — | Package identifier (e.g., `com.example.mytool`) |
+| `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
+| `jamf-url` | string | No | `""` | Jamf Pro instance URL (leave empty to skip Jamf upload) |
+| `jamf-package-priority` | string | No | `""` | Package priority in Jamf Pro |
+| `jamf-package-name` | string | No | `""` | Package name to match in Jamf Pro |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
+| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
+| `SECRET_ENV_VARS` | No | Compile-time env vars written to `.env` |
+| `JAMF_CLIENT_ID` | No | Jamf Pro API client ID |
+| `JAMF_CLIENT_SECRET` | No | Jamf Pro API client secret |
+
+#### Example
+
+```yaml
+jobs:
+  release:
+    uses: photon-hq/buildspace/.github/workflows/swift-release.yml@main
+    with:
+      package-name: my-tool
+      identifier: com.example.my-tool
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+```
+
+---
+
+### Swift Package PR Build
+
+**File:** `.github/workflows/swift-pkg-pr.yml`
+
+Builds a macOS `.pkg` on every PR commit and reports status directly in the PR as a living comment (updated in place, not spammy). If a build is already running when a new commit is pushed, the old run is automatically cancelled.
+
+1. Posts a "Building..." comment on the PR (or updates the existing one)
+2. Builds the Swift binary, creates a `.pkg` versioned as `pr.<PR#>.<run#>`
+3. Uploads the `.pkg` as an Actions artifact (7-day retention)
+4. Updates the PR comment to success (with artifact link) or failure (with log link)
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `package-name` | string | Yes | — | Name of the Swift binary / package |
+| `identifier` | string | Yes | — | Package identifier (e.g., `com.example.mytool`) |
+| `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
+| `SECRET_ENV_VARS` | No | Compile-time env vars written to `.env` |
+
+#### Example
+
+```yaml
+# .github/workflows/pr.yml
 name: PR
 
 on:
@@ -378,14 +501,132 @@ jobs:
       identifier: com.example.my-tool
     secrets:
       DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
-      SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
 ```
 
 ---
 
-## 🧩 Actions
+### Check README
 
-Individual composite actions that can be used independently or combined into custom workflows.
+**File:** `.github/workflows/check-readme.yaml`
+
+Runs on every PR to verify that `README.md` is up to date with the changes being introduced. Uses AI to read the README and the changed files, then determines whether the documentation needs updating. Posts a PR comment explaining what's missing when the README is stale, and automatically removes the comment when the README is brought up to date.
+
+Flags changes to public APIs, features, configuration, install steps, and environment variables. Ignores internal refactors, test-only changes, CI tweaks, and bug fixes that don't affect documented behavior.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `blocking` | boolean | No | `false` | If `true`, fail the workflow when the README is outdated. If `false`, only post a warning comment. |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | For AI-powered README analysis |
+
+#### Example (warning only)
+
+```yaml
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  check-readme:
+    uses: photon-hq/buildspace/.github/workflows/check-readme.yaml@main
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+#### Example (block the PR)
+
+```yaml
+jobs:
+  check-readme:
+    uses: photon-hq/buildspace/.github/workflows/check-readme.yaml@main
+    with:
+      blocking: true
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+> To enforce this as a required check, also add `check-readme` as a required status check in your branch protection rules (Settings > Branches > Branch protection rule).
+
+---
+
+## How Releases Work
+
+### Single-Package Workflows
+
+`rust-service-release`, `typescript-service-release`, `go-binary-release`, and `swift-release` all share the same initial steps then diverge for language-specific publishing:
+
+```
+                        ╔═══════════════════════════════════════════════════╗
+                        ║              SHARED STEPS (all workflows)         ║
+                        ╠═══════════════════════════════════════════════════╣
+                        ║                                                   ║
+                        ║  ┌─────────────┐     ┌───────────────┐            ║
+                        ║  │  PR Merged  │────▶│ Check Labels  │            ║
+                        ║  │ with label  │     │  (release?)   │            ║
+                        ║  └─────────────┘     └───────────────┘            ║
+                        ║                              │                    ║
+                        ║                              ▼                    ║
+                        ║                    ┌──────────────────┐           ║
+                        ║                    │ Generate Version │           ║
+                        ║                    │  + Release Notes │           ║
+                        ║                    │     (AI-powered) │           ║
+                        ║                    └──────────────────┘           ║
+                        ║                              │                    ║
+                        ╚══════════════════════════════╪════════════════════╝
+                                                       │
+                 ┌─────────────────────────────────────┴─────────────────────────────────────┐
+                 │                                                                           │
+                 ▼                                                                           ▼
+╔════════════════════════════════════════╗            ╔════════════════════════════════════════╗
+║   rust-service-release                ║            ║   typescript-service-release            ║
+╠════════════════════════════════════════╣            ╠════════════════════════════════════════╣
+║                                        ║            ║                                        ║
+║   ┌───────────────┐ ┌───────────────┐  ║            ║         ┌─────────────────┐            ║
+║   │ Build Binaries│ │ Sync Versions │  ║            ║         │  Bump Version   │            ║
+║   │ (Linux/macOS/ │ │ (all crates)  │  ║            ║         │ (package.json)  │            ║
+║   │   Windows)    │ └───────────────┘  ║            ║         └─────────────────┘            ║
+║   └───────────────┘         │          ║            ║                   │                    ║
+║           │                 ▼          ║            ║         ┌─────────┴─────────┐          ║
+║           │       ┌─────────────────┐  ║            ║         │                   │          ║
+║           │       │ Publish Crates  │  ║            ║         ▼                   ▼          ║
+║           │       │  (crates.io)    │  ║            ║  ┌──────────────┐   ┌─────────────┐    ║
+║           │       └─────────────────┘  ║            ║  │GitHub Release│   │ npm Publish │    ║
+║           │                 │          ║            ║  └──────────────┘   └─────────────┘    ║
+║           └────────┬────────┘          ║            ║                                        ║
+║                    ▼                   ║            ╚════════════════════════════════════════╝
+║         ┌───────────────────┐          ║
+║         │  GitHub Release   │          ║
+║         │  (with binaries)  │          ║
+║         └───────────────────┘          ║
+║                                        ║
+╚════════════════════════════════════════╝
+```
+
+### Monorepo Workflow
+
+`typescript-monorepo-release` extends the single-package pattern to handle multiple independently-versioned packages:
+
+- **Change detection** — only packages with file changes (and optionally their dependents) are released
+- **Topological ordering** — packages are processed in dependency order so downstream consumers see new versions of their dependencies
+- **Single AI call** — one prompt contains all packages and their scoped commits, producing versions and notes in one shot
+- **Date-based tags** — since there's no single version, releases use `release/YYYY-MM-DD.N` tags
+- **`workspace:*` protocol** — left untouched; Bun/npm resolves these to real versions at pack-time
+
+---
+
+## Blocks (Composite Actions)
+
+Individual building blocks that the workflows above are assembled from. Use these directly when you need a custom pipeline.
+
+<details>
+<summary><strong>Expand all blocks</strong></summary>
 
 ---
 
@@ -393,14 +634,14 @@ Individual composite actions that can be used independently or combined into cus
 
 **Path:** `.github/blocks/check-pr-label/action.yaml`
 
-Checks PR labels and outputs boolean flags for release decisions. Works on both PR events and push events (looks up the merged PR).
+Decides whether a PR should trigger a release based on its labels. Works on both PR events and push events (looks up the merged PR).
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `labels` | string | ✅ | — | JSON array of labels to check (e.g., `["release", "prerelease"]`) |
-| `default-on-push` | string | ❌ | `""` | Comma-separated labels to default to `true` on direct push |
+| `labels` | string | Yes | — | JSON array of labels to check (e.g., `["release", "prerelease"]`) |
+| `default-on-push` | string | No | `""` | Comma-separated labels to default to `true` on direct push |
 
 #### Outputs
 
@@ -422,26 +663,54 @@ Checks PR labels and outputs boolean flags for release decisions. Works on both 
 
 ---
 
-### generate-release-info
+### check-readme
 
-**Path:** `.github/blocks/generate-release-info/action.yaml`
+**Path:** `.github/blocks/check-readme/action.yaml`
 
-Generates a semantic version number and AI-written release notes by analyzing commit history since the last release.
-
-#### How It Works
-
-1. Finds the last GitHub Release tag
-2. Analyzes commits between last release and current SHA
-3. Uses AI to determine version bump (major/minor/patch)
-4. Generates human-readable release notes
+Uses AI to read the project's `README.md` alongside the PR's changed files and determine whether the documentation needs updating. Returns a boolean verdict and a one-sentence explanation. This is the block that powers the [Check README workflow](#check-readme).
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `service-name` | string | ✅ | — | Service name (used in release notes) |
-| `prerelease` | boolean | ❌ | `false` | Append `-rc.N` suffix to version |
-| `openai-api-key` | secret | ✅ | — | OpenAI API key |
+| `openai-api-key` | secret | Yes | — | OpenAI API key |
+
+#### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `up-to-date` | boolean | `true` if the README appears current, `false` if it likely needs changes |
+| `explanation` | string | One-sentence AI explanation of the verdict |
+
+#### Usage
+
+```yaml
+- uses: actions/checkout@v5
+
+- uses: photon-hq/buildspace/.github/blocks/check-readme@main
+  id: readme
+  with:
+    openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+- if: steps.readme.outputs.up-to-date == 'false'
+  run: echo "README needs updating — ${{ steps.readme.outputs.explanation }}"
+```
+
+---
+
+### generate-release-info
+
+**Path:** `.github/blocks/generate-release-info/action.yaml`
+
+Generates a semantic version number and AI-written release notes by analyzing commit history since the last release. Combines `determine-publish-version` with release note generation in one step.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `service-name` | string | Yes | — | Service name (used in release notes) |
+| `prerelease` | boolean | No | `false` | Append `-rc.N` suffix to version |
+| `openai-api-key` | secret | Yes | — | OpenAI API key |
 
 #### Outputs
 
@@ -455,7 +724,7 @@ Generates a semantic version number and AI-written release notes by analyzing co
 ```yaml
 - uses: actions/checkout@v5
   with:
-    fetch-depth: 0  # Required for commit history
+    fetch-depth: 0
 
 - uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
   id: info
@@ -474,14 +743,14 @@ Generates a semantic version number and AI-written release notes by analyzing co
 
 **Path:** `.github/blocks/determine-publish-version/action.yaml`
 
-Standalone action for determining the next semantic version. Lighter-weight alternative to `generate-release-info` when you don't need release notes.
+Standalone action for determining the next semantic version using AI analysis of commits. Lighter-weight alternative to `generate-release-info` when you don't need release notes.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `prerelease` | boolean | ❌ | `false` | Append `-rc.N` suffix to version |
-| `openai-api-key` | secret | ✅ | — | OpenAI API key |
+| `prerelease` | boolean | No | `false` | Append `-rc.N` suffix to version |
+| `openai-api-key` | secret | Yes | — | OpenAI API key |
 
 #### Outputs
 
@@ -513,13 +782,13 @@ Creates a GitHub Release with optional artifact attachments.
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `version` | string | ✅ | — | Version number (e.g., `1.2.3`) |
-| `title` | string | ✅ | — | Release title |
-| `notes` | string | ❌ | `""` | Release notes in markdown |
-| `prerelease` | boolean | ❌ | `false` | Mark as prerelease |
-| `draft` | boolean | ❌ | `false` | Create as draft |
-| `tag-prefix` | string | ❌ | `v` | Prefix for git tag (e.g., `v1.2.3`) |
-| `artifact-pattern` | string | ❌ | `""` | Pattern to match artifacts to attach |
+| `version` | string | Yes | — | Version number (e.g., `1.2.3`) |
+| `title` | string | Yes | — | Release title |
+| `notes` | string | No | `""` | Release notes in markdown |
+| `prerelease` | boolean | No | `false` | Mark as prerelease |
+| `draft` | boolean | No | `false` | Create as draft |
+| `tag-prefix` | string | No | `v` | Prefix for git tag (e.g., `v1.2.3`) |
+| `artifact-pattern` | string | No | `""` | Pattern to match artifacts to attach |
 
 #### Outputs
 
@@ -538,7 +807,6 @@ Creates a GitHub Release with optional artifact attachments.
     notes: |
       ## What's New
       - Added awesome feature
-      - Fixed annoying bug
     artifact-pattern: "my-binary-*"
 ```
 
@@ -548,22 +816,14 @@ Creates a GitHub Release with optional artifact attachments.
 
 **Path:** `.github/blocks/detect-changed-packages/action.yaml`
 
-Detects which monorepo packages have changed since the last GitHub Release and outputs them in topological (dependency) order. Optionally includes downstream dependents.
-
-#### How It Works
-
-1. Finds the last GitHub Release tag SHA
-2. Runs `git diff --name-only` to get changed files
-3. Maps changed files to packages using the provided `packages` JSON
-4. Optionally adds downstream dependents by reading each package's `package.json` dependencies
-5. Topologically sorts the result (dependencies before dependents)
+Detects which monorepo packages have changed since the last GitHub Release and returns them in topological (dependency) order. Optionally includes downstream dependents.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `packages` | string | ✅ | — | JSON array: `[{"name":"pkg","path":"packages/pkg"}]` |
-| `include-dependents` | boolean | ❌ | `false` | Also include packages that depend on changed packages |
+| `packages` | string | Yes | — | JSON array: `[{"name":"pkg","path":"packages/pkg"}]` |
+| `include-dependents` | boolean | No | `false` | Also include packages that depend on changed packages |
 
 #### Outputs
 
@@ -595,27 +855,19 @@ Detects which monorepo packages have changed since the last GitHub Release and o
 
 **Path:** `.github/blocks/bump-monorepo-versions/action.yaml`
 
-Determines versions for all changed monorepo packages using a single AI call, bumps each `package.json`, and commits/pushes the result.
-
-#### How It Works
-
-1. Gathers commits scoped to each package's path via `git log -- <path>`
-2. Sends a single prompt containing all packages and their scoped commits to OpenAI
-3. Parses the AI response for per-package versions and combined release notes
-4. Runs `npm version` in each package directory
-5. Commits all bumps in one commit and pushes
+Determines versions for all changed monorepo packages using a single AI call, bumps each `package.json`, commits, and pushes.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `changed-packages` | string | ✅ | — | JSON array from `detect-changed-packages` output |
-| `service-name` | string | ✅ | — | Service name for commit messages |
-| `prerelease` | boolean | ❌ | `false` | Append `-rc.N` suffix to versions |
-| `openai-api-key` | secret | ✅ | — | OpenAI API key |
-| `github-token` | secret | ✅ | — | GitHub token (fallback) |
-| `app-id` | secret | ❌ | `""` | GitHub App ID (for protected branches) |
-| `app-private-key` | secret | ❌ | `""` | GitHub App private key |
+| `changed-packages` | string | Yes | — | JSON array from `detect-changed-packages` output |
+| `service-name` | string | Yes | — | Service name for commit messages |
+| `prerelease` | boolean | No | `false` | Append `-rc.N` suffix to versions |
+| `openai-api-key` | secret | Yes | — | OpenAI API key |
+| `github-token` | secret | Yes | — | GitHub token (fallback) |
+| `app-id` | secret | No | `""` | GitHub App ID (for protected branches) |
+| `app-private-key` | secret | No | `""` | GitHub App private key |
 
 #### Outputs
 
@@ -648,28 +900,22 @@ Builds and publishes multiple monorepo packages to npm in dependency order. Supp
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `changed-packages` | string | ✅ | — | JSON array of packages in topological order |
-| `bun-version` | string | ❌ | `latest` | Bun version |
-| `node-version` | string | ❌ | `20` | Node.js version |
-| `tag` | string | ❌ | `latest` | npm tag |
-| `build-command` | string | ❌ | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
-| `root-build-command` | string | ❌ | `""` | Build once at repo root (e.g., `turbo build`) |
-| `dry-run` | boolean | ❌ | `false` | Run `npm publish --dry-run` |
-| `npm-token` | secret | ✅ | — | npm authentication token |
+| `changed-packages` | string | Yes | — | JSON array of packages in topological order |
+| `bun-version` | string | No | `latest` | Bun version |
+| `node-version` | string | No | `20` | Node.js version |
+| `tag` | string | No | `latest` | npm dist-tag |
+| `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
+| `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
+| `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
+| `npm-token` | secret | Yes | — | npm authentication token |
 
 #### Usage
 
 ```yaml
-- uses: actions/checkout@v5
-  with:
-    ref: ${{ github.ref_name }}
-    fetch-depth: 0
-
 - uses: photon-hq/buildspace/.github/blocks/publish-npm-packages@main
   with:
     changed-packages: ${{ steps.detect.outputs.changed }}
     root-build-command: "turbo build"
-    tag: latest
     npm-token: ${{ secrets.NPM_TOKEN }}
 ```
 
@@ -681,8 +927,6 @@ Builds and publishes multiple monorepo packages to npm in dependency order. Supp
 
 Builds a Rust binary for a specific target platform.
 
-#### Supported Targets
-
 | Target | OS |
 |--------|----|
 | `x86_64-unknown-linux-gnu` | Linux (x64) |
@@ -693,10 +937,10 @@ Builds a Rust binary for a specific target platform.
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `binary-name` | string | ✅ | — | Name of the binary (from `Cargo.toml`) |
-| `binary-path` | string | ❌ | `""` | Path to crate directory |
-| `target` | string | ✅ | — | Target triple (e.g., `x86_64-unknown-linux-gnu`) |
-| `build-env` | string | ❌ | `""` | Compile-time env vars for `.env` file |
+| `binary-name` | string | Yes | — | Name of the binary (from `Cargo.toml`) |
+| `binary-path` | string | No | `""` | Path to crate directory |
+| `target` | string | Yes | — | Target triple |
+| `build-env` | string | No | `""` | Compile-time env vars for `.env` file |
 
 #### Outputs
 
@@ -711,14 +955,7 @@ Builds a Rust binary for a specific target platform.
 - uses: photon-hq/buildspace/.github/blocks/rust-build@main
   with:
     binary-name: my-cli
-    binary-path: crates/client
     target: x86_64-unknown-linux-gnu
-    build-env: "API_URL=https://api.example.com"
-
-- uses: actions/upload-artifact@v4
-  with:
-    name: my-cli-linux
-    path: artifacts/*
 ```
 
 ---
@@ -733,16 +970,15 @@ Builds a TypeScript project using Bun.
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `bun-version` | string | ❌ | `latest` | Bun version |
-| `working-directory` | string | ❌ | `.` | Directory containing `package.json` |
-| `build-command` | string | ❌ | `bun run build` | Build command |
+| `bun-version` | string | No | `latest` | Bun version |
+| `working-directory` | string | No | `.` | Directory containing `package.json` |
+| `build-command` | string | No | `bun run build` | Build command |
 
 #### Usage
 
 ```yaml
 - uses: photon-hq/buildspace/.github/blocks/typescript-build@main
   with:
-    bun-version: "1.1"
     build-command: "npm run build"
 ```
 
@@ -752,15 +988,15 @@ Builds a TypeScript project using Bun.
 
 **Path:** `.github/blocks/sync-crates-version/action.yaml`
 
-Syncs version across all workspace crates using `cargo-edit`. Automatically commits and pushes version changes.
+Sets a single version across all workspace crates using `cargo-edit`, commits, and pushes.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `version` | string | ✅ | — | Version to set across all crates |
-| `commit-changes` | boolean | ❌ | `true` | Whether to commit and push |
-| `github-token` | secret | ✅ | — | GitHub token for pushing |
+| `version` | string | Yes | — | Version to set across all crates |
+| `commit-changes` | boolean | No | `true` | Whether to commit and push |
+| `github-token` | secret | Yes | — | GitHub token for pushing |
 
 #### Outputs
 
@@ -771,10 +1007,6 @@ Syncs version across all workspace crates using `cargo-edit`. Automatically comm
 #### Usage
 
 ```yaml
-- uses: actions/checkout@v5
-  with:
-    token: ${{ github.token }}
-
 - uses: photon-hq/buildspace/.github/blocks/sync-crates-version@main
   with:
     version: "1.2.3"
@@ -787,27 +1019,26 @@ Syncs version across all workspace crates using `cargo-edit`. Automatically comm
 
 **Path:** `.github/blocks/publish-crates/action.yaml`
 
-Publishes workspace crates to crates.io in dependency order. Includes retry logic and rate limit handling.
+Publishes workspace crates to crates.io in dependency order with retry logic and rate limit handling.
+
+> **Order matters.** List dependencies before dependents.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `crates` | string | ✅ | — | JSON array of crate paths in publish order |
-| `dry-run` | boolean | ❌ | `false` | Run `cargo publish --dry-run` |
-| `cargo-registry-token` | secret | ✅ | — | crates.io API token |
+| `crates` | string | Yes | — | JSON array of crate paths in publish order |
+| `dry-run` | boolean | No | `false` | Run `cargo publish --dry-run` |
+| `cargo-registry-token` | secret | Yes | — | crates.io API token |
 
 #### Usage
 
 ```yaml
 - uses: photon-hq/buildspace/.github/blocks/publish-crates@main
   with:
-    # Shared first (dependency)
     crates: '["crates/shared", "crates/client"]'
     cargo-registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 ```
-
-> ⚠️ **Important:** Order matters! List dependencies before dependents.
 
 ---
 
@@ -815,26 +1046,25 @@ Publishes workspace crates to crates.io in dependency order. Includes retry logi
 
 **Path:** `.github/blocks/publish-npm/action.yaml`
 
-Publishes a package to npm. Handles dependencies installation, build, and publish.
+Publishes a single package to npm (installs dependencies, builds, publishes).
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `bun-version` | string | ❌ | `latest` | Bun version |
-| `node-version` | string | ❌ | `20` | Node.js version |
-| `working-directory` | string | ❌ | `.` | Directory containing `package.json` |
-| `build-command` | string | ❌ | `bun run build` | Build command |
-| `tag` | string | ❌ | `latest` | npm tag |
-| `dry-run` | boolean | ❌ | `false` | Run `npm publish --dry-run` |
-| `npm-token` | secret | ✅ | — | npm authentication token |
+| `bun-version` | string | No | `latest` | Bun version |
+| `node-version` | string | No | `20` | Node.js version |
+| `working-directory` | string | No | `.` | Directory containing `package.json` |
+| `build-command` | string | No | `bun run build` | Build command |
+| `tag` | string | No | `latest` | npm dist-tag |
+| `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
+| `npm-token` | secret | Yes | — | npm authentication token |
 
 #### Usage
 
 ```yaml
 - uses: photon-hq/buildspace/.github/blocks/publish-npm@main
   with:
-    tag: latest
     build-command: "npm run build"
     npm-token: ${{ secrets.NPM_TOKEN }}
 ```
@@ -845,14 +1075,14 @@ Publishes a package to npm. Handles dependencies installation, build, and publis
 
 **Path:** `.github/blocks/comment-on-pr/action.yaml`
 
-Posts or updates a single comment on a pull request. When a `comment-key` is provided it embeds an HTML marker in the comment body so subsequent calls with the same key will edit the existing comment rather than creating a new one — keeping your PR timeline clean.
+Posts or updates a single comment on a pull request. When a `comment-key` is provided, subsequent calls with the same key update the existing comment instead of creating a new one.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `message` | string | ✅ | — | Comment body (markdown supported) |
-| `comment-key` | string | ❌ | `""` | Unique key used to find and update an existing comment |
+| `message` | string | Yes | — | Comment body (markdown supported) |
+| `comment-key` | string | No | `""` | Unique key to find and update an existing comment |
 
 #### Usage
 
@@ -862,37 +1092,28 @@ Posts or updates a single comment on a pull request. When a `comment-key` is pro
     comment-key: my-build-status
     message: |
       ## Build Status
-      ✅ All checks passed for commit ${{ github.sha }}
+      All checks passed for commit ${{ github.sha }}
 ```
 
----
-
-## 🏷️ PR Labels
-
-Control releases by adding labels to your PR before merging:
-
-| Label | Effect |
-|-------|--------|
-| `release` | Triggers GitHub Release + package publish (npm/crates.io) |
-| `prerelease` | Creates prerelease with `-rc.N` suffix and `beta` npm tag |
-
-**No label = No release.** PRs without labels simply merge without triggering any release jobs.
+</details>
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 buildspace/
 ├── .github/
 │   ├── blocks/                        # Composite actions (building blocks)
-│   │   ├── bump-monorepo-versions/    # AI version bump for monorepos (single call)
+│   │   ├── bump-monorepo-versions/    # AI version bump for monorepos
 │   │   ├── check-pr-label/            # PR label detection
+│   │   ├── check-readme/              # AI README freshness check
 │   │   ├── comment-on-pr/             # Post/update PR comments
 │   │   ├── create-github-release/     # GitHub Release creation
 │   │   ├── detect-changed-packages/   # Monorepo change detection + topo-sort
 │   │   ├── determine-publish-version/ # AI version detection (standalone)
 │   │   ├── generate-release-info/     # AI version + release notes
+│   │   ├── go-build/                  # Go cross-compilation
 │   │   ├── publish-crates/            # crates.io publishing
 │   │   ├── publish-npm/               # npm publishing (single package)
 │   │   ├── publish-npm-packages/      # npm publishing (monorepo, ordered)
@@ -903,92 +1124,24 @@ buildspace/
 │   │   └── typescript-build/          # TypeScript builds
 │   │
 │   └── workflows/                     # Reusable workflows (full pipelines)
-│       ├── rust-service-release.yaml            # Complete Rust release pipeline
-│       ├── swift-pkg-pr.yml                     # Swift .pkg build on every PR commit
-│       ├── swift-release.yml                    # Swift .pkg release pipeline
-│       ├── typescript-monorepo-release.yaml     # Complete TS monorepo pipeline
-│       └── typescript-service-release.yaml      # Complete TS release pipeline
+│       ├── check-readme.yaml          # AI README freshness check (PR)
+│       ├── go-service-release.yaml    # Complete Go release pipeline
+│       ├── rust-service-release.yaml  # Complete Rust release pipeline
+│       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
+│       ├── swift-release.yml          # Swift .pkg release pipeline
+│       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
+│       └── typescript-service-release.yaml   # Complete TS release pipeline
 ```
-
-### How Releases Work
-
-#### Single-Package Workflows
-
-This section addresses `rust-service-release` and `typescript-service-release`.
-
-These workflows are complete for fully ai-powered and automated releases from versioning to version notes to publishing. These workflows are built upon the building blocks in the `.github/blocks` folder 
-
-Both workflows share the same initial steps, then diverge for language-specific publishing. The following 
-diagram is most accurate. 
-
-```
-                        ╔═══════════════════════════════════════════════════╗
-                        ║              SHARED STEPS (both workflows)        ║
-                        ╠═══════════════════════════════════════════════════╣
-                        ║                                                   ║
-                        ║  ┌─────────────┐     ┌───────────────┐            ║
-                        ║  │  PR Merged  │────▶│ Check Labels  │            ║
-                        ║  │ with label  │     │  (release?)   │            ║
-                        ║  └─────────────┘     └───────────────┘            ║
-                        ║                              │                    ║
-                        ║                              ▼                    ║
-                        ║                    ┌──────────────────┐           ║
-                        ║                    │ Generate Version │           ║
-                        ║                    │  + Release Notes │           ║
-                        ║                    │     (AI-powered) │           ║
-                        ║                    └──────────────────┘           ║
-                        ║                              │                    ║
-                        ╚══════════════════════════════╪════════════════════╝
-                                                       │
-                 ┌─────────────────────────────────────┴─────────────────────────────────────┐
-                 │                                                                           │
-                 ▼                                                                           ▼
-╔════════════════════════════════════════╗            ╔════════════════════════════════════════╗
-║   rust-service-release.yaml            ║            ║   typescript-service-release.yaml      ║
-╠════════════════════════════════════════╣            ╠════════════════════════════════════════╣
-║                                        ║            ║                                        ║
-║   ┌───────────────┐ ┌───────────────┐  ║            ║         ┌─────────────────┐            ║
-║   │ Build Binaries│ │ Sync Versions │  ║            ║         │  Bump Version   │            ║
-║   │ (Linux/macOS/ │ │ (all crates)  │  ║            ║         │ (package.json)  │            ║
-║   │   Windows)    │ └───────────────┘  ║            ║         └─────────────────┘            ║
-║   └───────────────┘         │          ║            ║                   │                    ║
-║           │                 ▼          ║            ║         ┌─────────┴─────────┐          ║
-║           │       ┌─────────────────┐  ║            ║         │                   │          ║
-║           │       │ Publish Crates  │  ║            ║         ▼                   ▼          ║
-║           │       │  (crates.io)    │  ║            ║  ┌──────────────┐   ┌─────────────┐    ║
-║           │       └─────────────────┘  ║            ║  │GitHub Release│   │ npm Publish │    ║
-║           │                 │          ║            ║  └──────────────┘   └─────────────┘    ║
-║           └────────┬────────┘          ║            ║                                        ║
-║                    ▼                   ║            ╚════════════════════════════════════════╝
-║         ┌───────────────────┐          ║
-║         │  GitHub Release   │          ║
-║         │  (with binaries)  │          ║
-║         └───────────────────┘          ║
-║                                        ║
-╚════════════════════════════════════════╝
-```
-
-#### Monorepo Workflow
-
-The `typescript-monorepo-release` workflow extends the single-package pattern to handle multiple independently-versioned packages. Key differences:
-
-- **Change detection** — only packages with file changes (and optionally their dependents) are released
-- **Topological ordering** — packages are processed in dependency order so downstream consumers see new versions of their dependencies
-- **Single AI call** — one prompt contains all packages and their scoped commits, producing versions and notes in one shot
-- **Date-based tags** — since there's no single version, releases use `release/YYYY-MM-DD.N` tags
-- **`workspace:*` protocol** — left untouched; Bun/npm resolves these to real versions at pack-time
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Create a feature branch from `main`
 2. Make your changes
 3. Test locally or in a test repository
 4. Open a PR with a clear description
 5. Add the `release` label when ready to publish
-
-### Testing Workflows
 
 To test without publishing, use `dry-run: true`:
 
@@ -1005,6 +1158,6 @@ uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@your-bran
 
 ---
 
-## 📄 License
+## License
 
 MIT © [Photon](https://github.com/photon-hq)
