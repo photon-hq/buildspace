@@ -68,8 +68,9 @@ runs:
     - name: Parse AI output
       id: parse
       shell: bash
+      env:
+        RAW_OUTPUT: ${{ steps.ai-check.outputs.final-message }}
       run: |
-        RAW_OUTPUT="${{ steps.ai-check.outputs.final-message }}"
         echo "Raw AI output: '${RAW_OUTPUT}'"
 
         if [ -z "$RAW_OUTPUT" ]; then
@@ -89,7 +90,15 @@ runs:
         fi
 
         if [ -n "$REASON" ]; then
-          echo "explanation=${REASON}" >> $GITHUB_OUTPUT
+          {
+            echo "explanation<<EXPLANATION_EOF"
+            echo "$REASON"
+            echo "EXPLANATION_EOF"
+          } >> $GITHUB_OUTPUT
         else
-          echo "explanation=${RAW_OUTPUT}" >> $GITHUB_OUTPUT
+          {
+            echo "explanation<<EXPLANATION_EOF"
+            echo "$RAW_OUTPUT"
+            echo "EXPLANATION_EOF"
+          } >> $GITHUB_OUTPUT
         fi
