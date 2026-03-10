@@ -78,7 +78,7 @@ jobs:
 
   build:
     needs: prepare-release
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - name: Swift Build
         id: build
