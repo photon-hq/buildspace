@@ -15,6 +15,10 @@ on:
         type: string
         required: false
         description: "Path to scripts directory containing preinstall/postinstall scripts"
+      payload-path:
+        type: string
+        required: false
+        description: "Path to additional payload directory whose contents mirror the install root"
     secrets:
       DEVELOPER_ID_INSTALLER_NAME:
         required: true
@@ -67,6 +71,7 @@ jobs:
           identifier: ${{ inputs.identifier }}
           version: pr.${{ github.event.pull_request.number }}.${{ github.run_number }}
           scripts-path: ${{ inputs.scripts-path }}
+          payload-path: ${{ inputs.payload-path }}
 
       # ── Upload artifact ──────────────────────────────────────────────────
       - name: Upload package artifact
