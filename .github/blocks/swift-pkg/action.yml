@@ -20,6 +20,9 @@ inputs:
   scripts-path:
     required: false
     description: "Path to scripts directory containing preinstall/postinstall scripts"
+  payload-path:
+    required: false
+    description: "Path to additional payload directory whose contents mirror the install root (e.g. payload/Library/LaunchDaemons/…)"
 
 runs:
   using: "composite"
@@ -30,6 +33,11 @@ runs:
         mkdir -p tmp/pkgroot/usr/local/bin
         cp ${{ inputs.swift-binary-path }} tmp/pkgroot/usr/local/bin
         mkdir -p artifacts
+
+    - name: Copy additional payload
+      if: ${{ inputs.payload-path != '' }}
+      shell: bash
+      run: cp -R ${{ inputs.payload-path }}/ tmp/pkgroot/
 
     - name: Create package
       shell: bash
