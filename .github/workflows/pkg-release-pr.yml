@@ -1,0 +1,106 @@
+name: Package PR Build
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        type: string
+        required: true
+        description: "Name of the package"
+      identifier:
+        type: string
+        required: true
+        description: "Package identifier (e.g. com.example.mytool)"
+      scripts-path:
+        type: string
+        required: false
+        description: "Path to scripts directory containing preinstall/postinstall scripts"
+      payload-path:
+        type: string
+        required: false
+        description: "Path to additional payload directory whose contents mirror the install root"
+    secrets:
+      DEVELOPER_ID_INSTALLER_NAME:
+        required: true
+
+# Cancel any in-progress run for the same PR when a new commit is pushed.
+concurrency:
+  group: pkg-release-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      # ── Notify: build started ────────────────────────────────────────────
+      - name: Comment — build started
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
+        with:
+          comment-key: pkg-release-pr-build
+          message: |
+            ## Package Build
+
+            | | |
+            |---|---|
+            | **Status** | ⏳ Building… |
+            | **Commit** | ${{ github.sha }} |
+            | **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+      # ── Build ────────────────────────────────────────────────────────────
+      - uses: actions/checkout@v5
+
+      - name: Create Package
+        uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
+        with:
+          package-name: ${{ inputs.package-name }}
+          developer-id-installer-name: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+          identifier: ${{ inputs.identifier }}
+          version: pr.${{ github.event.pull_request.number }}.${{ github.run_number }}
+          scripts-path: ${{ inputs.scripts-path }}
+          payload-path: ${{ inputs.payload-path }}
+
+      # ── Upload artifact ──────────────────────────────────────────────────
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.package-name }}-pr${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: artifacts/*.pkg
+          retention-days: 7
+
+      # ── Notify: success ──────────────────────────────────────────────────
+      - name: Comment — build succeeded
+        if: success()
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
+        with:
+          comment-key: pkg-release-pr-build
+          message: |
+            ## Package Build
+
+            | | |
+            |---|---|
+            | **Status** | ✅ Success |
+            | **Commit** | ${{ github.sha }} |
+            | **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+            | **Artifact** | `${{ inputs.package-name }}-pr${{ github.event.pull_request.number }}-${{ github.sha }}` (expires in 7 days) |
+
+            Download the `.pkg` from the [Actions run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) artifacts section.
+
+      # ── Notify: failure ──────────────────────────────────────────────────
+      - name: Comment — build failed
+        if: failure()
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
+        with:
+          comment-key: pkg-release-pr-build
+          message: |
+            ## Package Build
+
+            | | |
+            |---|---|
+            | **Status** | ❌ Failed |
+            | **Commit** | ${{ github.sha }} |
+            | **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+            Check the [logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
