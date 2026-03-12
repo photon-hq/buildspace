@@ -1,0 +1,125 @@
+name: Package Release
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        type: string
+        required: true
+        description: "The name of the package to release"
+      identifier:
+        type: string
+        required: true
+        description: "The identifier of the package to release"
+      scripts-path:
+        type: string
+        required: false
+        description: "Path to scripts directory containing preinstall/postinstall scripts"
+      payload-path:
+        type: string
+        required: false
+        description: "Path to additional payload directory whose contents mirror the install root"
+      jamf-url:
+        type: string
+        required: false
+        default: ""
+        description: "Jamf Pro instance URL (e.g. https://acme.jamfcloud.com). Leave empty to skip Jamf upload."
+      jamf-package-priority:
+        type: string
+        required: false
+        default: ""
+        description: "Priority of the package in Jamf Pro. Leave empty to use default priority."
+      jamf-package-name:
+        type: string
+        required: false
+        default: ""
+        description: "Package name to match in Jamf Pro. If omitted, the tool uses the file stem of the .pkg."
+    secrets:
+      DEVELOPER_ID_INSTALLER_NAME:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      JAMF_CLIENT_ID:
+        required: false
+      JAMF_CLIENT_SECRET:
+        required: false
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      labels: ${{ steps.check.outputs.labels }}
+    steps:
+      - name: Check PR Labels
+        id: check
+        uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
+        with:
+          labels: '["release"]'
+
+  prepare-release:
+    needs: check-labels
+    if: fromJSON(needs.check-labels.outputs.labels).release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.generate.outputs.version }}
+      release_notes: ${{ steps.generate.outputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Generate Release Info
+        id: generate
+        uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
+        with:
+          service-name: ${{ inputs.package-name }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+  package:
+    needs: prepare-release
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create Package
+        uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
+        with:
+          package-name: ${{ inputs.package-name }}
+          developer-id-installer-name: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+          identifier: ${{ inputs.identifier }}
+          version: ${{ needs.prepare-release.outputs.version }}
+          scripts-path: ${{ inputs.scripts-path }}
+          payload-path: ${{ inputs.payload-path }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.package-name }}
+          path: artifacts/*
+
+  github-release:
+    needs: [package, prepare-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        uses: photon-hq/buildspace/.github/blocks/create-github-release@main
+        with:
+          version: ${{ needs.prepare-release.outputs.version }}
+          title: "${{ inputs.package-name }} v${{ needs.prepare-release.outputs.version }}"
+          notes: ${{ needs.prepare-release.outputs.release_notes }}
+          artifact-pattern: ${{ inputs.package-name }}
+
+  jamf-upload:
+    needs: package
+    if: inputs.jamf-url != ''
+    uses: photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@main
+    with:
+      artifact_name: ${{ inputs.package-name }}
+      package_name: ${{ inputs.jamf-package-name }}
+      jamf_url: ${{ inputs.jamf-url }}
+      package_priority: ${{ inputs.jamf-package-priority }}
+    secrets:
+      JAMF_CLIENT_ID: ${{ secrets.JAMF_CLIENT_ID }}
+      JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}

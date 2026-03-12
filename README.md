@@ -25,6 +25,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [TypeScript Monorepo Release](#typescript-monorepo-release)
   - [Go Binary Release](#go-binary-release)
   - [Swift Release](#swift-release)
+  - [Package Release](#package-release)
   - [Swift Package PR Build](#swift-package-pr-build)
   - [Check README](#check-readme)
 - [Blocks (Composite Actions)](#blocks-composite-actions)
@@ -59,6 +60,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
 | Go binary | [`go-binary-release`](#go-binary-release) | PR label `release` |
 | Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` |
+| macOS `.pkg` without binary (payload/scripts only) | [`pkg-release`](#package-release) | PR label `release` |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
 | Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
 
@@ -451,6 +453,51 @@ jobs:
     with:
       package-name: my-tool
       identifier: com.example.my-tool
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+```
+
+---
+
+### Package Release
+
+**File:** `.github/workflows/pkg-release.yml`
+
+Release pipeline for macOS `.pkg` distribution packages that don't contain a compiled binary. Packages payload files and scripts into a signed `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro. Use this instead of `swift-release` when your package only delivers configuration files, LaunchDaemons, scripts, or other non-binary payload.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `package-name` | string | Yes | — | Name of the package |
+| `identifier` | string | Yes | — | Package identifier (e.g., `com.example.my-config`) |
+| `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
+| `payload-path` | string | No | `""` | Path to payload directory whose contents mirror the install root |
+| `jamf-url` | string | No | `""` | Jamf Pro instance URL (leave empty to skip Jamf upload) |
+| `jamf-package-priority` | string | No | `""` | Package priority in Jamf Pro |
+| `jamf-package-name` | string | No | `""` | Package name to match in Jamf Pro |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
+| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
+| `JAMF_CLIENT_ID` | No | Jamf Pro API client ID |
+| `JAMF_CLIENT_SECRET` | No | Jamf Pro API client secret |
+
+#### Example
+
+```yaml
+jobs:
+  release:
+    uses: photon-hq/buildspace/.github/workflows/pkg-release.yml@main
+    with:
+      package-name: my-config-pkg
+      identifier: com.example.my-config
+      payload-path: payload
+      scripts-path: scripts
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
@@ -1127,6 +1174,7 @@ buildspace/
 │       ├── check-readme.yaml          # AI README freshness check (PR)
 │       ├── go-service-release.yaml    # Complete Go release pipeline
 │       ├── rust-service-release.yaml  # Complete Rust release pipeline
+│       ├── pkg-release.yml             # .pkg release pipeline (no binary)
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
