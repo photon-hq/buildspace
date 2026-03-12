@@ -3,7 +3,7 @@ description: "Build distribution package for Swift"
 
 inputs:
   swift-binary-path:
-    required: true
+    required: false
     description: "Path to your swift binary"
   identifier:
     required: true
@@ -30,9 +30,12 @@ runs:
     - name: Prepare
       shell: bash
       run: |
-        mkdir -p tmp/pkgroot/usr/local/bin
-        cp ${{ inputs.swift-binary-path }} tmp/pkgroot/usr/local/bin
+        mkdir -p tmp/pkgroot
         mkdir -p artifacts
+        if [ -n "${{ inputs.swift-binary-path }}" ]; then
+          mkdir -p tmp/pkgroot/usr/local/bin
+          cp ${{ inputs.swift-binary-path }} tmp/pkgroot/usr/local/bin
+        fi
 
     - name: Copy additional payload
       if: ${{ inputs.payload-path != '' }}
