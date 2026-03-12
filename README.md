@@ -26,6 +26,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [Go Binary Release](#go-binary-release)
   - [Swift Release](#swift-release)
   - [Package Release](#package-release)
+  - [Package PR Build](#package-pr-build)
   - [Swift Package PR Build](#swift-package-pr-build)
   - [Check README](#check-readme)
 - [Blocks (Composite Actions)](#blocks-composite-actions)
@@ -61,6 +62,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | Go binary | [`go-binary-release`](#go-binary-release) | PR label `release` |
 | Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` |
 | macOS `.pkg` without binary (payload/scripts only) | [`pkg-release`](#package-release) | PR label `release` |
+| macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
 | Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
 
@@ -500,6 +502,50 @@ jobs:
       scripts-path: scripts
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+```
+
+---
+
+### Package PR Build
+
+**File:** `.github/workflows/pkg-release-pr.yml`
+
+Builds a macOS `.pkg` (without compiling a binary) on every PR commit and reports status directly in the PR as a living comment. Same PR experience as `swift-pkg-pr` but for payload/scripts-only packages. If a build is already running when a new commit is pushed, the old run is automatically cancelled.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `package-name` | string | Yes | — | Name of the package |
+| `identifier` | string | Yes | — | Package identifier (e.g., `com.example.my-config`) |
+| `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
+| `payload-path` | string | No | `""` | Path to payload directory whose contents mirror the install root |
+
+#### Secrets
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
+
+#### Example
+
+```yaml
+# .github/workflows/pr.yml
+name: PR
+
+on:
+  pull_request:
+
+jobs:
+  pkg:
+    uses: photon-hq/buildspace/.github/workflows/pkg-release-pr.yml@main
+    with:
+      package-name: my-config-pkg
+      identifier: com.example.my-config
+      payload-path: payload
+      scripts-path: scripts
+    secrets:
       DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
 ```
 
@@ -1175,6 +1221,7 @@ buildspace/
 │       ├── go-service-release.yaml    # Complete Go release pipeline
 │       ├── rust-service-release.yaml  # Complete Rust release pipeline
 │       ├── pkg-release.yml             # .pkg release pipeline (no binary)
+│       ├── pkg-release-pr.yml         # .pkg PR build (no binary)
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
