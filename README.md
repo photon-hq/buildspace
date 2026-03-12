@@ -29,7 +29,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [Package PR Build](#package-pr-build)
   - [Swift Package PR Build](#swift-package-pr-build)
   - [Check README](#check-readme)
-- [Blocks (Composite Actions)](#blocks-composite-actions)
+  - [Blocks (Composite Actions)](#blocks-composite-actions)
   - [check-pr-label](#check-pr-label)
   - [check-readme](#check-readme-1)
   - [generate-release-info](#generate-release-info)
