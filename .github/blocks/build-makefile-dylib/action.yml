@@ -1,0 +1,37 @@
+name: "Build Makefile dylib"
+description: "Build dynamic library from Makefile"
+
+inputs:
+  output-name:
+    required: true
+    description: "Name of the output dylib (e.g., imessage-helper)"
+  version:
+    required: false
+    default: ''
+    description: "Version to embed (passed as VERSION= to make)"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build dylib
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        make ${VERSION:+VERSION=$VERSION} release
+
+        DYLIB="build/${{ inputs.output-name }}.dylib"
+
+        if [ -f "$DYLIB" ]; then
+          echo "${{ inputs.output-name }}.dylib built successfully"
+          file "$DYLIB"
+        else
+          echo "::error::${{ inputs.output-name }}.dylib not found — build failure"
+          exit 1
+        fi
+
+    - name: Prepare artifact
+      shell: bash
+      run: |
+        mkdir -p artifacts
+        cp "build/${{ inputs.output-name }}.dylib" artifacts/
