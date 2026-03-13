@@ -143,7 +143,7 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-### README Freshness Check
+### README Update-To-Date Check
 
 Add to any repo's `.github/workflows/ci.yaml`:
 
@@ -160,7 +160,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-Then add a `release` label to your PR, merge, and watch the magic happen.
+Then add a `release` label to your PR, merge, and let BuildSpace do the rest.
 
 ---
 
@@ -188,7 +188,7 @@ Control releases by adding labels to your PR before merging:
 | `release` | Triggers a full release (GitHub Release + package publish) |
 | `prerelease` | Creates a prerelease with `-rc.N` suffix and `beta` npm tag |
 
-**No label = no release.** PRs without labels merge without triggering any release jobs.
+**No label = no release** PRs without labels merge without triggering any release jobs. You can customize your release label with the input 'labels-to-check' in the 'release.yml'. 
 
 ### Permissions
 
@@ -198,7 +198,7 @@ Workflows that create releases or push commits need `contents: write`. Workflows
 
 ## Workflows
 
-Ready-to-use release pipelines. Each workflow composes the lower-level [blocks](#blocks-composite-actions) internally — you don't need to know about individual blocks unless you're building a custom pipeline.
+Ready-to-use release pipelines. Each workflow composes the lower-level [blocks](#blocks-composite-actions) internally - you don't need to know about individual blocks unless you're building a custom pipeline.
 
 ---
 
