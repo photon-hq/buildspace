@@ -6,12 +6,12 @@
 [![NPM](https://img.shields.io/badge/NPM-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/)
 [![Crates.io](https://img.shields.io/badge/Crates.io-FFC832?logo=rust&logoColor=black)](https://crates.io/)
 
-**Reusable GitHub Actions blocks and workflows for fast shipping teams.**
+**Reusable GitHub Actions blocks and workflows for fast shipping teams**
 
 BuildSpace gives you two layers of CI/CD automation:
 
-- **Workflows** — plug-and-play release pipelines. Point a workflow at your repo, provide a few secrets, and you're done. Most teams only need this.
-- **Blocks** — the composable actions that workflows are built from. Use them to assemble custom pipelines when the prebuilt workflows don't fit.
+- **Workflows**: plug-and-play release pipelines. Point a workflow at your repo, provide a few secrets, and you're done. Most teams only need this.
+- **Blocks**: the composable actions that workflows are built from. Use them to assemble custom pipelines when the prebuilt workflows don't fit.
 
 ---
 
