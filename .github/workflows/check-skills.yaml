@@ -1,0 +1,83 @@
+name: Check Skills
+
+on:
+  workflow_call:
+    inputs:
+      fail_on_missing_skills:
+        required: false
+        type: boolean
+        default: false
+        description: 'If true, fail the workflow when skills documentation is missing or outdated. If false (default), only post a warning comment.'
+      skills-repo:
+        required: false
+        type: string
+        default: 'photon-hq/skills'
+        description: 'The skills repository to check against (owner/repo format)'
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+        description: 'OpenAI API key for AI-powered skills analysis'
+      SKILLS_REPO_TOKEN:
+        required: false
+        description: 'GitHub token for checking out the skills repository. Defaults to the built-in GITHUB_TOKEN (sufficient for public repos; use a PAT for private repos).'
+
+jobs:
+  check-skills:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check Skills
+        id: check
+        uses: photon-hq/buildspace/.github/blocks/check-skills@main
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          github-token: ${{ secrets.SKILLS_REPO_TOKEN || github.token }}
+          skills-repo: ${{ inputs.skills-repo }}
+
+      - name: Comment on PR if skills need update
+        if: steps.check.outputs.needs-update == 'true'
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
+        with:
+          comment-key: check-skills
+          message: |
+            ### 📚 Skills documentation may need an update
+
+            This PR introduces changes that might not be reflected in the skills documentation.
+
+            **Reason:** ${{ steps.check.outputs.explanation }}
+
+            > _This is an automated check powered by AI. If the skills are intentionally unchanged, feel free to ignore this._
+
+      - name: Fail if skills are outdated and fail_on_missing_skills is enabled
+        if: steps.check.outputs.needs-update == 'true' && inputs.fail_on_missing_skills
+        env:
+          EXPLANATION: ${{ steps.check.outputs.explanation }}
+        run: |
+          printf '::error::Skills documentation is outdated. %s\n' "$EXPLANATION"
+          exit 1
+
+      - name: Remove stale comment if skills are up to date
+        if: steps.check.outputs.needs-update == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- comment-key: check-skills -->';
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            if (!pr) return;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pr.number
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.deleteComment({
+                owner, repo, comment_id: existing.id
+              });
+              console.log(`Deleted stale skills check comment ${existing.id}`);
+            }
