@@ -1,0 +1,56 @@
+name: Buildspace Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  check-labels:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      labels: ${{ steps.check.outputs.labels }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check PR Labels
+        id: check
+        uses: ./.github/blocks/check-pr-label
+        with:
+          labels: '["release"]'
+
+  release-info:
+    needs: check-labels
+    if: fromJSON(needs.check-labels.outputs.labels).release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.generate.outputs.version }}
+      release_notes: ${{ steps.generate.outputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Generate Release Info
+        id: generate
+        uses: ./.github/blocks/generate-release-info
+        with:
+          service-name: buildspace
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+  github-release:
+    needs: [check-labels, release-info]
+    if: fromJSON(needs.check-labels.outputs.labels).release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create GitHub Release
+        uses: ./.github/blocks/create-github-release
+        with:
+          version: ${{ needs.release-info.outputs.version }}
+          title: "buildspace v${{ needs.release-info.outputs.version }}"
+          notes: ${{ needs.release-info.outputs.release_notes }}
