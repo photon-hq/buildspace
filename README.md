@@ -162,6 +162,16 @@ jobs:
 
 Then add a `release` label to your PR, merge, and let BuildSpace do the rest.
 
+### Pinning to a Version
+
+All examples above use `@main` which tracks the latest changes. For production stability, pin to a specific release tag:
+
+```yaml
+uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@v1.2.3
+```
+
+Available versions are listed on the [GitHub Releases](https://github.com/photon-hq/buildspace/releases) page. Buildspace versions itself using the same AI-powered release pipeline it provides to other repos.
+
 ---
 
 ## Prerequisites
@@ -1220,8 +1230,12 @@ buildspace/
 │       ├── check-readme.yaml          # AI README freshness check (PR)
 │       ├── go-service-release.yaml    # Complete Go release pipeline
 │       ├── rust-service-release.yaml  # Complete Rust release pipeline
+<<<<<<< Updated upstream
 │       ├── pkg-release.yml             # .pkg release pipeline (no binary)
 │       ├── pkg-release-pr.yml         # .pkg PR build (no binary)
+=======
+│       ├── self-release.yaml          # Buildspace's own versioned releases
+>>>>>>> Stashed changes
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
