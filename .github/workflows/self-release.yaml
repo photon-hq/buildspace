@@ -27,18 +27,87 @@ jobs:
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.generate.outputs.version }}
-      release_notes: ${{ steps.generate.outputs.release_notes }}
+      version: ${{ steps.version.outputs.version }}
+      release_notes: ${{ steps.notes.outputs.final-message }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: Generate Release Info
-        id: generate
-        uses: ./.github/blocks/generate-release-info
+      - name: Determine Version
+        id: version
+        uses: ./.github/blocks/determine-publish-version
         with:
-          service-name: buildspace
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      - name: Build Release Context
+        id: context
+        shell: bash
+        env:
+          PREVIOUS_VERSION: ${{ steps.version.outputs.previous-version }}
+        run: |
+          RANGE_START="v${PREVIOUS_VERSION}"
+          if [ -z "$PREVIOUS_VERSION" ] || [ "$PREVIOUS_VERSION" = "0.0.0" ]; then
+            COMMIT_LOG=$(git log --no-merges --format='- %h %s' -n 25)
+            FILE_LIST=$(git ls-tree -r --name-only HEAD | sed 's/^/- /' | head -100)
+            {
+              echo "summary=Initial release based on the current repository state."
+              echo "commits<<EOF"
+              echo "$COMMIT_LOG"
+              echo "EOF"
+              echo "files<<EOF"
+              echo "$FILE_LIST"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COMMIT_LOG=$(git log --no-merges --format='- %h %s' "${RANGE_START}..${GITHUB_SHA}")
+          FILE_LIST=$(git diff --name-only "${RANGE_START}..${GITHUB_SHA}" | sed 's/^/- /' | head -100)
+          if [ -z "$COMMIT_LOG" ]; then
+            COMMIT_LOG="- No commit summary available."
+          fi
+          if [ -z "$FILE_LIST" ]; then
+            FILE_LIST="- No changed files detected."
+          fi
+          {
+            echo "summary=Changes since ${RANGE_START}."
+            echo "commits<<EOF"
+            echo "$COMMIT_LOG"
+            echo "EOF"
+            echo "files<<EOF"
+            echo "$FILE_LIST"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Generate Release Notes
+        id: notes
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: read-only
+          prompt: |
+            Generate release notes for buildspace v${{ steps.version.outputs.version }}.
+            Use only the release context below. Do not run shell commands.
+
+            Release summary:
+            ${{ steps.context.outputs.summary }}
+
+            Commits:
+            ${{ steps.context.outputs.commits }}
+
+            Changed files:
+            ${{ steps.context.outputs.files }}
+
+            REQUIREMENTS:
+            1. NO title - start with content directly
+            2. Plain language - like explaining to a friend
+            3. SHORT - 1-2 sentences per item
+            4. Group: ## New Features, ## Bug Fixes, ## Improvement, if they exist. For example, if there are no new features, bug fixes, or improvements, don't include them.
+            5. Only include breaking changes if they exist
+            6. Include commit SHAs if necessary. If the commit is large, don't include it.
+            7. 1-2 emojis max for personality
+            8. Code diffs ONLY if necessary. If the diff is large, don't include it.
+
+            The end goal is clear business technical writing that is easy to understand, use, and bring
+            delight to the user.
 
   github-release:
     needs: [check-labels, release-info]
