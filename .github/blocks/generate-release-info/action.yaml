@@ -48,14 +48,28 @@ runs:
           echo "is_initial=false" >> $GITHUB_OUTPUT
         fi
 
+    - name: Collect commit log
+      id: commits
+      shell: bash
+      run: |
+        PREV_TAG="v${{ steps.version-info.outputs.previous-version }}"
+        LOG=$(git log --name-status "${PREV_TAG}..${{ github.sha }}" 2>/dev/null || git log --name-status -50)
+        EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+        echo "log<<$EOF" >> $GITHUB_OUTPUT
+        echo "$LOG" >> $GITHUB_OUTPUT
+        echo "$EOF" >> $GITHUB_OUTPUT
+
     - name: AI Generate Notes
       id: ai-notes
       uses: openai/codex-action@v1
       with:
-        safety-strategy: read-only
+        openai-api-key: ${{ inputs.openai-api-key }}
         prompt: |
           Generate release notes for ${{ inputs.service-name }} v${{ steps.version.outputs.final }}.
-          ${{ steps.release-context.outputs.is_initial == 'true' && format('This is the initial release. Describe the key features and capabilities of {0} based on the codebase.', inputs.service-name) || format('Changes since v{0} (current commit: {1}).', steps.version-info.outputs.previous-version, github.sha) }}
+          ${{ steps.release-context.outputs.is_initial == 'true' && format('This is the initial release. Describe the key features and capabilities of {0} based on the codebase.', inputs.service-name) || format('Changes since v{0}.', steps.version-info.outputs.previous-version) }}
+
+          Commits and changed files:
+          ${{ steps.commits.outputs.log }}
           
           REQUIREMENTS:
           1. NO title - start with content directly

@@ -56,16 +56,27 @@ runs:
             core.setOutput('version', '0.0.0');
           }
 
+    - name: Collect commit history
+      id: commits
+      shell: bash
+      run: |
+        LOG=$(git log --oneline ${{ steps.last-release.outputs.sha }}..${{ github.sha }} 2>/dev/null || git log --oneline -50)
+        EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+        echo "log<<$EOF" >> $GITHUB_OUTPUT
+        echo "$LOG" >> $GITHUB_OUTPUT
+        echo "$EOF" >> $GITHUB_OUTPUT
+
     - name: AI Determine Version
       id: ai-version
       uses: openai/codex-action@v1
       with:
         openai-api-key: ${{ inputs.openai-api-key }}
-        safety-strategy: read-only
         prompt: |
-          Analyze commits between ${{ steps.last-release.outputs.sha }} and ${{ github.sha }}.
           Current version: ${{ steps.last-release.outputs.version }}
           Prerelease: ${{ inputs.prerelease }}
+
+          Commits since last release:
+          ${{ steps.commits.outputs.log }}
           
           Rules:
           - BREAKING CHANGE or ! = major bump
