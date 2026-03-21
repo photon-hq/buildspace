@@ -25,6 +25,6 @@ jobs:
           git rm -f .github/workflows/sync.yaml
           git commit -m "chore: remove sync workflow for public repo [skip ci]"
           
-          git remote add public https://oauth2:${{ secrets.SYNC_TOKEN }}@github.com/photon-hq/buildspace-private.git
+          git remote add public https://oauth2:${{ secrets.SYNC_TOKEN }}@github.com/photon-hq/buildspace.git
           git push public --force --all
           git push public --force --tags
