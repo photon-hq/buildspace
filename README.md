@@ -1230,12 +1230,9 @@ buildspace/
 │       ├── check-readme.yaml          # AI README freshness check (PR)
 │       ├── go-service-release.yaml    # Complete Go release pipeline
 │       ├── rust-service-release.yaml  # Complete Rust release pipeline
-<<<<<<< Updated upstream
 │       ├── pkg-release.yml             # .pkg release pipeline (no binary)
 │       ├── pkg-release-pr.yml         # .pkg PR build (no binary)
-=======
 │       ├── self-release.yaml          # Buildspace's own versioned releases
->>>>>>> Stashed changes
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
