@@ -78,6 +78,16 @@ runs:
         get_sha256() {
           local url="$1"
           local tmpdir=$(mktemp -d)
+
+          if echo "$url" | grep -q "registry.npmjs.org"; then
+            # NPM registry URL: download tarball directly
+            local filename=$(basename "$url")
+            curl -sSfL "$url" -o "$tmpdir/$filename"
+            shasum -a 256 "$tmpdir/$filename" | cut -d' ' -f1
+            rm -rf "$tmpdir"
+            return
+          fi
+
           local repo tag asset
 
           if echo "$url" | grep -q "gitgate.internal"; then
