@@ -78,25 +78,26 @@ runs:
         get_sha256() {
           local url="$1"
           local tmpdir=$(mktemp -d)
-          local repo tag asset
+          trap "rm -rf '$tmpdir'" RETURN
 
           if echo "$url" | grep -q "gitgate.internal"; then
-            # Gitgate URL: http://gitgate.internal/release/OWNER/REPO/TAG/ASSET
             local path="${url#*gitgate.internal/release/}"
-            repo=$(echo "$path" | cut -d'/' -f1-2)
-            tag=$(echo "$path" | cut -d'/' -f3)
-            asset=$(echo "$path" | cut -d'/' -f4-)
-          else
-            # GitHub URL: https://github.com/OWNER/REPO/releases/download/TAG/ASSET
+            local repo=$(echo "$path" | cut -d'/' -f1-2)
+            local tag=$(echo "$path" | cut -d'/' -f3)
+            local asset=$(echo "$path" | cut -d'/' -f4-)
+            gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmpdir" >/dev/null 2>&1
+            shasum -a 256 "$tmpdir/$asset" | cut -d' ' -f1
+          elif echo "$url" | grep -q "github.com" && echo "$url" | grep -q "/releases/download/"; then
             local path="${url#https://github.com/}"
-            repo=$(echo "$path" | cut -d'/' -f1-2)
-            tag=$(echo "$path" | cut -d'/' -f5)
-            asset=$(echo "$path" | cut -d'/' -f6-)
+            local repo=$(echo "$path" | cut -d'/' -f1-2)
+            local tag=$(echo "$path" | cut -d'/' -f5)
+            local asset=$(echo "$path" | cut -d'/' -f6-)
+            gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmpdir" >/dev/null 2>&1
+            shasum -a 256 "$tmpdir/$asset" | cut -d' ' -f1
+          else
+            curl -fsSL "$url" -o "$tmpdir/download"
+            shasum -a 256 "$tmpdir/download" | cut -d' ' -f1
           fi
-
-          gh release download "$tag" --repo "$repo" --pattern "$asset" --dir "$tmpdir" >/dev/null 2>&1
-          shasum -a 256 "$tmpdir/$asset" | cut -d' ' -f1
-          rm -rf "$tmpdir"
         }
 
         case "$FORMULA_TYPE" in

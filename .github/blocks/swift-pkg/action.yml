@@ -15,8 +15,12 @@ inputs:
     required: true
     description: "Package name"
   developer-id-installer-name:
-    required: true
-    description: "Certificate name (e.g., 'Developer ID Installer: Company (TEAMID)')"
+    required: false
+    description: "Certificate name for signing (e.g., 'Developer ID Installer: Company (TEAMID)')"
+  allow-unsigned:
+    required: false
+    default: "false"
+    description: "Set to true to intentionally build an unsigned package"
   scripts-path:
     required: false
     description: "Path to scripts directory containing preinstall/postinstall scripts"
@@ -44,17 +48,26 @@ runs:
 
     - name: Create package
       shell: bash
+      env:
+        SIGN_IDENTITY: ${{ inputs.developer-id-installer-name }}
       run: |
-        SCRIPTS_ARG=""
+        ARGS=(--root tmp/pkgroot
+              --identifier "${{ inputs.identifier }}"
+              --install-location /
+              --version "${{ inputs.version }}")
+
         if [ -n "${{ inputs.scripts-path }}" ]; then
-          SCRIPTS_ARG="--scripts ${{ inputs.scripts-path }}"
+          ARGS+=(--scripts "${{ inputs.scripts-path }}")
         fi
-        pkgbuild --root tmp/pkgroot \
-            --identifier ${{ inputs.identifier }} \
-            --install-location / \
-            --version ${{ inputs.version }} \
-            $SCRIPTS_ARG \
-            "${{ inputs.package-name }}.pkg"
+
+        if [ -n "$SIGN_IDENTITY" ]; then
+          ARGS+=(--sign "$SIGN_IDENTITY")
+        elif [ "${{ inputs.allow-unsigned }}" != "true" ]; then
+          echo "::error::developer-id-installer-name is required unless allow-unsigned=true"
+          exit 1
+        fi
+
+        pkgbuild "${ARGS[@]}" "${{ inputs.package-name }}.pkg"
 
     - name: Prepare artifact
       shell: bash
