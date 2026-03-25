@@ -185,7 +185,6 @@ Every workflow needs at least `OPENAI_API_KEY` for AI-powered versioning and rel
 | `OPENAI_API_KEY` | All workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
 | `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
-| `DEVELOPER_ID_INSTALLER_NAME` | Swift `.pkg` signing | Apple Developer portal |
 
 Add these in your repo's **Settings > Secrets and variables > Actions**.
 
@@ -433,7 +432,7 @@ jobs:
 
 **File:** `.github/workflows/swift-release.yml`
 
-Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a signed `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro.
+Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro.
 
 #### Inputs
 
@@ -451,7 +450,6 @@ Complete release pipeline for macOS `.pkg` distribution packages: checks PR labe
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
-| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
 | `SECRET_ENV_VARS` | No | Compile-time env vars written to `.env` |
 | `JAMF_CLIENT_ID` | No | Jamf Pro API client ID |
 | `JAMF_CLIENT_SECRET` | No | Jamf Pro API client secret |
@@ -467,7 +465,6 @@ jobs:
       identifier: com.example.my-tool
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
 ```
 
 ---
@@ -476,7 +473,7 @@ jobs:
 
 **File:** `.github/workflows/pkg-release.yml`
 
-Release pipeline for macOS `.pkg` distribution packages that don't contain a compiled binary. Packages payload files and scripts into a signed `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro. Use this instead of `swift-release` when your package only delivers configuration files, LaunchDaemons, scripts, or other non-binary payload.
+Release pipeline for macOS `.pkg` distribution packages that don't contain a compiled binary. Packages payload files and scripts into a `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro. Use this instead of `swift-release` when your package only delivers configuration files, LaunchDaemons, scripts, or other non-binary payload.
 
 #### Inputs
 
@@ -495,7 +492,6 @@ Release pipeline for macOS `.pkg` distribution packages that don't contain a com
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
-| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
 | `JAMF_CLIENT_ID` | No | Jamf Pro API client ID |
 | `JAMF_CLIENT_SECRET` | No | Jamf Pro API client secret |
 
@@ -512,7 +508,6 @@ jobs:
       scripts-path: scripts
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
 ```
 
 ---
@@ -532,12 +527,6 @@ Builds a macOS `.pkg` (without compiling a binary) on every PR commit and report
 | `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
 | `payload-path` | string | No | `""` | Path to payload directory whose contents mirror the install root |
 
-#### Secrets
-
-| Secret | Required | Description |
-|--------|----------|-------------|
-| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
-
 #### Example
 
 ```yaml
@@ -555,8 +544,6 @@ jobs:
       identifier: com.example.my-config
       payload-path: payload
       scripts-path: scripts
-    secrets:
-      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
 ```
 
 ---
@@ -584,7 +571,6 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 
 | Secret | Required | Description |
 |--------|----------|-------------|
-| `DEVELOPER_ID_INSTALLER_NAME` | Yes | Developer ID Installer certificate name |
 | `SECRET_ENV_VARS` | No | Compile-time env vars written to `.env` |
 
 #### Example
@@ -603,7 +589,7 @@ jobs:
       package-name: my-tool
       identifier: com.example.my-tool
     secrets:
-      DEVELOPER_ID_INSTALLER_NAME: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
+      SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
 ```
 
 ---

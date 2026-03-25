@@ -34,8 +34,6 @@ on:
         default: ""
         description: "Package name to match in Jamf Pro. If omitted, the tool uses the file stem of the .pkg."
     secrets:
-      DEVELOPER_ID_INSTALLER_NAME:
-        required: true
       SECRET_ENV_VARS:
         required: false
       OPENAI_API_KEY:
@@ -99,7 +97,6 @@ jobs:
         with:
           swift-binary-path: ${{ steps.build.outputs.binary-path }}
           package-name: ${{ inputs.package-name }}
-          developer-id-installer-name: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
           identifier: ${{ inputs.identifier }}
           version: ${{ needs.prepare-release.outputs.version }}
           scripts-path: ${{ inputs.scripts-path }}
