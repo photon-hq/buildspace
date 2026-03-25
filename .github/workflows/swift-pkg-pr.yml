@@ -20,8 +20,6 @@ on:
         required: false
         description: "Path to additional payload directory whose contents mirror the install root"
     secrets:
-      DEVELOPER_ID_INSTALLER_NAME:
-        required: true
       SECRET_ENV_VARS:
         required: false
 
@@ -67,7 +65,6 @@ jobs:
         with:
           swift-binary-path: ${{ steps.build.outputs.binary-path }}
           package-name: ${{ inputs.package-name }}
-          developer-id-installer-name: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
           identifier: ${{ inputs.identifier }}
           version: pr.${{ github.event.pull_request.number }}.${{ github.run_number }}
           scripts-path: ${{ inputs.scripts-path }}

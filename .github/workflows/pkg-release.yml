@@ -34,8 +34,6 @@ on:
         default: ""
         description: "Package name to match in Jamf Pro. If omitted, the tool uses the file stem of the .pkg."
     secrets:
-      DEVELOPER_ID_INSTALLER_NAME:
-        required: true
       OPENAI_API_KEY:
         required: true
       JAMF_CLIENT_ID:
@@ -87,7 +85,6 @@ jobs:
         uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
         with:
           package-name: ${{ inputs.package-name }}
-          developer-id-installer-name: ${{ secrets.DEVELOPER_ID_INSTALLER_NAME }}
           identifier: ${{ inputs.identifier }}
           version: ${{ needs.prepare-release.outputs.version }}
           scripts-path: ${{ inputs.scripts-path }}
