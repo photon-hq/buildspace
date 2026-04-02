@@ -18,6 +18,11 @@ on:
         type: string
         required: false
         description: "Path to additional payload directory whose contents mirror the install root"
+      resource-bundles:
+        type: string
+        required: false
+        default: ""
+        description: "Space-separated list of SPM resource bundle names to include in the .pkg"
       jamf-url:
         type: string
         required: false
@@ -92,6 +97,7 @@ jobs:
             VERSION=${{ needs.prepare-release.outputs.version }}
             DEPLOYMENT_ENVIRONMENT=production
             ${{ secrets.SECRET_ENV_VARS }}
+          resource-bundles: ${{ inputs.resource-bundles }}
       - name: Swift Package
         uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
         with:
@@ -101,6 +107,7 @@ jobs:
           version: ${{ needs.prepare-release.outputs.version }}
           scripts-path: ${{ inputs.scripts-path }}
           payload-path: ${{ inputs.payload-path }}
+          resource-bundles-path: ${{ steps.build.outputs.resource-bundles-path }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.package-name }}

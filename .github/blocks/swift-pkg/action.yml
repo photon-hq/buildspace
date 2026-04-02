@@ -27,6 +27,10 @@ inputs:
   payload-path:
     required: false
     description: "Path to additional payload directory whose contents mirror the install root (e.g. payload/Library/LaunchDaemons/…)"
+  resource-bundles-path:
+    required: false
+    default: ""
+    description: "Path to directory containing SPM resource bundles to install alongside the binary"
 
 runs:
   using: "composite"
@@ -45,6 +49,15 @@ runs:
       if: ${{ inputs.payload-path != '' }}
       shell: bash
       run: cp -R ${{ inputs.payload-path }}/ tmp/pkgroot/
+
+    - name: Copy resource bundles
+      if: ${{ inputs.resource-bundles-path != '' }}
+      shell: bash
+      run: |
+        mkdir -p tmp/pkgroot/usr/local/bin
+        cp -R "${{ inputs.resource-bundles-path }}"/*.bundle tmp/pkgroot/usr/local/bin/
+        echo "Resource bundles installed to /usr/local/bin/:"
+        ls -d tmp/pkgroot/usr/local/bin/*.bundle
 
     - name: Create package
       shell: bash
