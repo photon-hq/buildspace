@@ -56,6 +56,11 @@ on:
         required: false
         default: ""
         description: "Formula name in the tap to update (e.g., 'jamf-package-updater'). Required if tap-repo is set."
+      integration-selftest-stub:
+        type: boolean
+        required: false
+        default: false
+        description: "No-op input for CI self-test drills."
     secrets:
       OPENAI_API_KEY:
         required: true

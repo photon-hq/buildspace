@@ -8,6 +8,11 @@ on:
         type: boolean
         default: false
         description: 'If true, fail the workflow when the README is outdated. If false (default), only post a warning comment.'
+      integration-selftest-stub:
+        required: false
+        type: boolean
+        default: false
+        description: 'No-op; reserved for CI integration exercises. Remove when no longer needed.'
     secrets:
       OPENAI_API_KEY:
         required: true

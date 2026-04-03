@@ -8,6 +8,8 @@
 
 **Reusable GitHub Actions blocks and workflows for fast shipping teams**
 
+> **Temporary:** CI validation only — remove this callout before merge.
+
 BuildSpace gives you two layers of CI/CD automation:
 
 - **Workflows**: plug-and-play release pipelines. Point a workflow at your repo, provide a few secrets, and you're done. Most teams only need this.

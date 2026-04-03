@@ -1,5 +1,6 @@
 name: CI
 
+# On every PR: reusable check-readme + check-skills (default warning comments; no blocking).
 on:
   pull_request:
 

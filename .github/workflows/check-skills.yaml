@@ -13,6 +13,11 @@ on:
         type: string
         default: 'photon-hq/skills'
         description: 'The skills repository to check against (owner/repo format)'
+      integration-selftest-stub:
+        required: false
+        type: boolean
+        default: false
+        description: 'No-op; reserved for CI integration exercises. Remove when no longer needed.'
     secrets:
       OPENAI_API_KEY:
         required: true
