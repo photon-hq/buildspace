@@ -56,6 +56,11 @@ on:
         required: false
         default: ""
         description: "Formula name in the tap to update (e.g., 'jamf-package-updater'). Required if tap-repo is set."
+      release-title-prefix:
+        type: string
+        required: false
+        default: ""
+        description: "Optional prefix for the GitHub Release title."
       integration-selftest-stub:
         type: boolean
         required: false
@@ -151,7 +156,7 @@ jobs:
         uses: photon-hq/buildspace/.github/blocks/create-github-release@main
         with:
           version: ${{ needs.release-info.outputs.version }}
-          title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
+          title: "${{ inputs.release-title-prefix }}${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
           notes: ${{ needs.release-info.outputs.release_notes }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           artifact-pattern: ${{ inputs.binary-name }}-*
