@@ -13,11 +13,18 @@ inputs:
     description: "Cache SwiftPM dependencies (disable for release builds)"
     required: false
     default: "true"
+  resource-bundles:
+    description: "Space-separated list of SPM resource bundle names to include (e.g. 'Foo_Foo.bundle')"
+    required: false
+    default: ""
 
 outputs:
   binary-path:
     description: "Path to built binary"
     value: ${{ steps.build.outputs.binary-path }}
+  resource-bundles-path:
+    description: "Path to staging directory containing collected resource bundles (empty if none)"
+    value: ${{ steps.build.outputs.resource-bundles-path }}
 
 runs:
   using: composite
@@ -49,3 +56,21 @@ runs:
         swift build -c release
         cp ".build/release/${{ inputs.binary-name }}" artifacts
         echo "binary-path=.build/release/${{ inputs.binary-name }}" >> $GITHUB_OUTPUT
+
+        # ── Collect resource bundles ──
+        BUNDLES_PATH=""
+        if [ -n "${{ inputs.resource-bundles }}" ]; then
+          BUNDLES_PATH="${RUNNER_TEMP}/resource-bundles"
+          mkdir -p "$BUNDLES_PATH"
+          for BUNDLE in ${{ inputs.resource-bundles }}; do
+            SRC=".build/release/${BUNDLE}"
+            if [ -d "$SRC" ]; then
+              cp -R "$SRC" "$BUNDLES_PATH/"
+              echo "Collected resource bundle: ${BUNDLE}"
+            else
+              echo "::error::Resource bundle not found: ${SRC}"
+              exit 1
+            fi
+          done
+        fi
+        echo "resource-bundles-path=${BUNDLES_PATH}" >> $GITHUB_OUTPUT
