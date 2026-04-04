@@ -29,6 +29,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [Package PR Build](#package-pr-build)
   - [Swift Package PR Build](#swift-package-pr-build)
   - [Check README](#check-readme)
+  - [Update Documentation](#update-documentation)
   - [Blocks (Composite Actions)](#blocks-composite-actions)
   - [check-pr-label](#check-pr-label)
   - [check-readme](#check-readme-1)
@@ -44,6 +45,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [publish-crates](#publish-crates)
   - [publish-npm](#publish-npm)
   - [comment-on-pr](#comment-on-pr)
+  - [update-docs](#update-docs)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
 - [License](#license)
@@ -183,10 +185,13 @@ Every workflow needs at least `OPENAI_API_KEY` for AI-powered versioning and rel
 | Secret | Needed for | Where to get it |
 |--------|-----------|-----------------|
 | `OPENAI_API_KEY` | All workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| `ANTHROPIC_API_KEY` | Update Documentation | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 | `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
 | `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
+| `APP_ID` | Update Documentation, protected branches | GitHub App settings |
+| `APP_PRIVATE_KEY` | Update Documentation, protected branches | GitHub App settings |
 
-Add these in your repo's **Settings > Secrets and variables > Actions**.
+Add these in your repo's **Settings > Secrets and variables > Actions**, or set them as **org-level secrets** under `photon-hq` so every repo inherits them automatically via `secrets: inherit`.
 
 ### PR Labels
 
@@ -642,6 +647,45 @@ jobs:
 ```
 
 > To enforce this as a required check, also add `check-readme` as a required status check in your branch protection rules (Settings > Branches > Branch protection rule).
+
+---
+
+### Update Documentation
+
+**File:** `.github/workflows/update-docs.yaml`
+
+Runs when a release is published. Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze the changes between the current and previous release, then submits a PR to the documentation repository with any necessary updates. Focuses on API changes, new features, configuration changes, breaking changes, and deprecations.
+
+The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target docs repo, lets Claude Code read the existing docs and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `service-name` | string | Yes | — | Name of the service being released |
+| `docs-repo` | string | No | `photon-hq/docs` | Target documentation repository (`owner/repo`) |
+| `docs-branch` | string | No | `main` | Base branch of the docs repo |
+
+#### Secrets
+
+Handled automatically. The workflow reads `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` from the `photon-hq` org-level secrets (passed via `secrets: inherit`). It uses the GitHub App credentials internally to mint a short-lived token scoped to the docs repo — individual repos never need to configure these.
+
+#### Example
+
+```yaml
+name: Update Docs on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-docs:
+    uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
+    with:
+      service-name: my-service
+    secrets: inherit
+```
 
 ---
 
@@ -1184,6 +1228,48 @@ Posts or updates a single comment on a pull request. When a `comment-key` is pro
       All checks passed for commit ${{ github.sha }}
 ```
 
+
+---
+
+### update-docs
+
+**Path:** `.github/blocks/update-docs/action.yaml`
+
+Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs Claude Code via `anthropics/claude-code-action@v1` to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow handles token generation automatically from org secrets).
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `service-name` | string | Yes | — | Name of the service that was released |
+| `version` | string | Yes | — | The released version (e.g., `1.2.3`) |
+| `release-notes` | string | Yes | — | Release notes markdown from the release |
+| `changes-diff` | string | Yes | — | Git diff of changes in this release |
+| `docs-repo` | string | No | `photon-hq/docs` | Target docs repository (`owner/repo`) |
+| `docs-branch` | string | No | `main` | Base branch of the docs repo |
+| `anthropic-api-key` | secret | Yes | — | Anthropic API key for Claude Code |
+| `github-token` | secret | Yes | — | GitHub token with write access to the docs repo |
+
+#### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `pr-url` | string | URL of the created PR (empty if no changes needed) |
+| `has-changes` | string | `'true'` or `'false'` whether docs updates were generated |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/update-docs@main
+  with:
+    service-name: my-service
+    version: '1.2.3'
+    release-notes: 'Added new feature X'
+    changes-diff: ${{ steps.diff.outputs.diff }}
+    anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github-token: ${{ steps.app-token.outputs.token }}
+```
+
 </details>
 
 ---
@@ -1210,7 +1296,8 @@ buildspace/
 │   │   ├── swift-build/               # Swift binary builds
 │   │   ├── swift-pkg/                 # macOS .pkg creation
 │   │   ├── sync-crates-version/       # Workspace version sync
-│   │   └── typescript-build/          # TypeScript builds
+│   │   ├── typescript-build/          # TypeScript builds
+│   │   └── update-docs/               # AI docs update via Claude Code
 │   │
 │   └── workflows/                     # Reusable workflows (full pipelines)
 │       ├── check-readme.yaml          # AI README freshness check (PR)
@@ -1222,7 +1309,8 @@ buildspace/
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
-│       └── typescript-service-release.yaml   # Complete TS release pipeline
+│       ├── typescript-service-release.yaml   # Complete TS release pipeline
+│       └── update-docs.yaml                  # AI docs update on release
 ```
 
 ---

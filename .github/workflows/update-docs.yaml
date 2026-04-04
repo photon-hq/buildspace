@@ -1,0 +1,169 @@
+# Reusable workflow: Update Documentation on Release
+#
+# Analyzes release changes using Claude Code and submits a PR
+# to update documentation in the target docs repository.
+#
+# All repos under photon-hq inherit the org-level APP_ID,
+# APP_PRIVATE_KEY, and ANTHROPIC_API_KEY secrets automatically.
+#
+# Usage (from another repository):
+#
+#   name: Update Docs on Release
+#   on:
+#     release:
+#       types: [published]
+#   jobs:
+#     update-docs:
+#       uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
+#       with:
+#         service-name: my-service
+#       secrets: inherit
+
+name: Update Documentation
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        type: string
+        required: true
+        description: "Name of the service being released"
+      docs-repo:
+        type: string
+        required: false
+        default: 'photon-hq/docs'
+        description: "Target documentation repository"
+      docs-branch:
+        type: string
+        required: false
+        default: 'main'
+        description: "Base branch of the docs repo"
+
+jobs:
+  gather-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release-info.outputs.version }}
+      release_notes: ${{ steps.release-info.outputs.release_notes }}
+      changes_diff: ${{ steps.release-info.outputs.changes_diff }}
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Extract release info
+        id: release-info
+        shell: bash
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          # --- Version (strip leading 'v') ---
+          VERSION="${RAW_TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # --- Previous tag & diff ---
+          PREVIOUS_TAG=""
+          FOUND_CURRENT=false
+          while IFS= read -r tag; do
+            if [ "${FOUND_CURRENT}" = true ]; then
+              PREVIOUS_TAG="${tag}"
+              break
+            fi
+            if [ "${tag}" = "${RAW_TAG}" ]; then
+              FOUND_CURRENT=true
+            fi
+          done < <(git tag --sort=-creatordate)
+
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            echo "Generating diff between ${PREVIOUS_TAG} and ${RAW_TAG}"
+            DIFF=$(git diff "${PREVIOUS_TAG}..${RAW_TAG}" 2>/dev/null || echo "")
+          else
+            echo "No previous tag found — generating diff from root"
+            DIFF=$(git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD 2>/dev/null || echo "")
+          fi
+
+          # Use Python to safely write multi-line values to GITHUB_OUTPUT
+          # This avoids heredoc delimiter collisions with arbitrary release notes and diffs
+          export DIFF
+          python3 << 'PYEOF'
+          import os, uuid
+
+          output_file = os.environ["GITHUB_OUTPUT"]
+          release_body = os.environ.get("RELEASE_BODY", "")
+          diff = os.environ.get("DIFF", "")
+
+          # Truncate diff to ~100 000 characters
+          max_chars = 100000
+          if len(diff) > max_chars:
+              diff = diff[:max_chars] + "\n\n... [diff truncated at 100000 characters]"
+
+          def write_multiline(fh, key, value):
+              delim = f"GHDELIM_{uuid.uuid4().hex}"
+              fh.write(f"{key}<<{delim}\n")
+              fh.write(value)
+              if value and not value.endswith("\n"):
+                  fh.write("\n")
+              fh.write(f"{delim}\n")
+
+          with open(output_file, "a") as fh:
+              write_multiline(fh, "release_notes", release_body)
+              write_multiline(fh, "changes_diff", diff)
+          PYEOF
+
+  update-docs:
+    needs: gather-changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # --- Generate a cross-repo token from the org-level GitHub App secrets ---
+      - name: Parse docs repo owner and name
+        id: parse-repo
+        shell: bash
+        run: |
+          DOCS_REPO="${{ inputs.docs-repo }}"
+          echo "owner=${DOCS_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${DOCS_REPO##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.parse-repo.outputs.owner }}
+          repositories: ${{ steps.parse-repo.outputs.name }}
+
+      # --- Run the update-docs block with the generated token ---
+      - name: Update Documentation
+        id: update-docs
+        uses: photon-hq/buildspace/.github/blocks/update-docs@main
+        with:
+          service-name: ${{ inputs.service-name }}
+          version: ${{ needs.gather-changes.outputs.version }}
+          release-notes: ${{ needs.gather-changes.outputs.release_notes }}
+          changes-diff: ${{ needs.gather-changes.outputs.changes_diff }}
+          docs-repo: ${{ inputs.docs-repo }}
+          docs-branch: ${{ inputs.docs-branch }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Summary
+        shell: bash
+        run: |
+          PR_URL="${{ steps.update-docs.outputs.pr-url }}"
+          if [ -n "${PR_URL}" ]; then
+            echo "### ✅ Documentation PR Created" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "A pull request to update documentation for **${{ inputs.service-name }}** v${{ needs.gather-changes.outputs.version }} has been created:" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "🔗 [${PR_URL}](${PR_URL})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ℹ️ No Documentation PR Created" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The update-docs block did not produce a PR for **${{ inputs.service-name }}** v${{ needs.gather-changes.outputs.version }}. This may mean no documentation changes were needed." >> "$GITHUB_STEP_SUMMARY"
+          fi
