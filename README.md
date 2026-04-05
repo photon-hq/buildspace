@@ -188,8 +188,8 @@ Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and relea
 | `ANTHROPIC_API_KEY` | Update Documentation | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 | `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
 | `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
-| `APP_ID` | Update Documentation, protected branches | GitHub App settings |
-| `APP_PRIVATE_KEY` | Update Documentation, protected branches | GitHub App settings |
+| `APP_ID` | Update Documentation (required), release workflows (optional, for protected branches) | GitHub App settings |
+| `APP_PRIVATE_KEY` | Update Documentation (required), release workflows (optional, for protected branches) | GitHub App settings |
 
 Add these in your repo's **Settings > Secrets and variables > Actions**, or set them as **org-level secrets** under `photon-hq` so every repo inherits them automatically via `secrets: inherit`.
 
