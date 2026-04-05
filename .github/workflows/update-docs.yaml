@@ -16,7 +16,7 @@
 #     update-docs:
 #       uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
 #       with:
-#         service-name: my-service
+#         # service-name: my-service  # optional, defaults to repo name
 #         docs-path: advanced-kits/imessage
 #       secrets: inherit
 
@@ -27,8 +27,9 @@ on:
     inputs:
       service-name:
         type: string
-        required: true
-        description: "Name of the service being released"
+        required: false
+        default: '${{ github.event.repository.name }}'
+        description: "Name of the service being released (defaults to repository name)"
       docs-repo:
         type: string
         required: false

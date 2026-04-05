@@ -3,8 +3,9 @@ description: 'Analyze release changes with Claude Code Action and submit a PR to
 
 inputs:
   service-name:
-    description: '[string] Name of the service that was released'
-    required: true
+    description: '[string] Name of the service that was released (defaults to repository name)'
+    required: false
+    default: '${{ github.event.repository.name }}'
   version:
     description: '[string] The released version (e.g., 1.2.3)'
     required: true

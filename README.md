@@ -662,7 +662,7 @@ The workflow automatically generates a cross-repo GitHub App token from the `pho
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `service-name` | string | Yes | — | Name of the service being released |
+| `service-name` | string | No | Repository name | Name of the service being released |
 | `docs-path` | string | Yes | — | Path within the docs repo this service maps to (e.g., `legacy/imessage.mdx` or `advanced-kits/imessage`) |
 | `docs-repo` | string | No | `photon-hq/docs` | Target documentation repository (`owner/repo`) |
 | `docs-branch` | string | No | `main` | Base branch of the docs repo |
@@ -684,7 +684,6 @@ jobs:
   update-docs:
     uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
     with:
-      service-name: my-service
       docs-path: advanced-kits/imessage
     secrets: inherit
 ```
@@ -1243,7 +1242,7 @@ Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to a
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `service-name` | string | Yes | — | Name of the service that was released |
+| `service-name` | string | No | Repository name | Name of the service that was released |
 | `version` | string | Yes | — | The released version (e.g., `1.2.3`) |
 | `release-tag` | string | Yes | — | The raw release tag (e.g., `v1.2.3`). Used for linking back to the release. |
 | `release-notes` | string | Yes | — | Release notes markdown from the release |
@@ -1266,7 +1265,6 @@ Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to a
 ```yaml
 - uses: photon-hq/buildspace/.github/blocks/update-docs@main
   with:
-    service-name: my-service
     version: '1.2.3'
     release-tag: 'v1.2.3'
     release-notes: 'Added new feature X'
