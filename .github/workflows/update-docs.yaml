@@ -16,7 +16,8 @@
 #     update-docs:
 #       uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
 #       with:
-#         service-name: my-service
+#         # service-name: my-service  # optional, defaults to repo name
+#         docs-path: advanced-kits/imessage
 #       secrets: inherit
 
 name: Update Documentation
@@ -26,8 +27,9 @@ on:
     inputs:
       service-name:
         type: string
-        required: true
-        description: "Name of the service being released"
+        required: false
+        default: '${{ github.event.repository.name }}'
+        description: "Name of the service being released (defaults to repository name)"
       docs-repo:
         type: string
         required: false
@@ -38,6 +40,10 @@ on:
         required: false
         default: 'main'
         description: "Base branch of the docs repo"
+      docs-path:
+        type: string
+        required: true
+        description: "Path within the docs repo that this service maps to (e.g., 'legacy/imessage.mdx' or 'advanced-kits/imessage')"
     secrets:
       ANTHROPIC_API_KEY:
         required: true
@@ -171,6 +177,7 @@ jobs:
           changes-diff: ${{ needs.gather-changes.outputs.changes_diff }}
           docs-repo: ${{ inputs.docs-repo }}
           docs-branch: ${{ inputs.docs-branch }}
+          docs-path: ${{ inputs.docs-path }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           release-tag: ${{ needs.gather-changes.outputs.release_tag }}
           github-token: ${{ steps.app-token.outputs.token }}

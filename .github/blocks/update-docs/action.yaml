@@ -3,8 +3,9 @@ description: 'Analyze release changes with Claude Code Action and submit a PR to
 
 inputs:
   service-name:
-    description: '[string] Name of the service that was released'
-    required: true
+    description: '[string] Name of the service that was released (defaults to repository name)'
+    required: false
+    default: '${{ github.event.repository.name }}'
   version:
     description: '[string] The released version (e.g., 1.2.3)'
     required: true
@@ -25,6 +26,9 @@ inputs:
     description: '[string] Base branch of the docs repo'
     required: false
     default: 'main'
+  docs-path:
+    description: '[string] Path within the docs repo that this service maps to (e.g., "legacy/imessage.mdx" or "advanced-kits/imessage"). Tells Claude where to focus updates.'
+    required: true
   anthropic-api-key:
     description: '[secret] Anthropic API key for Claude Code'
     required: true
@@ -103,6 +107,11 @@ runs:
           IMPORTANT: You are working inside a checkout of the documentation repository (${{ inputs.docs-repo }}).
           The working directory is: ${{ steps.clone-docs.outputs.docs-dir }}
 
+          The documentation for this service lives at: ${{ inputs.docs-path }}
+          This may be a single file (e.g., "legacy/imessage.mdx") or a directory (e.g., "advanced-kits/imessage").
+          Focus your updates on this path. You may create new files within this path if needed,
+          but do NOT modify documentation outside of it unless a cross-reference clearly requires it.
+
           I have placed release context files at ${{ steps.write-context.outputs.context-dir }}:
           - release-notes.md  — the release notes for this version
           - changes.diff      — the full git diff of source code changes in this release
@@ -110,8 +119,8 @@ runs:
 
           Your task:
           1. Read the release notes and diff from the context files above
-          2. Explore the documentation repository to understand its structure and style
-          3. Identify any documentation that needs to be created or updated
+          2. Read the existing documentation at ${{ inputs.docs-path }} to understand its current content and style
+          3. Identify any documentation that needs to be created or updated within that path
           4. Make the necessary changes to the documentation files
           5. Focus on: API changes, new features, configuration changes, breaking changes, and deprecations
           6. If no documentation changes are needed, make no changes at all
