@@ -180,11 +180,11 @@ Available versions are listed on the [GitHub Releases](https://github.com/photon
 
 ### Required Secrets
 
-Every workflow needs at least `OPENAI_API_KEY` for AI-powered versioning and release notes. Add additional secrets depending on where you publish:
+Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and release notes. The `update-docs` workflow uses `ANTHROPIC_API_KEY` instead. Add secrets depending on which workflows you use:
 
 | Secret | Needed for | Where to get it |
 |--------|-----------|-----------------|
-| `OPENAI_API_KEY` | All workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| `OPENAI_API_KEY` | Release workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | `ANTHROPIC_API_KEY` | Update Documentation | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 | `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
 | `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
@@ -1243,6 +1243,7 @@ Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to a
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Name of the service that was released |
 | `version` | string | Yes | — | The released version (e.g., `1.2.3`) |
+| `release-tag` | string | Yes | — | The raw release tag (e.g., `v1.2.3`). Used for linking back to the release. |
 | `release-notes` | string | Yes | — | Release notes markdown from the release |
 | `changes-diff` | string | Yes | — | Git diff of changes in this release |
 | `docs-repo` | string | No | `photon-hq/docs` | Target docs repository (`owner/repo`) |
@@ -1264,6 +1265,7 @@ Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to a
   with:
     service-name: my-service
     version: '1.2.3'
+    release-tag: 'v1.2.3'
     release-notes: 'Added new feature X'
     changes-diff: ${{ steps.diff.outputs.diff }}
     anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

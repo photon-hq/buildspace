@@ -38,6 +38,16 @@ on:
         required: false
         default: 'main'
         description: "Base branch of the docs repo"
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+        description: "Anthropic API key for Claude Code (org secret)"
+      APP_ID:
+        required: true
+        description: "GitHub App ID for creating PRs on the docs repo (org secret)"
+      APP_PRIVATE_KEY:
+        required: true
+        description: "GitHub App private key (org secret)"
 
 jobs:
   gather-changes:
@@ -46,6 +56,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.release-info.outputs.version }}
+      release_tag: ${{ steps.release-info.outputs.release_tag }}
       release_notes: ${{ steps.release-info.outputs.release_notes }}
       changes_diff: ${{ steps.release-info.outputs.changes_diff }}
     steps:
@@ -61,9 +72,15 @@ jobs:
           RAW_TAG: ${{ github.event.release.tag_name }}
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          # --- Version (strip leading 'v') ---
+          # --- Validate release context ---
+          if [ -z "${RAW_TAG}" ]; then
+            echo "::error::github.event.release.tag_name is empty. This workflow must be triggered by a release event."
+            exit 1
+          fi
+
           VERSION="${RAW_TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
 
           # --- Previous tag & diff ---
           PREVIOUS_TAG=""
@@ -78,12 +95,17 @@ jobs:
             fi
           done < <(git tag --sort=-creatordate)
 
+          if [ "${FOUND_CURRENT}" = false ]; then
+            echo "::error::Tag '${RAW_TAG}' not found in the repository. Ensure fetch-depth: 0 includes all tags."
+            exit 1
+          fi
+
           if [ -n "${PREVIOUS_TAG}" ]; then
             echo "Generating diff between ${PREVIOUS_TAG} and ${RAW_TAG}"
-            DIFF=$(git diff "${PREVIOUS_TAG}..${RAW_TAG}" 2>/dev/null || echo "")
+            DIFF=$(git diff "${PREVIOUS_TAG}..${RAW_TAG}")
           else
             echo "No previous tag found — generating diff from root"
-            DIFF=$(git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD 2>/dev/null || echo "")
+            DIFF=$(git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD)
           fi
 
           # Use Python to safely write multi-line values to GITHUB_OUTPUT
@@ -150,6 +172,7 @@ jobs:
           docs-repo: ${{ inputs.docs-repo }}
           docs-branch: ${{ inputs.docs-branch }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          release-tag: ${{ needs.gather-changes.outputs.release_tag }}
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Summary
