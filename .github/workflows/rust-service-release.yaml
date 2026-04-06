@@ -65,10 +65,10 @@ on:
         description: "Crates.io API token (required if crates-release)"
       APP_ID:
         required: false
-        description: "GitHub App ID for pushing to protected branches"
+        description: "GitHub App ID for pushing to protected branches and triggering downstream workflows"
       APP_PRIVATE_KEY:
         required: false
-        description: "GitHub App private key for pushing to protected branches"
+        description: "GitHub App private key for pushing to protected branches and triggering downstream workflows"
 
 jobs:
   check-labels:
@@ -150,6 +150,8 @@ jobs:
           notes: ${{ needs.release-info.outputs.release_notes }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           artifact-pattern: ${{ inputs.binary-name }}-*
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   crates-sync-version:
     needs: [check-labels, release-info]
