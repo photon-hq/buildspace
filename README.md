@@ -30,6 +30,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [Swift Package PR Build](#swift-package-pr-build)
   - [Check README](#check-readme)
   - [Update Documentation](#update-documentation)
+  - [Update Skills](#update-skills)
   - [Blocks (Composite Actions)](#blocks-composite-actions)
   - [check-pr-label](#check-pr-label)
   - [check-readme](#check-readme-1)
@@ -46,6 +47,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [publish-npm](#publish-npm)
   - [comment-on-pr](#comment-on-pr)
   - [update-docs](#update-docs)
+  - [update-skills](#update-skills-1)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
 - [License](#license)
@@ -67,6 +69,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
 | Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
+| Any project — update skills docs on release | [`update-skills`](#update-skills) | Release (via caller) |
 
 ### Rust Project
 
@@ -180,12 +183,12 @@ Available versions are listed on the [GitHub Releases](https://github.com/photon
 
 ### Required Secrets
 
-Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and release notes. The `update-docs` workflow uses `ANTHROPIC_API_KEY` instead. Add secrets depending on which workflows you use:
+Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and release notes. The `update-docs` and `update-skills` workflows use `ANTHROPIC_API_KEY` instead. Add secrets depending on which workflows you use:
 
 | Secret | Needed for | Where to get it |
 |--------|-----------|-----------------|
 | `OPENAI_API_KEY` | Release workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| `ANTHROPIC_API_KEY` | Update Documentation | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
+| `ANTHROPIC_API_KEY` | Update Documentation, Update Skills | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 | `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
 | `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
 | `APP_ID` | Update Documentation (required), release workflows (optional, for protected branches) | GitHub App settings |
@@ -685,6 +688,46 @@ jobs:
     uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
     with:
       docs-path: advanced-kits/imessage
+    secrets: inherit
+```
+
+### Update Skills
+
+**File:** `.github/workflows/update-skills.yaml`
+
+Runs when a release is published. Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze the changes between the current and previous release, then submits a PR to the skills repository (`photon-hq/skills`) with updated `SKILL.md` files. The caller controls whether skills actually need updating via the `skills-need-update` input — when `false`, the workflow exits early without running AI or cloning the skills repo.
+
+The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target skills repo, lets Claude Code read the existing skills and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `skills-need-update` | boolean | No | `false` | Whether this release introduces changes that should be reflected in the skills repo. When `false`, the workflow exits early. |
+| `service-name` | string | No | Repository name | Name of the service being released |
+| `skills-path` | string | Yes | — | Path within the skills repo that this service maps to (e.g., `skills/buildspace-ci-cd` or `skills/imessage`) |
+| `skills-repo` | string | No | `photon-hq/skills` | Target skills repository (`owner/repo`) |
+| `skills-branch` | string | No | `main` | Base branch of the skills repo |
+
+#### Secrets
+
+Handled automatically. The workflow reads `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` from the `photon-hq` org-level secrets (passed via `secrets: inherit`). It uses the GitHub App credentials internally to mint a short-lived token scoped to the skills repo — individual repos never need to configure these.
+
+#### Example
+
+```yaml
+name: Update Skills on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-skills:
+    uses: photon-hq/buildspace/.github/workflows/update-skills.yaml@main
+    with:
+      skills-need-update: true
+      skills-path: skills/my-service
     secrets: inherit
 ```
 
@@ -1274,6 +1317,48 @@ Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to a
     github-token: ${{ steps.app-token.outputs.token }}
 ```
 
+### update-skills
+
+**Path:** `.github/blocks/update-skills/action.yaml`
+
+Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze release changes and submit a PR to a skills repository. Clones the skills repo, runs Claude Code via `anthropics/claude-code-action@v1` to identify and update relevant `SKILL.md` files, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the skills repo (the `update-skills` workflow handles token generation automatically from org secrets).
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `service-name` | string | No | Repository name | Name of the service that was released |
+| `version` | string | Yes | — | The released version (e.g., `1.2.3`) |
+| `release-tag` | string | Yes | — | The raw release tag (e.g., `v1.2.3`). Used for linking back to the release. |
+| `release-notes` | string | Yes | — | Release notes markdown from the release |
+| `changes-diff` | string | Yes | — | Git diff of changes in this release |
+| `skills-path` | string | Yes | — | Path within the skills repo this service maps to (e.g., `skills/buildspace-ci-cd` or `skills/imessage`) |
+| `skills-repo` | string | No | `photon-hq/skills` | Target skills repository (`owner/repo`) |
+| `skills-branch` | string | No | `main` | Base branch of the skills repo |
+| `anthropic-api-key` | secret | Yes | — | Anthropic API key for Claude Code |
+| `github-token` | secret | Yes | — | GitHub token with write access to the skills repo |
+
+#### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `pr-url` | string | URL of the created PR (empty if no changes needed) |
+| `has-changes` | string | `'true'` or `'false'` whether skills updates were generated |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/update-skills@main
+  with:
+    version: '1.2.3'
+    release-tag: 'v1.2.3'
+    release-notes: 'Added new feature X'
+    changes-diff: ${{ steps.diff.outputs.diff }}
+    skills-path: skills/my-service
+    anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    github-token: ${{ steps.app-token.outputs.token }}
+```
+
 </details>
 
 ---
@@ -1301,7 +1386,8 @@ buildspace/
 │   │   ├── swift-pkg/                 # macOS .pkg creation
 │   │   ├── sync-crates-version/       # Workspace version sync
 │   │   ├── typescript-build/          # TypeScript builds
-│   │   └── update-docs/               # AI docs update via Claude Code
+│   │   ├── update-docs/               # AI docs update via Claude Code
+│   │   └── update-skills/             # AI skills update via Claude Code
 │   │
 │   └── workflows/                     # Reusable workflows (full pipelines)
 │       ├── check-readme.yaml          # AI README freshness check (PR)
@@ -1314,7 +1400,8 @@ buildspace/
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
 │       ├── typescript-service-release.yaml   # Complete TS release pipeline
-│       └── update-docs.yaml                  # AI docs update on release
+│       ├── update-docs.yaml                  # AI docs update on release
+│       └── update-skills.yaml                # AI skills update on release
 ```
 
 ---

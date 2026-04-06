@@ -1,0 +1,207 @@
+# Reusable workflow: Update Skills Documentation on Release
+#
+# Analyzes release changes using Claude Code and submits a PR
+# to update skills documentation in the target skills repository.
+#
+# The caller controls whether skills actually need updating via
+# the `skills-need-update` input — this lets the calling workflow
+# skip the expensive AI step entirely when the release is irrelevant
+# to skills (e.g., CI-only changes).
+#
+# All repos under photon-hq inherit the org-level APP_ID,
+# APP_PRIVATE_KEY, and ANTHROPIC_API_KEY secrets automatically.
+#
+# Usage (from another repository):
+#
+#   name: Update Skills on Release
+#   on:
+#     release:
+#       types: [published]
+#   jobs:
+#     update-skills:
+#       uses: photon-hq/buildspace/.github/workflows/update-skills.yaml@main
+#       with:
+#         skills-need-update: true
+#         skills-path: skills/my-service
+#       secrets: inherit
+
+name: Update Skills
+
+on:
+  workflow_call:
+    inputs:
+      skills-need-update:
+        type: boolean
+        required: false
+        default: false
+        description: "Whether this release introduces changes that should be reflected in the skills repo. When false, the workflow exits early."
+      service-name:
+        type: string
+        required: false
+        default: '${{ github.event.repository.name }}'
+        description: "Name of the service being released (defaults to repository name)"
+      skills-path:
+        type: string
+        required: true
+        description: "Path within the skills repo that this service maps to (e.g., 'skills/buildspace-ci-cd' or 'skills/imessage'). Tells Claude where to focus updates."
+      skills-repo:
+        type: string
+        required: false
+        default: 'photon-hq/skills'
+        description: "Target skills repository (owner/repo)"
+      skills-branch:
+        type: string
+        required: false
+        default: 'main'
+        description: "Base branch of the skills repo"
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+        description: "Anthropic API key for Claude Code (org secret)"
+      APP_ID:
+        required: true
+        description: "GitHub App ID for creating PRs on the skills repo (org secret)"
+      APP_PRIVATE_KEY:
+        required: true
+        description: "GitHub App private key (org secret)"
+
+jobs:
+  gather-changes:
+    if: inputs.skills-need-update
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release-info.outputs.version }}
+      release_tag: ${{ steps.release-info.outputs.release_tag }}
+      release_notes: ${{ steps.release-info.outputs.release_notes }}
+      changes_diff: ${{ steps.release-info.outputs.changes_diff }}
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Extract release info
+        id: release-info
+        shell: bash
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          # --- Validate release context ---
+          if [ -z "${RAW_TAG}" ]; then
+            echo "::error::github.event.release.tag_name is empty. This workflow must be triggered by a release event."
+            exit 1
+          fi
+
+          VERSION="${RAW_TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+
+          # --- Previous tag & diff ---
+          PREVIOUS_TAG=""
+          FOUND_CURRENT=false
+          while IFS= read -r tag; do
+            if [ "${FOUND_CURRENT}" = true ]; then
+              PREVIOUS_TAG="${tag}"
+              break
+            fi
+            if [ "${tag}" = "${RAW_TAG}" ]; then
+              FOUND_CURRENT=true
+            fi
+          done < <(git tag --sort=-creatordate)
+
+          if [ "${FOUND_CURRENT}" = false ]; then
+            echo "::error::Tag '${RAW_TAG}' not found in the repository. Ensure fetch-depth: 0 includes all tags."
+            exit 1
+          fi
+
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            echo "Generating diff between ${PREVIOUS_TAG} and ${RAW_TAG}"
+            DIFF=$(git diff "${PREVIOUS_TAG}..${RAW_TAG}")
+          else
+            echo "No previous tag found — generating diff from root"
+            DIFF=$(git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD)
+          fi
+
+          # Use Python to safely write multi-line values to GITHUB_OUTPUT
+          export DIFF
+          python3 << 'PYEOF'
+          import os, uuid
+
+          output_file = os.environ["GITHUB_OUTPUT"]
+          release_body = os.environ.get("RELEASE_BODY", "")
+          diff = os.environ.get("DIFF", "")
+
+          # Truncate diff to ~100 000 characters
+          max_chars = 100000
+          if len(diff) > max_chars:
+              diff = diff[:max_chars] + "\n\n... [diff truncated at 100000 characters]"
+
+          def write_multiline(fh, key, value):
+              delim = f"GHDELIM_{uuid.uuid4().hex}"
+              fh.write(f"{key}<<{delim}\n")
+              fh.write(value)
+              if value and not value.endswith("\n"):
+                  fh.write("\n")
+              fh.write(f"{delim}\n")
+
+          with open(output_file, "a") as fh:
+              write_multiline(fh, "release_notes", release_body)
+              write_multiline(fh, "changes_diff", diff)
+          PYEOF
+
+  update-skills:
+    needs: gather-changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Parse skills repo owner and name
+        id: parse-repo
+        shell: bash
+        run: |
+          SKILLS_REPO="${{ inputs.skills-repo }}"
+          echo "owner=${SKILLS_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${SKILLS_REPO##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ steps.parse-repo.outputs.owner }}
+          repositories: ${{ steps.parse-repo.outputs.name }}
+
+      - name: Update Skills
+        id: update-skills
+        uses: photon-hq/buildspace/.github/blocks/update-skills@main
+        with:
+          service-name: ${{ inputs.service-name }}
+          version: ${{ needs.gather-changes.outputs.version }}
+          release-tag: ${{ needs.gather-changes.outputs.release_tag }}
+          release-notes: ${{ needs.gather-changes.outputs.release_notes }}
+          changes-diff: ${{ needs.gather-changes.outputs.changes_diff }}
+          skills-path: ${{ inputs.skills-path }}
+          skills-repo: ${{ inputs.skills-repo }}
+          skills-branch: ${{ inputs.skills-branch }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Summary
+        shell: bash
+        run: |
+          PR_URL="${{ steps.update-skills.outputs.pr-url }}"
+          if [ -n "${PR_URL}" ]; then
+            echo "### Skills PR Created" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "A pull request to update skills for **${{ inputs.service-name }}** v${{ needs.gather-changes.outputs.version }} has been created:" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "[${PR_URL}](${PR_URL})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### No Skills PR Created" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No skills changes were needed for **${{ inputs.service-name }}** v${{ needs.gather-changes.outputs.version }}." >> "$GITHUB_STEP_SUMMARY"
+          fi
