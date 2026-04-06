@@ -61,10 +61,10 @@ on:
         description: "NPM token (required for npm publish)"
       APP_ID:
         required: false
-        description: "GithHub App ID only needed if you have protected branches that need to be pushed to"
+        description: "GitHub App ID for pushing to protected branches and triggering downstream workflows"
       APP_PRIVATE_KEY:
         required: false
-        description: "GitHub App private key for pushing to protected branches"
+        description: "GitHub App private key for pushing to protected branches and triggering downstream workflows"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -141,6 +141,8 @@ jobs:
           title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
           notes: ${{ needs.release-info.outputs.release_notes }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   npm-publish:
     needs: [check-labels, release-info, bump-version]
