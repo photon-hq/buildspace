@@ -28,6 +28,14 @@ inputs:
     description: '[string] Pattern to match artifacts to attach (leave empty for none)'
     required: false
     default: ''
+  app-id:
+    description: '[secret] GitHub App ID for creating releases that trigger downstream workflows (optional)'
+    required: false
+    default: ''
+  app-private-key:
+    description: '[secret] GitHub App private key for creating releases that trigger downstream workflows (optional)'
+    required: false
+    default: ''
 
 outputs:
   url:
@@ -40,6 +48,16 @@ outputs:
 runs:
   using: 'composite'
   steps:
+    - name: Generate App Token
+      id: app-token
+      if: ${{ inputs.app-id != '' && inputs.app-private-key != '' }}
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+
     - name: Download artifacts
       if: inputs.artifact-pattern != ''
       uses: actions/download-artifact@v4
@@ -56,12 +74,11 @@ runs:
         name: ${{ inputs.title }}
         body: |
           ${{ inputs.notes }}
-          
+
           ---
           **Version:** ${{ inputs.version }}
         draft: ${{ inputs.draft }}
         prerelease: ${{ inputs.prerelease }}
         files: ${{ inputs.artifact-pattern != '' && 'artifacts/*' || '' }}
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
+        token: ${{ steps.app-token.outputs.token || github.token }}
 

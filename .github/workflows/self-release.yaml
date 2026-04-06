@@ -124,3 +124,5 @@ jobs:
           version: ${{ needs.release-info.outputs.version }}
           title: "buildspace v${{ needs.release-info.outputs.version }}"
           notes: ${{ needs.release-info.outputs.release_notes }}
+          app-id: ${{ secrets.APP_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
