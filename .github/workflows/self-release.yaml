@@ -126,3 +126,14 @@ jobs:
           notes: ${{ needs.release-info.outputs.release_notes }}
           app-id: ${{ secrets.APP_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  update-skills:
+    needs: [check-labels, release-info, github-release]
+    if: fromJSON(needs.check-labels.outputs.labels).release
+    uses: ./.github/workflows/update-skills.yaml
+    with:
+      skills-need-update: true
+      skills-path: skills/buildspace
+      release-tag: v${{ needs.release-info.outputs.version }}
+      release-notes: ${{ needs.release-info.outputs.release_notes }}
+    secrets: inherit
