@@ -11,7 +11,7 @@
 # All repos under photon-hq inherit the org-level APP_ID,
 # APP_PRIVATE_KEY, and ANTHROPIC_API_KEY secrets automatically.
 #
-# Usage (from another repository):
+# Usage (from another repository, triggered by a release event):
 #
 #   name: Update Skills on Release
 #   on:
@@ -24,6 +24,18 @@
 #         skills-need-update: true
 #         skills-path: skills/my-service
 #       secrets: inherit
+#
+# When calling from a non-release context (e.g., a push-triggered workflow),
+# pass release-tag and release-notes to override the release event context:
+#
+#   update-skills:
+#     uses: ./.github/workflows/update-skills.yaml
+#     with:
+#       skills-need-update: true
+#       skills-path: skills/my-service
+#       release-tag: v1.2.3
+#       release-notes: ${{ needs.some-job.outputs.notes }}
+#     secrets: inherit
 
 name: Update Skills
 
@@ -49,6 +61,16 @@ on:
         required: false
         default: 'photon-hq/skills'
         description: "Target skills repository (owner/repo)"
+      release-tag:
+        type: string
+        required: false
+        default: ''
+        description: "Override for the release tag (e.g., 'v1.2.3'). When empty, falls back to github.event.release.tag_name."
+      release-notes:
+        type: string
+        required: false
+        default: ''
+        description: "Override for the release notes markdown. When empty, falls back to github.event.release.body."
       skills-branch:
         type: string
         required: false
@@ -86,8 +108,8 @@ jobs:
         id: release-info
         shell: bash
         env:
-          RAW_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_BODY: ${{ github.event.release.body }}
+          RAW_TAG: ${{ inputs.release-tag || github.event.release.tag_name }}
+          RELEASE_BODY: ${{ inputs.release-notes || github.event.release.body }}
         run: |
           # --- Validate release context ---
           if [ -z "${RAW_TAG}" ]; then
