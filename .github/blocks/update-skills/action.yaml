@@ -98,7 +98,7 @@ runs:
 
     - name: Install Claude Code CLI
       shell: bash
-      run: npm install -g @anthropic-ai/claude-code
+      run: npm install -g @anthropic-ai/claude-code@latest
 
     - name: Write Claude prompt
       id: write-prompt
@@ -178,6 +178,7 @@ Guidelines:
       run: |
         cat "${PROMPT_FILE}" | claude \
           --print \
+          --permission-mode acceptEdits \
           --allowedTools "Edit,Write,Read,Bash(find),Bash(ls),Bash(cat),Bash(grep),Bash(head),Bash(tail)" \
           --cwd "${SKILLS_DIR}"
 
