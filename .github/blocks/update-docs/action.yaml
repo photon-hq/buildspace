@@ -166,11 +166,11 @@ runs:
         DOCS_DIR: ${{ steps.clone-docs.outputs.docs-dir }}
         PROMPT_FILE: ${{ steps.write-prompt.outputs.prompt-file }}
       run: |
+        cd "${DOCS_DIR}"
         cat "${PROMPT_FILE}" | claude \
           --print \
           --permission-mode acceptEdits \
-          --allowedTools "Edit,Write,Read,Bash(find),Bash(ls),Bash(cat),Bash(grep),Bash(head),Bash(tail)" \
-          --cwd "${DOCS_DIR}"
+          --allowedTools "Edit,Write,Read,Bash(find),Bash(ls),Bash(cat),Bash(grep),Bash(head),Bash(tail)"
 
     - name: Remove context and prompt files
       shell: bash
