@@ -657,7 +657,7 @@ jobs:
 
 **File:** `.github/workflows/update-docs.yaml`
 
-Runs when a release is published. Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze the changes between the current and previous release, then submits a PR to the documentation repository with any necessary updates. Focuses on API changes, new features, configuration changes, breaking changes, and deprecations.
+Runs when a release is published. Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze the changes between the current and previous release, then submits a PR to the documentation repository with any necessary updates. Focuses on API changes, new features, configuration changes, breaking changes, and deprecations.
 
 The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target docs repo, lets Claude Code read the existing docs and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
 
@@ -695,7 +695,7 @@ jobs:
 
 **File:** `.github/workflows/update-skills.yaml`
 
-Runs when a release is published. Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze the changes between the current and previous release, then submits a PR to the skills repository (`photon-hq/skills`) with updated `SKILL.md` files. The caller controls whether skills actually need updating via the `skills-need-update` input — when `false`, the workflow exits early without running AI or cloning the skills repo.
+Runs when a release is published. Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze the changes between the current and previous release, then submits a PR to the skills repository (`photon-hq/skills`) with updated `SKILL.md` files. The caller controls whether skills actually need updating via the `skills-need-update` input — when `false`, the workflow exits early without running AI or cloning the skills repo.
 
 The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target skills repo, lets Claude Code read the existing skills and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
 
@@ -1279,7 +1279,7 @@ Posts or updates a single comment on a pull request. When a `comment-key` is pro
 
 **Path:** `.github/blocks/update-docs/action.yaml`
 
-Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs Claude Code via `anthropics/claude-code-action@v1` to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow handles token generation automatically from org secrets).
+Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs the Claude Code CLI to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow handles token generation automatically from org secrets).
 
 #### Inputs
 
@@ -1321,7 +1321,7 @@ Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to a
 
 **Path:** `.github/blocks/update-skills/action.yaml`
 
-Uses [Claude Code Action](https://github.com/anthropics/claude-code-action) to analyze release changes and submit a PR to a skills repository. Clones the skills repo, runs Claude Code via `anthropics/claude-code-action@v1` to identify and update relevant `SKILL.md` files, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the skills repo (the `update-skills` workflow handles token generation automatically from org secrets).
+Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a skills repository. Clones the skills repo, runs the Claude Code CLI to identify and update relevant `SKILL.md` files, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the skills repo (the `update-skills` workflow handles token generation automatically from org secrets).
 
 #### Inputs
 
