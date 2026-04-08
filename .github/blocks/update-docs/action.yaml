@@ -169,6 +169,7 @@ runs:
         cd "${DOCS_DIR}"
         cat "${PROMPT_FILE}" | claude \
           --print \
+          --model claude-opus-4-6 \
           --permission-mode acceptEdits \
           --allowedTools "Edit,Write,Read,Bash(find),Bash(ls),Bash(cat),Bash(grep),Bash(head),Bash(tail)"
 
