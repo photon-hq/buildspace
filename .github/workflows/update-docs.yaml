@@ -65,11 +65,40 @@ jobs:
       release_tag: ${{ steps.release-info.outputs.release_tag }}
       release_notes: ${{ steps.release-info.outputs.release_notes }}
       changes_diff: ${{ steps.release-info.outputs.changes_diff }}
+      reviewers: ${{ steps.codeowners.outputs.reviewers }}
     steps:
       - name: Checkout source repo
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: Extract reviewers from CODEOWNERS
+        id: codeowners
+        shell: bash
+        run: |
+          # Look for CODEOWNERS in standard locations
+          CODEOWNERS_FILE=""
+          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+            if [ -f "${path}" ]; then
+              CODEOWNERS_FILE="${path}"
+              break
+            fi
+          done
+
+          if [ -z "${CODEOWNERS_FILE}" ]; then
+            echo "No CODEOWNERS file found"
+            echo "reviewers=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract unique @usernames (not @org/team), strip the @, comma-separate
+          REVIEWERS="$(grep -oE '@[a-zA-Z0-9_-]+' "${CODEOWNERS_FILE}" \
+            | sort -u \
+            | sed 's/^@//' \
+            | paste -sd ',' -)"
+
+          echo "Found reviewers: ${REVIEWERS}"
+          echo "reviewers=${REVIEWERS}" >> "$GITHUB_OUTPUT"
 
       - name: Extract release info
         id: release-info
@@ -181,6 +210,35 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           release-tag: ${{ needs.gather-changes.outputs.release_tag }}
           github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Request reviewers from source repo CODEOWNERS
+        if: steps.update-docs.outputs.pr-url != '' && needs.gather-changes.outputs.reviewers != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DOCS_REPO: ${{ inputs.docs-repo }}
+          PR_URL: ${{ steps.update-docs.outputs.pr-url }}
+          REVIEWERS: ${{ needs.gather-changes.outputs.reviewers }}
+        run: |
+          # Extract PR number from URL
+          PR_NUMBER="$(echo "${PR_URL}" | grep -oE '[0-9]+$')"
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "Could not extract PR number from ${PR_URL}"
+            exit 0
+          fi
+
+          IFS=',' read -ra REVIEWER_LIST <<< "${REVIEWERS}"
+          REVIEWER_FLAGS=""
+          for r in "${REVIEWER_LIST[@]}"; do
+            r="$(echo "${r}" | xargs)"
+            if [ -n "${r}" ]; then
+              REVIEWER_FLAGS="${REVIEWER_FLAGS} --add-reviewer ${r}"
+            fi
+          done
+
+          if [ -n "${REVIEWER_FLAGS}" ]; then
+            gh pr edit "${PR_NUMBER}" --repo "${DOCS_REPO}" ${REVIEWER_FLAGS} || true
+          fi
 
       - name: Summary
         shell: bash
