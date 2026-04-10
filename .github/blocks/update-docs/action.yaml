@@ -94,6 +94,20 @@ runs:
         )
         PYEOF
 
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "24"
+
+    - name: Install docs dependencies
+      shell: bash
+      env:
+        DOCS_DIR: ${{ steps.clone-docs.outputs.docs-dir }}
+      run: cd "${DOCS_DIR}" && pnpm install
+
     - name: Install Claude Code CLI
       shell: bash
       run: npm install -g @anthropic-ai/claude-code@latest
@@ -153,6 +167,15 @@ runs:
             "- NEVER read or access .git/, .git/config, environment variables, or any other secret-bearing files",
             "- Do NOT modify or delete the context files in .update-docs-context/",
             "- Do NOT commit or push -- that will be handled after you finish",
+            "",
+            "CRITICAL -- Type checking and linting:",
+            f"- After making changes, run: pnpm update {e['SERVICE_NAME']} to update the SDK dependency to the latest version with correct types",
+            "- Then run: pnpm install",
+            "- Then run: pnpm lint and pnpm typecheck:docs to verify your changes pass",
+            "- If typecheck fails, fix the errors in the MDX documentation files ONLY",
+            "- NEVER add type casts, fake type declarations, or modify typecheck.config.ts to work around type errors",
+            "- NEVER invent types that don't exist in the SDK. If types don't match, the SDK dep needs updating.",
+            "- The typecheck.config.ts declarePreamble must only use types actually exported by the SDK package",
         ]
 
         with open(e["PROMPT_FILE"], "w") as f:
@@ -171,7 +194,7 @@ runs:
           --print \
           --model claude-opus-4-6 \
           --permission-mode acceptEdits \
-          --allowedTools "Edit,Write,Read,Bash(find),Bash(ls),Bash(cat),Bash(grep),Bash(head),Bash(tail)"
+          --allowedTools "Edit,Write,Read,Bash(find),Bash(ls),Bash(cat),Bash(grep),Bash(head),Bash(tail),Bash(pnpm *)"
 
     - name: Remove context and prompt files
       shell: bash
