@@ -96,6 +96,8 @@ runs:
 
     - name: Setup pnpm
       uses: pnpm/action-setup@v4
+      with:
+        package_json_file: ${{ steps.clone-docs.outputs.docs-dir }}/package.json
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
