@@ -63,7 +63,8 @@ runs:
       run: |
         VERSION="${{ inputs.version }}"
         echo "Updating package.json to version ${VERSION}..."
-        npm version ${VERSION} --no-git-tag-version --allow-same-version
+        jq --arg ver "$VERSION" '.version = $ver' package.json > package.json.tmp
+        mv package.json.tmp package.json
         echo "Updated to version ${VERSION}"
 
     - name: Commit and push
