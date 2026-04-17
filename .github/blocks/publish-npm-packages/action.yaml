@@ -83,10 +83,10 @@ runs:
 
           if [ "$DRY_RUN" = "true" ]; then
             echo "Dry run: would publish $NAME with tag $TAG"
-            (cd "$PKG_PATH" && npm publish --tag "$TAG" --access public --dry-run)
+            (cd "$PKG_PATH" && bun publish --tag "$TAG" --access public --dry-run)
           else
             echo "Publishing $NAME with tag $TAG"
-            (cd "$PKG_PATH" && npm publish --tag "$TAG" --access public)
+            (cd "$PKG_PATH" && bun publish --tag "$TAG" --access public)
           fi
 
           echo ""
