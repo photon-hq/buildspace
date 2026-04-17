@@ -26,6 +26,10 @@ inputs:
     description: "[boolean] Run in dry-run mode (no actual publishing)"
     required: false
     default: 'false'
+  publish-command:
+    description: "[string] Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). The --tag, --access, and --dry-run flags are appended automatically."
+    required: false
+    default: 'npm publish'
   npm-token:
     description: 'NPM authentication token'
     required: true
@@ -60,7 +64,7 @@ runs:
       run: |
         if [ "${{ inputs.dry-run }}" == "true" ]; then
           echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
-          npm publish --tag ${{ inputs.tag }} --access public --dry-run
+          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --dry-run
         else
-          npm publish --tag ${{ inputs.tag }} --access public
+          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public
         fi
