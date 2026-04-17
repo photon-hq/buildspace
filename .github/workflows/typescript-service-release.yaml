@@ -32,6 +32,11 @@ on:
         required: false
         default: "bun run build"
         description: "Build command"
+      publish-command:
+        type: string
+        required: false
+        default: "npm publish"
+        description: "Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). The --tag, --access, and --dry-run flags are appended automatically."
       labels-to-check:
         type: string
         required: false
@@ -162,5 +167,6 @@ jobs:
           tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
           working-directory: ${{ inputs.working-directory }}
           build-command: ${{ inputs.build-command }}
+          publish-command: ${{ inputs.publish-command }}
           dry-run: ${{ inputs.dry-run }}
           npm-token: ${{ secrets.NPM_TOKEN }}
