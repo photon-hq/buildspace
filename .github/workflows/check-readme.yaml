@@ -8,6 +8,11 @@ on:
         type: boolean
         default: false
         description: 'If true, fail the workflow when the README is outdated. If false (default), only post a warning comment.'
+      use-blacksmith:
+        required: false
+        type: boolean
+        default: false
+        description: 'Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest.'
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -15,7 +20,7 @@ on:
 
 jobs:
   check-readme:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: write

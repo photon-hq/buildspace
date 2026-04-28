@@ -52,6 +52,11 @@ on:
         required: false
         default: false
         description: "Run in dry-run mode (no actual publishing)"
+      use-blacksmith:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -72,7 +77,7 @@ concurrency:
 
 jobs:
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       pull-requests: read
       contents: read
@@ -88,7 +93,7 @@ jobs:
   release-info:
     needs: check-labels
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -109,7 +114,7 @@ jobs:
   bump-version:
     needs: [check-labels, release-info]
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -130,7 +135,7 @@ jobs:
   github-release:
     needs: [check-labels, release-info, bump-version]
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -147,7 +152,7 @@ jobs:
   npm-publish:
     needs: [check-labels, release-info, bump-version]
     if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.no-npm-publish != true
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:

@@ -56,6 +56,11 @@ on:
         required: false
         default: false
         description: "Run in dry-run mode (no actual publishing)"
+      use-blacksmith:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -76,7 +81,7 @@ concurrency:
 
 jobs:
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       pull-requests: read
       contents: read
@@ -92,7 +97,7 @@ jobs:
   detect-changes:
     needs: check-labels
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release || inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents:  read
     outputs:
@@ -113,7 +118,7 @@ jobs:
   bump-versions:
     needs: [check-labels, detect-changes]
     if: needs.detect-changes.outputs.has-changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     outputs:
@@ -140,7 +145,7 @@ jobs:
 
   github-release:
     needs: [check-labels, detect-changes, bump-versions]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -172,7 +177,7 @@ jobs:
 
   npm-publish:
     needs: [check-labels, detect-changes, bump-versions]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:

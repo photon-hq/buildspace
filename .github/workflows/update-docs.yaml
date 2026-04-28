@@ -44,6 +44,11 @@ on:
         type: string
         required: true
         description: "Path within the docs repo that this service maps to (e.g., 'legacy/imessage.mdx' or 'advanced-kits/imessage')"
+      use-blacksmith:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
     secrets:
       ANTHROPIC_API_KEY:
         required: true
@@ -57,7 +62,7 @@ on:
 
 jobs:
   gather-changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -144,7 +149,7 @@ jobs:
 
   update-docs:
     needs: gather-changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     steps:
