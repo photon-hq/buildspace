@@ -33,6 +33,11 @@ on:
         required: false
         default: ""
         description: "Package name to match in Jamf Pro. If omitted, the tool uses the file stem of the .pkg."
+      use-blacksmith:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -43,7 +48,7 @@ on:
 
 jobs:
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       pull-requests: read
       contents: read
@@ -59,7 +64,7 @@ jobs:
   prepare-release:
     needs: check-labels
     if: fromJSON(needs.check-labels.outputs.labels).release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     outputs:
@@ -96,7 +101,7 @@ jobs:
 
   github-release:
     needs: [package, prepare-release]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:

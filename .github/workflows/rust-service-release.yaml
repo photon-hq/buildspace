@@ -56,6 +56,11 @@ on:
         required: false
         default: ""
         description: "Formula name in the tap to update (e.g., 'jamf-package-updater'). Required if tap-repo is set."
+      use-blacksmith:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -72,7 +77,7 @@ on:
 
 jobs:
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       pull-requests: read
       contents: read
@@ -88,7 +93,7 @@ jobs:
   release-info:
     needs: check-labels
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: read
     outputs:
@@ -116,7 +121,7 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
@@ -138,7 +143,7 @@ jobs:
   github-release:
     needs: [check-labels, release-info, build]
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -156,7 +161,7 @@ jobs:
   crates-sync-version:
     needs: [check-labels, release-info]
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
@@ -174,7 +179,7 @@ jobs:
   crates-publish:
     needs: [check-labels, release-info, crates-sync-version]
     if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -194,7 +199,7 @@ jobs:
       (fromJSON(needs.check-labels.outputs.labels).release || inputs.release)
       && inputs.tap-repo != ''
       && inputs.tap-formula != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - name: Update Homebrew Tap
         uses: photon-hq/buildspace/.github/blocks/update-tap@main

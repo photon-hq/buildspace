@@ -6,7 +6,7 @@ on:
 
 jobs:
   check-labels:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       pull-requests: read
       contents: read
@@ -23,7 +23,7 @@ jobs:
   release-info:
     needs: check-labels
     if: fromJSON(needs.check-labels.outputs.labels).release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     outputs:
@@ -113,7 +113,7 @@ jobs:
   github-release:
     needs: [check-labels, release-info]
     if: fromJSON(needs.check-labels.outputs.labels).release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
@@ -136,4 +136,5 @@ jobs:
       skills-path: skills/buildspace
       release-tag: v${{ needs.release-info.outputs.version }}
       release-notes: ${{ needs.release-info.outputs.release_notes }}
+      use-blacksmith: true
     secrets: inherit
