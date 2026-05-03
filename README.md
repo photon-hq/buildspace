@@ -1275,6 +1275,59 @@ Posts or updates a single comment on a pull request. When a `comment-key` is pro
 
 ---
 
+### notify-discord
+
+**Path:** `.github/blocks/notify-discord/action.yaml`
+
+Posts a release announcement embed to a Discord channel webhook. The block no-ops when `webhook-url` is empty, so it can be wired into a pipeline unconditionally and stays dormant for repos that haven't configured `DISCORD_WEBHOOK_URL`.
+
+#### Setup (one-time, in Discord)
+
+1. Open the Discord server, then **Server Settings → Integrations → Webhooks → New Webhook**.
+2. Pick the channel where releases should be announced.
+3. Copy the webhook URL (looks like `https://discord.com/api/webhooks/<id>/<token>`).
+4. Add it to GitHub as a repo or org Actions secret named `DISCORD_WEBHOOK_URL`.
+
+The webhook URL is bound to the channel selected in step 2 — that is how "specific channel" is targeted; no channel ID is needed in the workflow.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `webhook-url` | secret | No | `""` | Discord channel webhook URL. Empty disables the block. |
+| `service-name` | string | Yes | — | Display name of the released service |
+| `version` | string | Yes | — | Version being released (e.g., `1.2.3`) |
+| `release-url` | string | Yes | — | URL to the GitHub Release (use the `url` output of `create-github-release`) |
+| `release-notes` | string | No | `""` | Markdown release notes (auto-truncated to Discord's 4096-char embed limit) |
+| `prerelease` | boolean | No | `false` | Tags the embed as a prerelease (amber color, `[Pre-release]` title prefix) |
+| `dry-run` | boolean | No | `false` | Logs the JSON payload without sending |
+
+#### Usage
+
+```yaml
+- name: Create GitHub Release
+  id: gh-release
+  uses: photon-hq/buildspace/.github/blocks/create-github-release@main
+  with:
+    version: ${{ steps.release-info.outputs.version }}
+    title: "${{ inputs.service-name }} v${{ steps.release-info.outputs.version }}"
+    notes: ${{ steps.release-info.outputs.release_notes }}
+    prerelease: ${{ inputs.prerelease }}
+
+- name: Announce release on Discord
+  uses: photon-hq/buildspace/.github/blocks/notify-discord@main
+  with:
+    webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    service-name: ${{ inputs.service-name }}
+    version: ${{ steps.release-info.outputs.version }}
+    release-url: ${{ steps.gh-release.outputs.url }}
+    release-notes: ${{ steps.release-info.outputs.release_notes }}
+    prerelease: ${{ inputs.prerelease }}
+```
+
+
+---
+
 ### update-docs
 
 **Path:** `.github/blocks/update-docs/action.yaml`
