@@ -158,8 +158,11 @@ jobs:
     needs: [check-labels, release-info, bump-version]
     if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.no-npm-publish != true
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
-    permissions:
-      contents: read
+    # No explicit `permissions:` here on purpose: this job inherits the caller
+    # workflow's GITHUB_TOKEN permissions so npm OIDC Trusted Publishing can use
+    # `id-token: write` when the caller grants it. Pinning `contents: read` here
+    # would strip id-token and OIDC could never run. When the caller does not
+    # grant id-token, the publish step automatically falls back to NPM_TOKEN.
     steps:
       - uses: actions/checkout@v5
         with:
