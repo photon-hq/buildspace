@@ -17,6 +17,9 @@ outputs:
   previous-version:
     description: 'The previous version before this release'
     value: ${{ steps.last-release.outputs.version }}
+  release-type:
+    description: 'The bump type relative to the last STABLE (non-prerelease) release: major | minor | patch. Comparing against the last stable, not the last release-of-any-kind, so GA finalization after a prerelease (2.0.0-rc.3 -> 2.0.0) is correctly classified as the original bump (here, major) instead of patch.'
+    value: ${{ steps.classify.outputs.kind }}
 
 runs:
   using: 'composite'
@@ -27,14 +30,23 @@ runs:
       with:
         script: |
           try {
+            // Pull a page of recent releases so we can pick out both the
+            // last release of any kind (used for the AI commit range —
+            // the AI should only describe NEW changes since the previous
+            // tag, prerelease or not) and the last STABLE release (used
+            // for semver classification — a GA finalization of an -rc
+            // should classify as the original bump kind, not patch).
             const { data: releases } = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              per_page: 1
+              per_page: 100
             });
-            
-            if (releases.length > 0) {
-              const tagName = releases[0].tag_name;
+            const nonDraft = releases.filter(r => !r.draft);
+            const latest = nonDraft[0];
+            const lastStable = nonDraft.find(r => !r.prerelease);
+
+            if (latest) {
+              const tagName = latest.tag_name;
               const { data: ref } = await github.rest.git.getRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -51,9 +63,17 @@ runs:
               core.setOutput('sha', allCommits[allCommits.length - 1].sha);
               core.setOutput('version', '0.0.0');
             }
+
+            // For classification: prefer the last stable. Falls back to
+            // `0.0.0` if no stable release exists yet (initial-release path).
+            core.setOutput(
+              'stable_version',
+              lastStable ? lastStable.tag_name.replace(/^v/, '') : '0.0.0'
+            );
           } catch (error) {
             core.setOutput('sha', context.sha);
             core.setOutput('version', '0.0.0');
+            core.setOutput('stable_version', '0.0.0');
           }
 
     - name: AI Determine Version
@@ -102,3 +122,37 @@ runs:
         fi
         
         echo "Determined version: ${NEXT}"
+
+    - name: Classify Bump
+      id: classify
+      shell: bash
+      env:
+        # Use the last STABLE version (not last-of-any-kind) so that
+        # finalizing a prerelease into GA (e.g. 2.0.0-rc.3 -> 2.0.0)
+        # classifies as the original bump (major here), not patch.
+        # Without this, prev_core == next_core after stripping suffixes
+        # and the GA's notify path silently downgrades to patch.
+        PREV: ${{ steps.last-release.outputs.stable_version }}
+        NEXT: ${{ steps.version.outputs.final }}
+      run: |
+        # Strip any pre-release suffix (e.g. -rc.5) on NEXT before
+        # comparing. PREV is already stable so it has no suffix.
+        prev_core="${PREV%%-*}"
+        next_core="${NEXT%%-*}"
+
+        IFS='.' read -r p_major p_minor p_patch <<< "$prev_core"
+        IFS='.' read -r n_major n_minor n_patch <<< "$next_core"
+
+        : "${p_major:=0}"; : "${p_minor:=0}"; : "${p_patch:=0}"
+        : "${n_major:=0}"; : "${n_minor:=0}"; : "${n_patch:=0}"
+
+        if [ "$n_major" -gt "$p_major" ]; then
+          kind="major"
+        elif [ "$n_minor" -gt "$p_minor" ]; then
+          kind="minor"
+        else
+          kind="patch"
+        fi
+
+        echo "kind=$kind" >> "$GITHUB_OUTPUT"
+        echo "Classified bump: $prev_core -> $next_core => $kind"

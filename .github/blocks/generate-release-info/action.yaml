@@ -20,6 +20,9 @@ outputs:
   release_notes:
     description: 'AI-generated release notes in markdown'
     value: ${{ steps.ai-notes.outputs.final-message }}
+  release_type:
+    description: 'The bump type relative to previous-version: major | minor | patch'
+    value: ${{ steps.version-info.outputs.release-type }}
 
 runs:
   using: 'composite'
