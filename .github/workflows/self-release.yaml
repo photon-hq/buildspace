@@ -23,7 +23,7 @@ jobs:
   release-info:
     needs: check-labels
     if: fromJSON(needs.check-labels.outputs.labels).release
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
