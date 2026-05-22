@@ -97,15 +97,19 @@ runs:
       env:
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
       run: |
+        # A dry run only validates packaging and needs no credentials, so run it
+        # before the token check — otherwise a dry-run with no OIDC and no token
+        # would fail packaging validation for no reason.
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
+          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --dry-run
+          exit 0
+        fi
+
         if [ -z "$NODE_AUTH_TOKEN" ]; then
           echo "❌ OIDC was unavailable or failed, and no NPM token was provided. Cannot publish."
           exit 1
         fi
 
-        if [ "${{ inputs.dry-run }}" == "true" ]; then
-          echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
-          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --dry-run
-        else
-          echo "🔑 Publishing via NPM token..."
-          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public
-        fi
+        echo "🔑 Publishing via NPM token..."
+        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public
