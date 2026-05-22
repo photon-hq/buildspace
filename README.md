@@ -288,6 +288,7 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 | `prerelease` | boolean | No | `false` | Force prerelease |
 | `release` | boolean | No | `false` | Force release (bypasses label check) |
 | `dry-run` | boolean | No | `false` | Test without actually publishing |
+| `use-oidc` | boolean | No | `false` | Opt in to npm OIDC Trusted Publishing (requires caller `id-token: write` + a trusted publisher). Falls back to `NPM_TOKEN`. Default keeps least-privilege token publishing |
 
 #### Secrets
 
@@ -305,16 +306,17 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-      # id-token: write  # add to enable npm OIDC Trusted Publishing (otherwise NPM_TOKEN is used)
+      # id-token: write  # only needed when use-oidc: true (npm Trusted Publishing)
     with:
       service-name: notebooklm-kit
       build-command: "npm run build"
+      # use-oidc: true   # opt in to npm OIDC Trusted Publishing
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-> **Enabling OIDC Trusted Publishing:** add `id-token: write` to the caller's `permissions` (above), configure a [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com, and ensure the runner has npm ≥ 11.5.1. Until all three are in place, releases publish via `NPM_TOKEN` as before.
+> **Enabling OIDC Trusted Publishing (opt-in):** set `use-oidc: true`, add `id-token: write` to the caller's `permissions`, configure a [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com, and ensure the runner has npm ≥ 11.5.1. Callers that don't set `use-oidc` are completely unaffected — they keep `contents: read` least-privilege and publish via `NPM_TOKEN` exactly as before.
 
 ---
 

@@ -62,6 +62,11 @@ on:
         required: false
         default: false
         description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
+      use-oidc:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to npm OIDC Trusted Publishing. When true, the publish job inherits the caller's GITHUB_TOKEN so it can use 'id-token: write' (the caller must grant it) and a trusted publisher must be configured on npmjs.com. Falls back to NPM_TOKEN if OIDC is unavailable. When false (default), publishing uses NPM_TOKEN and the job keeps least-privilege 'contents: read'."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -154,15 +159,41 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
+  # Default publish path (use-oidc: false). Keeps least-privilege
+  # `contents: read` exactly as before and publishes via NPM_TOKEN. Existing
+  # callers are unaffected — no permission changes required on their side.
   npm-publish:
     needs: [check-labels, release-info, bump-version]
-    if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.no-npm-publish != true
+    if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.no-npm-publish != true && inputs.use-oidc != true
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
-    # No explicit `permissions:` here on purpose: this job inherits the caller
-    # workflow's GITHUB_TOKEN permissions so npm OIDC Trusted Publishing can use
-    # `id-token: write` when the caller grants it. Pinning `contents: read` here
-    # would strip id-token and OIDC could never run. When the caller does not
-    # grant id-token, the publish step automatically falls back to NPM_TOKEN.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Publish to NPM
+        uses: photon-hq/buildspace/.github/blocks/publish-npm@main
+        with:
+          bun-version: ${{ inputs.bun-version }}
+          tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
+          working-directory: ${{ inputs.working-directory }}
+          build-command: ${{ inputs.build-command }}
+          publish-command: ${{ inputs.publish-command }}
+          dry-run: ${{ inputs.dry-run }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+
+  # OIDC publish path (use-oidc: true). Opt-in only. It omits an explicit
+  # `permissions:` block so it inherits the caller's GITHUB_TOKEN — meaning
+  # `id-token: write` flows through when the caller grants it. Because it never
+  # *requests* id-token, callers that haven't granted it can't be hard-failed;
+  # the publish step just falls back to NPM_TOKEN. Default callers never reach
+  # this job (the `if` below is false), so their permissions are untouched.
+  npm-publish-oidc:
+    needs: [check-labels, release-info, bump-version]
+    if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.no-npm-publish != true && inputs.use-oidc == true
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
         with:
