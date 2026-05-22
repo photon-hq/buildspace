@@ -46,6 +46,15 @@ runs:
         node-version: ${{ inputs.node-version }}
         registry-url: 'https://registry.npmjs.org'
 
+    # npm OIDC Trusted Publishing requires npm >= 11.5.1, but Node 20 ships
+    # npm 10.x. Without this, the OIDC publish below signs provenance yet can't
+    # authenticate tokenlessly, so it publishes unauthenticated and 404s.
+    - name: Upgrade npm for OIDC Trusted Publishing
+      shell: bash
+      run: |
+        npm install -g npm@latest
+        echo "npm version: $(npm --version)"
+
     - name: Install dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
