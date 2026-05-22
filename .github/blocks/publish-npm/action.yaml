@@ -31,8 +31,8 @@ inputs:
     required: false
     default: 'npm publish'
   npm-token:
-    description: 'NPM authentication token'
-    required: true
+    description: 'NPM authentication token. Used only as a fallback when npm OIDC Trusted Publishing is unavailable or fails. Not required if OIDC Trusted Publishing is fully configured.'
+    required: false
 
 runs:
   using: 'composite'
@@ -56,15 +56,60 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: ${{ inputs.build-command }}
 
-    - name: Publish
+    # Step 1: try npm OIDC Trusted Publishing (tokenless). The runner only sets
+    # ACTIONS_ID_TOKEN_REQUEST_TOKEN when the job has 'id-token: write', so when
+    # that permission is absent we skip OIDC entirely rather than run a publish
+    # that is guaranteed to fail on auth. On success we record published=true so
+    # the token fallback below is skipped.
+    - name: Publish via OIDC (npm Trusted Publishing)
+      id: oidc-publish
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        DRYRUN_FLAG=""
+        if [ "${{ inputs.dry-run }}" == "true" ]; then
+          DRYRUN_FLAG="--dry-run"
+          echo "🧪 Dry run mode enabled."
+        fi
+
+        if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          echo "ℹ️ No OIDC id-token available (job lacks 'id-token: write'). Skipping OIDC; will use NPM token."
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "🔒 Attempting publish via npm Trusted Publishing (OIDC, no token)..."
+        if ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --provenance $DRYRUN_FLAG; then
+          echo "✅ Published via OIDC Trusted Publishing."
+          echo "published=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "⚠️ OIDC publish failed. Falling back to NPM token."
+          echo "published=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Step 2: fall back to the traditional token-based publish. This runs only
+    # when OIDC was skipped or failed, and reproduces the original publish
+    # behavior exactly (same flags, tag, access, and dry-run handling).
+    - name: Publish via NPM token (fallback)
+      if: steps.oidc-publish.outputs.published != 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
       run: |
+        # A dry run only validates packaging and needs no credentials, so run it
+        # before the token check — otherwise a dry-run with no OIDC and no token
+        # would fail packaging validation for no reason.
         if [ "${{ inputs.dry-run }}" == "true" ]; then
           echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
           ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --dry-run
-        else
-          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public
+          exit 0
         fi
+
+        if [ -z "$NODE_AUTH_TOKEN" ]; then
+          echo "❌ OIDC was unavailable or failed, and no NPM token was provided. Cannot publish."
+          exit 1
+        fi
+
+        echo "🔑 Publishing via NPM token..."
+        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public

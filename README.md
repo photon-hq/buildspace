@@ -288,13 +288,14 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 | `prerelease` | boolean | No | `false` | Force prerelease |
 | `release` | boolean | No | `false` | Force release (bypasses label check) |
 | `dry-run` | boolean | No | `false` | Test without actually publishing |
+| `use-oidc` | boolean | No | `false` | Opt in to npm OIDC Trusted Publishing (requires caller `id-token: write` + a trusted publisher). Falls back to `NPM_TOKEN`. Default keeps least-privilege token publishing |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
-| `NPM_TOKEN` | No | npm auth token (required for publishing) |
+| `NPM_TOKEN` | No | npm auth token; used as the fallback when OIDC Trusted Publishing isn't configured |
 
 #### Example
 
@@ -305,13 +306,17 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      # id-token: write  # only needed when use-oidc: true (npm Trusted Publishing)
     with:
       service-name: notebooklm-kit
       build-command: "npm run build"
+      # use-oidc: true   # opt in to npm OIDC Trusted Publishing
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
+
+> **Enabling OIDC Trusted Publishing (opt-in):** set `use-oidc: true`, add `id-token: write` to the caller's `permissions`, configure a [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com, and ensure the runner has npm ≥ 11.5.1. Callers that don't set `use-oidc` are completely unaffected — they keep `contents: read` least-privilege and publish via `NPM_TOKEN` exactly as before.
 
 ---
 
@@ -1223,7 +1228,7 @@ Publishes workspace crates to crates.io in dependency order with retry logic and
 
 **Path:** `.github/blocks/publish-npm/action.yaml`
 
-Publishes a single package to npm (installs dependencies, builds, publishes).
+Publishes a single package to npm (installs dependencies, builds, publishes). Tries npm OIDC Trusted Publishing first (when the calling job has `id-token: write`), then falls back to token-based publishing with `npm-token`.
 
 #### Inputs
 
@@ -1235,7 +1240,7 @@ Publishes a single package to npm (installs dependencies, builds, publishes).
 | `build-command` | string | No | `bun run build` | Build command |
 | `tag` | string | No | `latest` | npm dist-tag |
 | `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
-| `npm-token` | secret | Yes | — | npm authentication token |
+| `npm-token` | secret | No | — | npm token; used only as a fallback when OIDC Trusted Publishing is unavailable or fails |
 
 #### Usage
 
@@ -1245,6 +1250,11 @@ Publishes a single package to npm (installs dependencies, builds, publishes).
     build-command: "npm run build"
     npm-token: ${{ secrets.NPM_TOKEN }}
 ```
+
+#### Publishing modes
+
+1. **OIDC Trusted Publishing (preferred):** when the calling job has `id-token: write`, the action publishes tokenlessly with provenance. Requires a configured [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com and npm ≥ 11.5.1 on the runner.
+2. **Token fallback:** if OIDC is unavailable (no `id-token: write`) or fails, the action publishes with `npm-token`. This is the default behavior today — keep providing `NPM_TOKEN` so publishing works until OIDC is fully set up.
 
 ---
 
