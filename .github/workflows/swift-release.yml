@@ -23,6 +23,21 @@ on:
         required: false
         default: ""
         description: "Space-separated list of SPM resource bundle names to include in the .pkg"
+      labels-to-check:
+        type: string
+        required: false
+        default: '["release", "prerelease"]'
+        description: "JSON array of PR labels to check. `release` cuts a stable release (GitHub release + Jamf deploy); `prerelease` cuts a release candidate (rc) instead — GitHub pre-release only, no Jamf."
+      prerelease:
+        type: boolean
+        required: false
+        default: false
+        description: "Force a pre-release (rc). Overrides labels. Builds the .pkg, attaches it to a GitHub pre-release, and SKIPS the Jamf upload."
+      release:
+        type: boolean
+        required: false
+        default: false
+        description: "Force a stable release. Overrides labels."
       jamf-url:
         type: string
         required: false
@@ -66,11 +81,18 @@ jobs:
         id: check
         uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
-          labels: '["release"]'
+          labels: ${{ inputs.labels-to-check }}
 
   prepare-release:
     needs: check-labels
-    if: fromJSON(needs.check-labels.outputs.labels).release
+    # Run on a stable release OR a pre-release, whether driven by a PR label
+    # or a forced input. `prerelease` is a peer of `release`, not a modifier:
+    # either one alone triggers the pipeline.
+    if: >-
+      fromJSON(needs.check-labels.outputs.labels).release ||
+      fromJSON(needs.check-labels.outputs.labels).prerelease ||
+      inputs.release ||
+      inputs.prerelease
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
@@ -86,6 +108,7 @@ jobs:
         uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
         with:
           service-name: ${{ inputs.package-name }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
   build:
@@ -119,7 +142,7 @@ jobs:
           path: artifacts/*
 
   github-release:
-    needs: [build, prepare-release]
+    needs: [build, prepare-release, check-labels]
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
@@ -130,11 +153,16 @@ jobs:
           version: ${{ needs.prepare-release.outputs.version }}
           title: "${{ inputs.package-name }} v${{ needs.prepare-release.outputs.version }}"
           notes: ${{ needs.prepare-release.outputs.release_notes }}
+          prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           artifact-pattern: ${{ inputs.package-name }}
 
   jamf-upload:
-    needs: build
-    if: inputs.jamf-url != ''
+    needs: [build, check-labels]
+    # Deploy to the Jamf fleet on stable releases only. A pre-release stops at
+    # the GitHub pre-release so it can be tested manually before it ships.
+    if: >-
+      inputs.jamf-url != '' &&
+      !(inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease)
     uses: photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@main
     with:
       artifact_name: ${{ inputs.package-name }}
