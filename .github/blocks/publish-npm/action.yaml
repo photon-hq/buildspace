@@ -122,3 +122,52 @@ runs:
 
         echo "🔑 Publishing via NPM token..."
         ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public
+
+    # Step 3: verify the version actually landed on the npm registry.
+    #
+    # Why this exists: publishers like `bunx clean-publish` (and `bunx`-wrapped
+    # commands generally) can swallow `npm publish`'s non-zero exit code, so a
+    # 404/auth failure prints `npm error code E404` to the log but leaves the
+    # step exit code at 0. Without this assertion, the whole release pipeline
+    # goes green while npm has nothing — which is exactly what happened to
+    # spectrum-ts 1.10.0..1.11.1 (silent fails for four releases). The OIDC
+    # branch above also explicitly catches publish failures to fall through to
+    # the token path, so neither path can be trusted on its own.
+    #
+    # We resolve <name>@<version> from package.json (the source of truth that
+    # both publish paths consume) and probe the registry for that exact tarball.
+    # A few retries absorb npm CDN propagation, which is typically <10s.
+    - name: Verify publish landed on registry
+      if: ${{ inputs.dry-run != 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        NAME=$(jq -r .name package.json)
+        VERSION=$(jq -r .version package.json)
+        if [ -z "$NAME" ] || [ "$NAME" = "null" ] || [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+          echo "❌ Could not read name/version from package.json; cannot verify publish."
+          exit 1
+        fi
+
+        URL="https://registry.npmjs.org/$NAME/$VERSION"
+        echo "🔎 Verifying $NAME@$VERSION at $URL ..."
+
+        for attempt in 1 2 3 4 5 6; do
+          STATUS=$(curl -fsS -o /dev/null -w "%{http_code}" "$URL" || true)
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ $NAME@$VERSION is live on the npm registry."
+            exit 0
+          fi
+          echo "Attempt $attempt: registry returned HTTP $STATUS — retrying in 5s..."
+          sleep 5
+        done
+
+        echo "❌ Publish verification failed: $NAME@$VERSION is not on the registry."
+        echo ""
+        echo "The publisher reported success but the version did not land on npm."
+        echo "Common causes:"
+        echo "  • NPM_TOKEN expired/revoked (npm returns 404, not 401/403, for auth failures)"
+        echo "  • NPM_TOKEN scope does not include write access to this package"
+        echo "  • OIDC Trusted Publisher not configured for this repo+workflow on npmjs.com"
+        echo "  • Publisher CLI (e.g. 'bunx clean-publish') swallowed npm's non-zero exit"
+        exit 1
