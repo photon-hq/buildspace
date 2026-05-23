@@ -88,13 +88,38 @@ runs:
         fi
 
         echo "🔒 Attempting publish via npm Trusted Publishing (OIDC, no token)..."
-        if ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --provenance $DRYRUN_FLAG; then
-          echo "✅ Published via OIDC Trusted Publishing."
-          echo "published=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "⚠️ OIDC publish failed. Falling back to NPM token."
+
+        # Capture output via tee so the user still sees the log in real time.
+        # PIPESTATUS[0] is the publisher's real exit code (tee's exit, which is
+        # the pipeline's $?, would always be 0). `set +e` keeps a non-zero exit
+        # from killing the script before we can branch on it.
+        LOG="$(mktemp)"
+        set +e
+        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --provenance $DRYRUN_FLAG 2>&1 | tee "$LOG"
+        PUBLISH_EXIT=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$PUBLISH_EXIT" -ne 0 ]; then
+          echo "⚠️ OIDC publish failed (exit $PUBLISH_EXIT). Falling back to NPM token."
           echo "published=false" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
+
+        # Defense-in-depth: publishers like `bunx clean-publish` can exit 0 even
+        # when npm itself errored. Treat any 'npm error' / 'npm ERR!' line in the
+        # captured output as a real failure. Critically, do NOT fall back to the
+        # NPM token here — a "successful" OIDC publish that printed npm errors
+        # signals a deeper problem (e.g. wrapper swallowing exits) that the
+        # token path won't fix; falling back would just hide it again, which is
+        # exactly how spectrum-ts 1.10.0..1.11.1 went four releases unnoticed.
+        if grep -qE '^npm (error|ERR!)' "$LOG"; then
+          echo "❌ OIDC publisher reported success but npm emitted error lines in its output."
+          echo "   Refusing to fall back to NPM_TOKEN; failing the publish loudly instead."
+          exit 1
+        fi
+
+        echo "✅ Published via OIDC Trusted Publishing."
+        echo "published=true" >> "$GITHUB_OUTPUT"
 
     # Step 2: fall back to the traditional token-based publish. This runs only
     # when OIDC was skipped or failed, and reproduces the original publish
@@ -121,7 +146,30 @@ runs:
         fi
 
         echo "🔑 Publishing via NPM token..."
-        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public
+
+        # Same defense-in-depth as the OIDC branch: capture output, get the real
+        # exit code via PIPESTATUS (not tee's), and reject silent successes that
+        # contain npm error lines. GHA bash defaults (-e -o pipefail) handle the
+        # explicit-non-zero case on their own, but this block additionally
+        # catches the wrapper-swallowed-exit case that broke spectrum-ts.
+        LOG="$(mktemp)"
+        set +e
+        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public 2>&1 | tee "$LOG"
+        PUBLISH_EXIT=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$PUBLISH_EXIT" -ne 0 ]; then
+          echo "❌ NPM token publish exited non-zero ($PUBLISH_EXIT)."
+          exit "$PUBLISH_EXIT"
+        fi
+
+        if grep -qE '^npm (error|ERR!)' "$LOG"; then
+          echo "❌ Publisher reported success but npm emitted error lines in its output."
+          echo "   Common cause: 'bunx clean-publish' swallowing npm's non-zero exit on a 404 / auth failure."
+          exit 1
+        fi
+
+        echo "✅ Published via NPM token."
 
     # Step 3: verify the version actually landed on the npm registry.
     #
