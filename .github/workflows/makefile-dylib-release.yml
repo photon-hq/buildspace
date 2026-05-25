@@ -11,11 +11,6 @@ on:
         required: false
         default: false
         description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
-      extra-artifacts:
-        type: string
-        required: false
-        default: ''
-        description: "Newline-separated list of extra build outputs (relative to repo root) to attach to the release alongside the dylib."
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -65,7 +60,6 @@ jobs:
         with:
           output-name: ${{ inputs.dylib-name }}
           version: ${{ needs.prepare-release.outputs.version }}
-          extra-artifacts: ${{ inputs.extra-artifacts }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.dylib-name }}

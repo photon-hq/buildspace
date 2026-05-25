@@ -9,10 +9,6 @@ inputs:
     required: false
     default: ''
     description: "Version to embed (passed as VERSION= to make)"
-  extra-artifacts:
-    required: false
-    default: ''
-    description: "Newline-separated list of additional build outputs (paths relative to repo root) to attach to the release. Each path is copied into artifacts/ alongside the dylib."
 
 runs:
   using: "composite"
@@ -36,30 +32,6 @@ runs:
 
     - name: Prepare artifact
       shell: bash
-      env:
-        EXTRA_ARTIFACTS: ${{ inputs.extra-artifacts }}
       run: |
         mkdir -p artifacts
         cp "build/${{ inputs.output-name }}.dylib" artifacts/
-
-        if [ -n "$EXTRA_ARTIFACTS" ]; then
-          while IFS= read -r raw; do
-            # strip leading/trailing whitespace
-            extra="${raw#"${raw%%[![:space:]]*}"}"
-            extra="${extra%"${extra##*[![:space:]]}"}"
-
-            # skip blank lines and comments
-            if [ -z "$extra" ] || [ "${extra#\#}" != "$extra" ]; then
-              continue
-            fi
-
-            if [ ! -f "$extra" ]; then
-              echo "::error::extra artifact '$extra' not found — build failure"
-              exit 1
-            fi
-
-            echo "Including extra artifact: $extra"
-            file "$extra"
-            cp "$extra" artifacts/
-          done <<< "$EXTRA_ARTIFACTS"
-        fi
