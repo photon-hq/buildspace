@@ -270,7 +270,7 @@ jobs:
             --output /tmp/email-monkey.out \
             --write-out '%{http_code}' \
             --max-time 60 \
-            --request POST "http://email-monkey/notify-release" \
+            --request POST "http://email-monkey/campaigns/spectrum-release/trigger" \
             --header "Content-Type: application/json" \
             --data "$BODY")"
 
