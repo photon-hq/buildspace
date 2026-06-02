@@ -24,6 +24,16 @@ on:
         required: false
         default: ""
         description: "Space-separated list of SPM resource bundle names to include in the .pkg"
+      entitlements:
+        type: string
+        required: false
+        default: ""
+        description: "Path to an entitlements plist for ad-hoc codesigning the built binary."
+      private-deps:
+        type: boolean
+        required: false
+        default: false
+        description: "Mint an app token (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone private/internal org dependencies."
     secrets:
       SECRET_ENV_VARS:
         required: false
@@ -54,12 +64,24 @@ jobs:
             | **Commit** | ${{ github.sha }} |
             | **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
 
+      # ── Mint app token for private SPM dependencies (optional) ───────────
+      - name: Mint app token for private SPM deps
+        id: app-token
+        if: inputs.private-deps
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       # ── Build ────────────────────────────────────────────────────────────
       - name: Swift Build
         id: build
         uses: photon-hq/buildspace/.github/blocks/swift-build@main
         with:
           binary-name: ${{ inputs.package-name }}
+          entitlements: ${{ inputs.entitlements }}
+          github-token: ${{ steps.app-token.outputs.token }}
           compile-env: |-
             VERSION=PR-${{ github.event.pull_request.number }}
             DEPLOYMENT_ENVIRONMENT=development
