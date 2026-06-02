@@ -53,6 +53,12 @@ runs:
     - name: Create artifacts directory
       run: mkdir -p artifacts
       shell: bash
+    - name: Configure git auth for private/internal SPM dependencies
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
     - name: Build Swift Binary
       shell: bash
       id: build
