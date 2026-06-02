@@ -29,6 +29,11 @@ on:
         required: false
         default: ""
         description: "Path to an entitlements plist for ad-hoc codesigning the built binary."
+      private-dep-repos:
+        type: string
+        required: false
+        default: ""
+        description: "Comma-separated repo names (same owner) of private/internal SPM dependencies. When set, an app token is minted (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone them."
     secrets:
       SECRET_ENV_VARS:
         required: false
@@ -59,6 +64,17 @@ jobs:
             | **Commit** | ${{ github.sha }} |
             | **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
 
+      # ── Mint app token for private SPM dependencies (optional) ───────────
+      - name: Mint app token for private SPM deps
+        id: app-token
+        if: inputs.private-dep-repos != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.private-dep-repos }}
+
       # ── Build ────────────────────────────────────────────────────────────
       - name: Swift Build
         id: build
@@ -66,6 +82,7 @@ jobs:
         with:
           binary-name: ${{ inputs.package-name }}
           entitlements: ${{ inputs.entitlements }}
+          github-token: ${{ steps.app-token.outputs.token }}
           compile-env: |-
             VERSION=PR-${{ github.event.pull_request.number }}
             DEPLOYMENT_ENVIRONMENT=development

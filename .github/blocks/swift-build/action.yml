@@ -21,6 +21,10 @@ inputs:
     description: "Path to an entitlements plist (relative to repo root). When set, the built binary is ad-hoc codesigned with these entitlements. Needed for daemons that require private entitlements (e.g. to connect to imagent)."
     required: false
     default: ""
+  github-token:
+    description: "Token with read access to private/internal SPM dependencies. When set, git is configured to use it for github.com clones (so SwiftPM can fetch private deps)."
+    required: false
+    default: ""
 
 outputs:
   binary-path:
@@ -54,9 +58,10 @@ runs:
       run: mkdir -p artifacts
       shell: bash
     - name: Configure git auth for private/internal SPM dependencies
+      if: inputs.github-token != ''
       shell: bash
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ inputs.github-token }}
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
     - name: Build Swift Binary

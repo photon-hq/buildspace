@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         description: "Path to an entitlements plist for ad-hoc codesigning the built binary."
+      private-dep-repos:
+        type: string
+        required: false
+        default: ""
+        description: "Comma-separated repo names (same owner) of private/internal SPM dependencies. When set, an app token is minted (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone them."
       labels-to-check:
         type: string
         required: false
@@ -120,6 +125,15 @@ jobs:
     needs: prepare-release
     runs-on: macos-26
     steps:
+      - name: Mint app token for private SPM deps
+        id: app-token
+        if: inputs.private-dep-repos != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.private-dep-repos }}
       - name: Swift Build
         id: build
         uses: photon-hq/buildspace/.github/blocks/swift-build@test-codesign
@@ -127,6 +141,7 @@ jobs:
           binary-name: ${{ inputs.package-name }}
           use-cache: "false"
           entitlements: ${{ inputs.entitlements }}
+          github-token: ${{ steps.app-token.outputs.token }}
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}
             DEPLOYMENT_ENVIRONMENT=production
