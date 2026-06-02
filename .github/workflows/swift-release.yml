@@ -23,6 +23,11 @@ on:
         required: false
         default: ""
         description: "Space-separated list of SPM resource bundle names to include in the .pkg"
+      entitlements:
+        type: string
+        required: false
+        default: ""
+        description: "Path to an entitlements plist for ad-hoc codesigning the built binary."
       labels-to-check:
         type: string
         required: false
@@ -117,10 +122,11 @@ jobs:
     steps:
       - name: Swift Build
         id: build
-        uses: photon-hq/buildspace/.github/blocks/swift-build@main
+        uses: photon-hq/buildspace/.github/blocks/swift-build@test-codesign
         with:
           binary-name: ${{ inputs.package-name }}
           use-cache: "false"
+          entitlements: ${{ inputs.entitlements }}
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}
             DEPLOYMENT_ENVIRONMENT=production
