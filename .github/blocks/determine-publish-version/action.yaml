@@ -64,17 +64,67 @@ runs:
               core.setOutput('version', '0.0.0');
             }
 
-            // For classification: prefer the last stable. Falls back to
-            // `0.0.0` if no stable release exists yet (initial-release path).
-            core.setOutput(
-              'stable_version',
-              lastStable ? lastStable.tag_name.replace(/^v/, '') : '0.0.0'
-            );
+            // Last stable: its SHA is the base for both the diff range and the
+            // version computation (so rc-to-rc publishes stay on the same core
+            // line instead of advancing off a prerelease tag), and its version
+            // is the classification baseline. Empty/0.0.0 on the initial release.
+            if (lastStable) {
+              const { data: sref } = await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${lastStable.tag_name}`
+              });
+              core.setOutput('stable_sha', sref.object.sha);
+              core.setOutput('stable_version', lastStable.tag_name.replace(/^v/, ''));
+            } else {
+              core.setOutput('stable_sha', '');
+              core.setOutput('stable_version', '0.0.0');
+            }
           } catch (error) {
             core.setOutput('sha', context.sha);
             core.setOutput('version', '0.0.0');
+            core.setOutput('stable_sha', '');
             core.setOutput('stable_version', '0.0.0');
           }
+
+    - name: Gather change context
+      id: context
+      shell: bash
+      env:
+        BASE_SHA: ${{ steps.last-release.outputs.stable_sha }}
+        HEAD_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        # No prior stable release -> diff against the empty tree so the entire
+        # history (including the root commit) is included for the initial release.
+        if [ -n "$BASE_SHA" ]; then
+          DIFF_BASE="$BASE_SHA"; LOG_RANGE="$BASE_SHA..$HEAD_SHA"
+        else
+          DIFF_BASE=$(git hash-object -t tree /dev/null); LOG_RANGE="$HEAD_SHA"
+        fi
+        clip() { if [ "${#1}" -gt "$2" ]; then printf '%s\n(...truncated at %s chars; run git diff for the rest...)' "${1:0:$2}" "$2"; else printf '%s' "$1"; fi; }
+        NAME_STATUS=$(clip "$(git diff --name-status "$DIFF_BASE" "$HEAD_SHA")" 60000)
+        STAT=$(clip "$(git diff --stat "$DIFF_BASE" "$HEAD_SHA")" 40000)
+        LOG=$(clip "$(git log --no-merges --format='- %s%n%b' $LOG_RANGE)" 100000)
+        DIFF=$(clip "$(git diff "$DIFF_BASE" "$HEAD_SHA")" 400000)
+        MARKER=$(openssl rand -hex 16)
+        {
+          echo "context<<${MARKER}"
+          echo "## Commit messages"
+          echo "$LOG"
+          echo
+          echo "## Files changed (A=added M=modified D=deleted R=renamed)"
+          echo "$NAME_STATUS"
+          echo
+          echo "## Churn summary"
+          echo "$STAT"
+          echo
+          echo "## Full diff"
+          echo '```diff'
+          echo "$DIFF"
+          echo '```'
+          echo "${MARKER}"
+        } >> "$GITHUB_OUTPUT"
 
     - name: AI Determine Version
       id: ai-version
@@ -82,18 +132,47 @@ runs:
       with:
         openai-api-key: ${{ inputs.openai-api-key }}
         safety-strategy: read-only
+        effort: high
         prompt: |
-          Analyze commits between ${{ steps.last-release.outputs.sha }} and ${{ github.sha }}.
-          Current version: ${{ steps.last-release.outputs.version }}
+          Determine the next semantic version after ${{ steps.last-release.outputs.stable_version }}.
+          Current version: ${{ steps.last-release.outputs.stable_version }}
           Prerelease: ${{ inputs.prerelease }}
-          
-          Rules:
-          - BREAKING CHANGE or ! = major bump
-          - feat: = minor bump  
-          - fix:, perf:, or other = patch bump
-          - Default to patch if unclear
-          - For prereleases: use same version logic, suffix will be added automatically
-          
+
+          Base your decision on the ACTUAL CODE CHANGES below — the commit
+          messages, the list of changed files, and the diff are all provided.
+          Commit messages are a hint, not the source of truth: most authors do
+          not annotate breaking changes, so the diff is authoritative. If the diff
+          was truncated you may run `git diff` yourself (read-only) for any file.
+
+          How to choose the bump (apply in order):
+          1. MAJOR — if a commit message carries an explicit `BREAKING CHANGE:`
+             footer or a `type!:` marker, that is authoritative: bump major.
+             ALSO bump major if the DIFF itself is backward-incompatible even when
+             no commit said so — e.g. a public endpoint/route/exported symbol is
+             removed or renamed, a request/response schema or required field
+             changes shape, default behavior changes in a way that breaks existing
+             callers, or a config/runtime contract changes. You are explicitly
+             allowed to bump the major from the diff alone.
+          2. MINOR — backward-COMPATIBLE new functionality: a new endpoint, flag,
+             exported symbol, or capability is ADDED without breaking existing
+             ones (corresponds to `feat:`).
+          3. PATCH — bug fixes, performance, internal refactors, docs, chores, or
+             anything else that neither adds public surface nor breaks it.
+
+          Be conservative about MAJOR to avoid false positives: purely additive
+          changes are MINOR, not MAJOR. Only call it breaking if existing public
+          behavior is actually removed or changed incompatibly. When genuinely
+          unclear between two levels, pick the lower one (default to patch).
+
+          A major bump of ${{ steps.last-release.outputs.stable_version }} increments
+          the first number and zeroes the rest (e.g. 0.1.5 -> 1.0.0); minor
+          increments the second (0.1.5 -> 0.2.0); patch the third (0.1.5 -> 0.1.6).
+          For prereleases use the same logic — the -rc suffix is added automatically.
+
+          === CHANGES SINCE ${{ steps.last-release.outputs.stable_version }} ===
+          ${{ steps.context.outputs.context }}
+          === END CHANGES ===
+
           Respond with ONLY X.Y.Z
 
     - name: Parse Version
