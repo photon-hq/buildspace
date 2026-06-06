@@ -90,12 +90,28 @@ runs:
         PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
         PROMPT_PARTS=""
 
+        # Resolve a valid base once: the last release if it is an ancestor of
+        # HEAD, else the repo root. Used unguarded below so a genuine git failure
+        # stops the run loudly instead of publishing on an empty diff.
+        if git merge-base --is-ancestor "$LAST_SHA" HEAD 2>/dev/null; then
+          BASE="$LAST_SHA"
+        else
+          BASE=$(git rev-list --max-parents=0 HEAD | tail -1)
+        fi
+
         for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
           NAME=$(echo "$CHANGED_JSON" | jq -r ".[$i].name")
           PKG_PATH=$(echo "$CHANGED_JSON" | jq -r ".[$i].path")
           CURRENT_VER=$(jq -r '.version // "0.0.0"' "$PKG_PATH/package.json")
 
-          COMMITS=$(git log --oneline "${LAST_SHA}..HEAD" -- "$PKG_PATH" 2>/dev/null || git log --oneline HEAD~10..HEAD -- "$PKG_PATH")
+          COMMITS=$(git log --oneline "$BASE..HEAD" -- "$PKG_PATH")
+          NAME_STATUS=$(git diff --name-status "$BASE..HEAD" -- "$PKG_PATH")
+          PKG_DIFF=$(git diff "$BASE..HEAD" -- "$PKG_PATH")
+          CAP=100000
+          if [ "${#PKG_DIFF}" -gt "$CAP" ]; then
+            PKG_DIFF="${PKG_DIFF:0:$CAP}
+        (diff truncated at ${CAP} chars — run: git diff $BASE..HEAD -- ${PKG_PATH}  for the full diff)"
+          fi
 
           PROMPT_PARTS="${PROMPT_PARTS}
         Package: ${NAME}
@@ -103,6 +119,10 @@ runs:
         Path: ${PKG_PATH}
         Commits:
         ${COMMITS}
+        Files changed (A=added M=modified D=deleted R=renamed):
+        ${NAME_STATUS}
+        Diff:
+        ${PKG_DIFF}
         ---"
         done
 
@@ -117,18 +137,29 @@ runs:
       with:
         openai-api-key: ${{ inputs.openai-api-key }}
         safety-strategy: read-only
+        effort: high
         prompt: |
           You are a release manager for the "${{ inputs.service-name }}" monorepo.
           Prerelease: ${{ inputs.prerelease }}
 
-          For each package below, determine the next semantic version based on its commits.
-          Rules:
-          - BREAKING CHANGE or ! after type = major bump
-          - feat: = minor bump
-          - fix:, perf:, or other = patch bump
-          - Default to patch if unclear
-          - Each package is versioned independently
-          - For prereleases: use same version logic, suffix will be added automatically
+          For each package below, determine the next semantic version. Base the
+          decision on the ACTUAL CODE CHANGES — the commits, the changed-file
+          list, and the diff are all provided per package. Commit messages are a
+          hint, not the source of truth: most authors do not annotate breaking
+          changes, so the diff is authoritative.
+
+          Rules (apply in order, per package, versioned independently):
+          - MAJOR — an explicit `BREAKING CHANGE:` footer or `type!:` marker, OR a
+            diff that is backward-incompatible even without one (a public/exported
+            symbol or entry point removed or renamed, a schema/required field or
+            return shape changed, default behavior or a config contract changed).
+            You are explicitly allowed to bump the major from the diff alone.
+          - MINOR — backward-compatible new functionality is ADDED (feat:).
+          - PATCH — fixes, perf, refactors, docs, chores; nothing public removed
+            or broken.
+          Be conservative about MAJOR: purely additive changes are MINOR, and when
+          genuinely unclear pick the lower bump. For prereleases the -rc suffix is
+          added automatically.
 
           ${{ steps.commit-logs.outputs.prompt }}
 
