@@ -64,7 +64,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
 | Go binary | [`go-binary-release`](#go-binary-release) | PR label `release` |
-| Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` |
+| Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` or `prerelease` |
 | macOS `.pkg` without binary (payload/scripts only) | [`pkg-release`](#package-release) | PR label `release` |
 | macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
@@ -203,7 +203,7 @@ Control releases by adding labels to your PR before merging:
 | Label | Effect |
 |-------|--------|
 | `release` | Triggers a full release (GitHub Release + package publish) |
-| `prerelease` | Creates a prerelease with `-rc.N` suffix and `beta` npm tag |
+| `prerelease` | Creates a prerelease with `-rc.N` suffix. npm workflows publish with the `beta` tag; Swift creates a GitHub pre-release and skips Jamf. |
 
 **No label = no release** PRs without labels merge without triggering any release jobs. You can customize your release label with the input 'labels-to-check' in the 'release.yml'. 
 
@@ -445,7 +445,7 @@ jobs:
 
 **File:** `.github/workflows/swift-release.yml`
 
-Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro.
+Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a `.pkg`, creates a GitHub Release, and optionally uploads stable releases to Jamf Pro. A `prerelease` label or input creates an `-rc.N` GitHub pre-release and skips Jamf upload.
 
 #### Inputs
 
@@ -454,9 +454,17 @@ Complete release pipeline for macOS `.pkg` distribution packages: checks PR labe
 | `package-name` | string | Yes | — | Name of the Swift binary / package |
 | `identifier` | string | Yes | — | Package identifier (e.g., `com.example.mytool`) |
 | `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
+| `payload-path` | string | No | `""` | Path to additional payload directory whose contents mirror the install root |
+| `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
+| `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
+| `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
+| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger stable or prerelease releases |
+| `prerelease` | boolean | No | `false` | Force prerelease (adds `-rc.N`, marks GitHub release as prerelease, skips Jamf) |
+| `release` | boolean | No | `false` | Force stable release (bypasses label check) |
 | `jamf-url` | string | No | `""` | Jamf Pro instance URL (leave empty to skip Jamf upload) |
 | `jamf-package-priority` | string | No | `""` | Package priority in Jamf Pro |
 | `jamf-package-name` | string | No | `""` | Package name to match in Jamf Pro |
+| `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for Linux jobs |
 
 #### Secrets
 
@@ -466,6 +474,8 @@ Complete release pipeline for macOS `.pkg` distribution packages: checks PR labe
 | `SECRET_ENV_VARS` | No | Compile-time env vars written to `.env` |
 | `JAMF_CLIENT_ID` | No | Jamf Pro API client ID |
 | `JAMF_CLIENT_SECRET` | No | Jamf Pro API client secret |
+| `APP_ID` | No | GitHub App ID for private SwiftPM dependencies |
+| `APP_PRIVATE_KEY` | No | GitHub App private key for private SwiftPM dependencies |
 
 #### Example
 
