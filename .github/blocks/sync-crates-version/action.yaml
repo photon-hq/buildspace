@@ -56,7 +56,7 @@ runs:
         git config --local --unset-all http.https://github.com/.extraheader || true
         
         # Set up authorization header (this is what actions/checkout uses)
-        AUTH=$(echo -n "x-access-token:${TOKEN}" | base64)
+        AUTH=$(echo -n "x-access-token:${TOKEN}" | base64 | tr -d '\n')
         git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH}"
 
     - name: Setup Rust

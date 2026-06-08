@@ -50,7 +50,7 @@ runs:
         
         git config --local --unset-all http.https://github.com/.extraheader || true
         
-        AUTH=$(echo -n "x-access-token:${TOKEN}" | base64)
+        AUTH=$(echo -n "x-access-token:${TOKEN}" | base64 | tr -d '\n')
         git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH}"
 
     - name: Pull latest changes
