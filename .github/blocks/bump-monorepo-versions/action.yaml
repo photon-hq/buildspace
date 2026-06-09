@@ -78,17 +78,19 @@ runs:
             core.setOutput('sha', context.sha);
           }
 
-    - name: Gather per-package commit logs
+    - name: Write monorepo release prompt
       id: commit-logs
       shell: bash
       env:
         CHANGED_JSON: ${{ inputs.changed-packages }}
         LAST_SHA: ${{ steps.last-release.outputs.sha }}
+        SERVICE_NAME: ${{ inputs.service-name }}
+        PRERELEASE: ${{ inputs.prerelease }}
       run: |
         set -euo pipefail
 
         PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
-        PROMPT_PARTS=""
+        PROMPT_FILE="${RUNNER_TEMP}/bump-monorepo-versions-prompt.md"
 
         # Resolve a valid base once: the last release if it is an ancestor of
         # HEAD, else the repo root. Used unguarded below so a genuine git failure
@@ -98,6 +100,33 @@ runs:
         else
           BASE=$(git rev-list --max-parents=0 HEAD | tail -1)
         fi
+
+        {
+          echo "You are a release manager for the \"${SERVICE_NAME}\" monorepo."
+          echo "Prerelease: ${PRERELEASE}"
+          echo
+          cat <<'PROMPT'
+        For each package below, determine the next semantic version. Base the
+        decision on the ACTUAL CODE CHANGES — the commits, the changed-file
+        list, and the diff are all provided per package. Commit messages are a
+        hint, not the source of truth: most authors do not annotate breaking
+        changes, so the diff is authoritative.
+
+        Rules (apply in order, per package, versioned independently):
+        - MAJOR — an explicit `BREAKING CHANGE:` footer or `type!:` marker, OR a
+          diff that is backward-incompatible even without one (a public/exported
+          symbol or entry point removed or renamed, a schema/required field or
+          return shape changed, default behavior or a config contract changed).
+          You are explicitly allowed to bump the major from the diff alone.
+        - MINOR — backward-compatible new functionality is ADDED (feat:).
+        - PATCH — fixes, perf, refactors, docs, chores; nothing public removed
+          or broken.
+        Be conservative about MAJOR: purely additive changes are MINOR, and when
+        genuinely unclear pick the lower bump. For prereleases the -rc suffix is
+        added automatically.
+
+        PROMPT
+        } > "$PROMPT_FILE"
 
         for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
           NAME=$(echo "$CHANGED_JSON" | jq -r ".[$i].name")
@@ -113,7 +142,7 @@ runs:
         (diff truncated at ${CAP} chars — run: git diff $BASE..HEAD -- ${PKG_PATH}  for the full diff)"
           fi
 
-          PROMPT_PARTS="${PROMPT_PARTS}
+          cat >> "$PROMPT_FILE" <<PROMPT
         Package: ${NAME}
         Current version: ${CURRENT_VER}
         Path: ${PKG_PATH}
@@ -123,13 +152,28 @@ runs:
         ${NAME_STATUS}
         Diff:
         ${PKG_DIFF}
-        ---"
+        ---
+        PROMPT
         done
 
-        EOF_MARKER=$(openssl rand -hex 16)
-        echo "prompt<<${EOF_MARKER}" >> "$GITHUB_OUTPUT"
-        echo "$PROMPT_PARTS" >> "$GITHUB_OUTPUT"
-        echo "${EOF_MARKER}" >> "$GITHUB_OUTPUT"
+        cat >> "$PROMPT_FILE" <<'PROMPT'
+
+        Respond in exactly this format (no extra text before or after each section):
+
+        VERSIONS_JSON
+        {"package-name":"X.Y.Z", ...}
+        END_VERSIONS_JSON
+
+        RELEASE_NOTES
+        (write combined release notes for all packages below, grouped by package.
+         Plain language, 1-2 sentences per item, 1-2 emojis max.
+         Group by: ## New Features, ## Bug Fixes, ## Improvements as applicable.
+         Note that we only need these groups if they are applicable. For example, do not mention a bug fixes section if there were no bug fixes
+         Prefix each item with the package name in bold.)
+        END_RELEASE_NOTES
+        PROMPT
+
+        echo "prompt-file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
 
     - name: AI determine versions and release notes
       id: ai-release
@@ -138,44 +182,7 @@ runs:
         openai-api-key: ${{ inputs.openai-api-key }}
         safety-strategy: read-only
         effort: high
-        prompt: |
-          You are a release manager for the "${{ inputs.service-name }}" monorepo.
-          Prerelease: ${{ inputs.prerelease }}
-
-          For each package below, determine the next semantic version. Base the
-          decision on the ACTUAL CODE CHANGES — the commits, the changed-file
-          list, and the diff are all provided per package. Commit messages are a
-          hint, not the source of truth: most authors do not annotate breaking
-          changes, so the diff is authoritative.
-
-          Rules (apply in order, per package, versioned independently):
-          - MAJOR — an explicit `BREAKING CHANGE:` footer or `type!:` marker, OR a
-            diff that is backward-incompatible even without one (a public/exported
-            symbol or entry point removed or renamed, a schema/required field or
-            return shape changed, default behavior or a config contract changed).
-            You are explicitly allowed to bump the major from the diff alone.
-          - MINOR — backward-compatible new functionality is ADDED (feat:).
-          - PATCH — fixes, perf, refactors, docs, chores; nothing public removed
-            or broken.
-          Be conservative about MAJOR: purely additive changes are MINOR, and when
-          genuinely unclear pick the lower bump. For prereleases the -rc suffix is
-          added automatically.
-
-          ${{ steps.commit-logs.outputs.prompt }}
-
-          Respond in exactly this format (no extra text before or after each section):
-
-          VERSIONS_JSON
-          {"package-name":"X.Y.Z", ...}
-          END_VERSIONS_JSON
-
-          RELEASE_NOTES
-          (write combined release notes for all packages below, grouped by package.
-           Plain language, 1-2 sentences per item, 1-2 emojis max.
-           Group by: ## New Features, ## Bug Fixes, ## Improvements as applicable.
-           Note that we only need these groups if they are applicable. For example, do not mention a bug fixes section if there were no bug fixes
-           Prefix each item with the package name in bold.)
-          END_RELEASE_NOTES
+        prompt-file: ${{ steps.commit-logs.outputs.prompt-file }}
 
     - name: Apply versions
       id: apply-versions

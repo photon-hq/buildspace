@@ -87,12 +87,14 @@ runs:
             core.setOutput('stable_version', '0.0.0');
           }
 
-    - name: Gather change context
+    - name: Write version prompt
       id: context
       shell: bash
       env:
         BASE_SHA: ${{ steps.last-release.outputs.stable_sha }}
         HEAD_SHA: ${{ github.sha }}
+        STABLE_VERSION: ${{ steps.last-release.outputs.stable_version }}
+        PRERELEASE: ${{ inputs.prerelease }}
       run: |
         set -euo pipefail
         # No prior stable release -> diff against the empty tree so the entire
@@ -107,9 +109,46 @@ runs:
         STAT=$(clip "$(git diff --stat "$DIFF_BASE" "$HEAD_SHA")" 40000)
         LOG=$(clip "$(git log --no-merges --format='- %s%n%b' $LOG_RANGE)" 100000)
         DIFF=$(clip "$(git diff "$DIFF_BASE" "$HEAD_SHA")" 400000)
-        MARKER=$(openssl rand -hex 16)
+        PROMPT_FILE="${RUNNER_TEMP}/determine-publish-version-prompt.md"
         {
-          echo "context<<${MARKER}"
+          echo "Determine the next semantic version after ${STABLE_VERSION}."
+          echo "Current version: ${STABLE_VERSION}"
+          echo "Prerelease: ${PRERELEASE}"
+          echo
+          cat <<'PROMPT'
+        Base your decision on the ACTUAL CODE CHANGES below — the commit
+        messages, the list of changed files, and the diff are all provided.
+        Commit messages are a hint, not the source of truth: most authors do
+        not annotate breaking changes, so the diff is authoritative. If the diff
+        was truncated you may run `git diff` yourself (read-only) for any file.
+
+        How to choose the bump (apply in order):
+        1. MAJOR — if a commit message carries an explicit `BREAKING CHANGE:`
+           footer or a `type!:` marker, that is authoritative: bump major.
+           ALSO bump major if the DIFF itself is backward-incompatible even when
+           no commit said so — e.g. a public endpoint/route/exported symbol is
+           removed or renamed, a request/response schema or required field
+           changes shape, default behavior changes in a way that breaks existing
+           callers, or a config/runtime contract changes. You are explicitly
+           allowed to bump the major from the diff alone.
+        2. MINOR — backward-COMPATIBLE new functionality: a new endpoint, flag,
+           exported symbol, or capability is ADDED without breaking existing
+           ones (corresponds to `feat:`).
+        3. PATCH — bug fixes, performance, internal refactors, docs, chores, or
+           anything else that neither adds public surface nor breaks it.
+
+        Be conservative about MAJOR to avoid false positives: purely additive
+        changes are MINOR, not MAJOR. Only call it breaking if existing public
+        behavior is actually removed or changed incompatibly. When genuinely
+        unclear between two levels, pick the lower one (default to patch).
+        PROMPT
+          echo
+          echo "A major bump of ${STABLE_VERSION} increments the first number and"
+          echo "zeroes the rest (e.g. 0.1.5 -> 1.0.0); minor increments the"
+          echo "second (0.1.5 -> 0.2.0); patch the third (0.1.5 -> 0.1.6)."
+          echo "For prereleases use the same logic — the -rc suffix is added automatically."
+          echo
+          echo "=== CHANGES SINCE ${STABLE_VERSION} ==="
           echo "## Commit messages"
           echo "$LOG"
           echo
@@ -123,8 +162,11 @@ runs:
           echo '```diff'
           echo "$DIFF"
           echo '```'
-          echo "${MARKER}"
-        } >> "$GITHUB_OUTPUT"
+          echo "=== END CHANGES ==="
+          echo
+          echo "Respond with ONLY X.Y.Z"
+        } > "$PROMPT_FILE"
+        echo "prompt-file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
 
     - name: AI Determine Version
       id: ai-version
@@ -133,47 +175,7 @@ runs:
         openai-api-key: ${{ inputs.openai-api-key }}
         safety-strategy: read-only
         effort: high
-        prompt: |
-          Determine the next semantic version after ${{ steps.last-release.outputs.stable_version }}.
-          Current version: ${{ steps.last-release.outputs.stable_version }}
-          Prerelease: ${{ inputs.prerelease }}
-
-          Base your decision on the ACTUAL CODE CHANGES below — the commit
-          messages, the list of changed files, and the diff are all provided.
-          Commit messages are a hint, not the source of truth: most authors do
-          not annotate breaking changes, so the diff is authoritative. If the diff
-          was truncated you may run `git diff` yourself (read-only) for any file.
-
-          How to choose the bump (apply in order):
-          1. MAJOR — if a commit message carries an explicit `BREAKING CHANGE:`
-             footer or a `type!:` marker, that is authoritative: bump major.
-             ALSO bump major if the DIFF itself is backward-incompatible even when
-             no commit said so — e.g. a public endpoint/route/exported symbol is
-             removed or renamed, a request/response schema or required field
-             changes shape, default behavior changes in a way that breaks existing
-             callers, or a config/runtime contract changes. You are explicitly
-             allowed to bump the major from the diff alone.
-          2. MINOR — backward-COMPATIBLE new functionality: a new endpoint, flag,
-             exported symbol, or capability is ADDED without breaking existing
-             ones (corresponds to `feat:`).
-          3. PATCH — bug fixes, performance, internal refactors, docs, chores, or
-             anything else that neither adds public surface nor breaks it.
-
-          Be conservative about MAJOR to avoid false positives: purely additive
-          changes are MINOR, not MAJOR. Only call it breaking if existing public
-          behavior is actually removed or changed incompatibly. When genuinely
-          unclear between two levels, pick the lower one (default to patch).
-
-          A major bump of ${{ steps.last-release.outputs.stable_version }} increments
-          the first number and zeroes the rest (e.g. 0.1.5 -> 1.0.0); minor
-          increments the second (0.1.5 -> 0.2.0); patch the third (0.1.5 -> 0.1.6).
-          For prereleases use the same logic — the -rc suffix is added automatically.
-
-          === CHANGES SINCE ${{ steps.last-release.outputs.stable_version }} ===
-          ${{ steps.context.outputs.context }}
-          === END CHANGES ===
-
-          Respond with ONLY X.Y.Z
+        prompt-file: ${{ steps.context.outputs.prompt-file }}
 
     - name: Parse Version
       id: version
