@@ -129,8 +129,12 @@ jobs:
             exit 0
           fi
 
-          # Extract unique @usernames (not @org/team), strip the @, comma-separate
-          REVIEWERS="$(grep -oE '@[a-zA-Z0-9_-]+' "${CODEOWNERS_FILE}" \
+          # Extract unique @usernames, strip the @, comma-separate. Team entries
+          # (@org/team) are matched in full and dropped: gh rejects the entire
+          # reviewer request if any single login is invalid. `|| true` keeps a
+          # CODEOWNERS with no @entries from failing the step under pipefail.
+          REVIEWERS="$({ grep -oE '@[a-zA-Z0-9_/-]+' "${CODEOWNERS_FILE}" || true; } \
+            | sed '/\//d' \
             | sort -u \
             | sed 's/^@//' \
             | paste -sd ',' -)"
