@@ -142,24 +142,28 @@ jobs:
 
           if [ -n "${PREVIOUS_TAG}" ]; then
             echo "Generating diff between ${PREVIOUS_TAG} and ${RAW_TAG}"
-            DIFF=$(git diff "${PREVIOUS_TAG}..${RAW_TAG}")
+            git diff "${PREVIOUS_TAG}..${RAW_TAG}" > "${RUNNER_TEMP}/changes.diff"
           else
             echo "No previous tag found — generating diff from root"
-            DIFF=$(git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD)
+            git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD > "${RUNNER_TEMP}/changes.diff"
           fi
 
           # Use Python to safely write multi-line values to GITHUB_OUTPUT
           # This avoids heredoc delimiter collisions with arbitrary release notes and diffs
-          export DIFF
+          export DIFF_FILE="${RUNNER_TEMP}/changes.diff"
           python3 << 'PYEOF'
           import os, uuid
 
           output_file = os.environ["GITHUB_OUTPUT"]
           release_body = os.environ.get("RELEASE_BODY", "")
-          diff = os.environ.get("DIFF", "")
 
-          # Truncate diff to ~100 000 characters
+          # Read the diff from disk and truncate to ~100 000 characters. The diff
+          # is never passed through the environment: a single env var over ~128 KiB
+          # makes execve() fail with E2BIG ("Argument list too long"). errors=
+          # "replace" plus the NUL strip keep binary content from corrupting output.
           max_chars = 100000
+          with open(os.environ["DIFF_FILE"], "r", encoding="utf-8", errors="replace") as df:
+              diff = df.read(max_chars + 1).replace("\x00", "")
           if len(diff) > max_chars:
               diff = diff[:max_chars] + "\n\n... [diff truncated at 100000 characters]"
 
