@@ -149,8 +149,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout 
+      - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # The release/<date>.N counter below counts existing tags; the default
+          # shallow checkout fetches no tags, so N was always 0 and a second
+          # same-day release reused (and overwrote) the first one's tag.
+          fetch-depth: 0
       - name: Build release title
         id: title
         shell: bash
