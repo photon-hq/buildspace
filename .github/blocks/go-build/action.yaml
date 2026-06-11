@@ -47,7 +47,13 @@ runs:
         GOARCH: ${{ inputs.goarch }}
         CGO_ENABLED: '0'
       run: |
-        go build ${{ inputs.build-flags }} -ldflags "${{ inputs.ldflags }}" -o "${{ inputs.binary-name }}" .
+        # go build -o uses the name verbatim (no .exe auto-append on windows);
+        # build with the suffix the Package step expects to find.
+        SUFFIX=""
+        if [ "${{ inputs.goos }}" == "windows" ]; then
+          SUFFIX=".exe"
+        fi
+        go build ${{ inputs.build-flags }} -ldflags "${{ inputs.ldflags }}" -o "${{ inputs.binary-name }}${SUFFIX}" .
 
     - name: Package
       id: package
