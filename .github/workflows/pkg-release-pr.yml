@@ -19,14 +19,19 @@ on:
         type: string
         required: false
         description: "Path to additional payload directory whose contents mirror the install root"
+      use-blacksmith:
+        type: boolean
+        required: false
+        default: false
+        description: "Opt in to Blacksmith Linux runners (blacksmith-4vcpu-ubuntu-2404). Requires the Blacksmith GitHub App installed on the caller org. Defaults to ubuntu-latest."
 # Cancel any in-progress run for the same PR when a new commit is pushed.
 concurrency:
   group: pkg-release-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: macos-26
+  comment-start:
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       pull-requests: write
       contents: read
@@ -45,6 +50,12 @@ jobs:
             | **Commit** | ${{ github.sha }} |
             | **Run** | [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
 
+  build:
+    needs: comment-start
+    runs-on: macos-26
+    permissions:
+      contents: read
+    steps:
       # ── Build ────────────────────────────────────────────────────────────
       - uses: actions/checkout@v5
 
@@ -65,9 +76,16 @@ jobs:
           path: artifacts/*.pkg
           retention-days: 7
 
+  comment-success:
+    needs: build
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
       # ── Notify: success ──────────────────────────────────────────────────
       - name: Comment — build succeeded
-        if: success()
         uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
         with:
           comment-key: pkg-release-pr-build
@@ -83,9 +101,16 @@ jobs:
 
             Download the `.pkg` from the [Actions run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) artifacts section.
 
+  comment-failure:
+    needs: build
+    if: ${{ always() && needs.build.result == 'failure' }}
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
       # ── Notify: failure ──────────────────────────────────────────────────
       - name: Comment — build failed
-        if: failure()
         uses: photon-hq/buildspace/.github/blocks/comment-on-pr@main
         with:
           comment-key: pkg-release-pr-build

@@ -506,6 +506,7 @@ Release pipeline for macOS `.pkg` distribution packages that don't contain a com
 | `identifier` | string | Yes | — | Package identifier (e.g., `com.example.my-config`) |
 | `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
 | `payload-path` | string | No | `""` | Path to payload directory whose contents mirror the install root |
+| `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for Linux jobs |
 | `jamf-url` | string | No | `""` | Jamf Pro instance URL (leave empty to skip Jamf upload) |
 | `jamf-package-priority` | string | No | `""` | Package priority in Jamf Pro |
 | `jamf-package-name` | string | No | `""` | Package name to match in Jamf Pro |
@@ -549,6 +550,7 @@ Builds a macOS `.pkg` (without compiling a binary) on every PR commit and report
 | `identifier` | string | Yes | — | Package identifier (e.g., `com.example.my-config`) |
 | `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
 | `payload-path` | string | No | `""` | Path to payload directory whose contents mirror the install root |
+| `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS package build stays on `macos-26` |
 
 #### Example
 
@@ -589,12 +591,19 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 | `package-name` | string | Yes | — | Name of the Swift binary / package |
 | `identifier` | string | Yes | — | Package identifier (e.g., `com.example.mytool`) |
 | `scripts-path` | string | No | `""` | Path to scripts directory with preinstall/postinstall scripts |
+| `payload-path` | string | No | `""` | Path to additional payload directory whose contents mirror the install root |
+| `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
+| `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
+| `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
+| `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS Swift/package build stays on `macos-26` |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `SECRET_ENV_VARS` | No | Compile-time env vars written to `.env` |
+| `APP_ID` | No | GitHub App ID for private SwiftPM dependencies |
+| `APP_PRIVATE_KEY` | No | GitHub App private key for private SwiftPM dependencies |
 
 #### Example
 
