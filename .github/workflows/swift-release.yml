@@ -143,7 +143,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}
-            DEPLOYMENT_ENVIRONMENT=production
+            BUILD_ENVIRONMENT=production
             ${{ secrets.SECRET_ENV_VARS }}
           resource-bundles: ${{ inputs.resource-bundles }}
       - name: Swift Package

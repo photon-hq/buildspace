@@ -99,7 +99,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           compile-env: |-
             VERSION=PR-${{ github.event.pull_request.number }}
-            DEPLOYMENT_ENVIRONMENT=development
+            BUILD_ENVIRONMENT=development
             ${{ secrets.SECRET_ENV_VARS }}
           resource-bundles: ${{ inputs.resource-bundles }}
 
