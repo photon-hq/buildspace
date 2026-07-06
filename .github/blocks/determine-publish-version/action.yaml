@@ -123,24 +123,36 @@ runs:
         was truncated you may run `git diff` yourself (read-only) for any file.
 
         How to choose the bump (apply in order):
-        1. MAJOR — if a commit message carries an explicit `BREAKING CHANGE:`
-           footer or a `type!:` marker, that is authoritative: bump major.
-           ALSO bump major if the DIFF itself is backward-incompatible even when
-           no commit said so — e.g. a public endpoint/route/exported symbol is
-           removed or renamed, a request/response schema or required field
-           changes shape, default behavior changes in a way that breaks existing
-           callers, or a config/runtime contract changes. You are explicitly
-           allowed to bump the major from the diff alone.
-        2. MINOR — backward-COMPATIBLE new functionality: a new endpoint, flag,
-           exported symbol, or capability is ADDED without breaking existing
-           ones (corresponds to `feat:`).
+        1. MAJOR — a breaking or broadly-disruptive change. Bump major if ANY
+           of these hold:
+           - a commit message carries an explicit `BREAKING CHANGE:` footer or
+             a `type!:` marker (authoritative); OR
+           - the DIFF is backward-incompatible even when no commit said so —
+             e.g. a public endpoint/route/exported symbol is removed or
+             renamed, a request/response schema or required field changes
+             shape, default behavior changes in a way that breaks existing
+             callers, or a config/runtime contract changes; OR
+           - the change lands on the common path for the vast majority of
+             users (roughly 90%+ of them) — e.g. it changes a default everyone
+             relies on, forces a migration / re-config / re-auth, or alters
+             output or UX that nearly all users will hit. A high blast radius
+             is breaking even if old code technically still compiles.
+           You are explicitly allowed to bump the major from the diff alone.
+        2. MINOR — backward-COMPATIBLE new functionality that users opt into: a
+           new endpoint, flag, exported symbol, or capability is ADDED without
+           breaking existing ones and without changing what current users
+           already experience (corresponds to `feat:`).
         3. PATCH — bug fixes, performance, internal refactors, docs, chores, or
-           anything else that neither adds public surface nor breaks it.
+           anything else that neither adds public surface nor breaks it, and
+           that most users won't actively notice.
 
-        Be conservative about MAJOR to avoid false positives: purely additive
-        changes are MINOR, not MAJOR. Only call it breaking if existing public
-        behavior is actually removed or changed incompatibly. When genuinely
-        unclear between two levels, pick the lower one (default to patch).
+        Be conservative about MAJOR to avoid false positives. "Could affect 90%
+        of users" means the change alters something on the common path that
+        nearly all users already depend on — NOT merely that a new, opt-in
+        feature is available to them. A purely additive feature is MINOR even
+        if every user could eventually adopt it, because it doesn't disrupt
+        what they already do. When genuinely unclear between two levels, pick
+        the lower one (default to patch).
         PROMPT
           echo
           echo "A major bump of ${STABLE_VERSION} increments the first number and"
