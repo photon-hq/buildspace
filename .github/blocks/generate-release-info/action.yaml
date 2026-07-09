@@ -55,6 +55,7 @@ runs:
       id: ai-notes
       uses: openai/codex-action@v1
       with:
+        model: gpt-5.5
         prompt: |
           Generate release notes for ${{ inputs.service-name }} v${{ steps.version.outputs.final }}.
           ${{ steps.release-context.outputs.is_initial == 'true' && format('This is the initial release. Describe the key features and capabilities of {0} based on the codebase.', inputs.service-name) || format('Changes since v{0} (current commit: {1}).', steps.version-info.outputs.previous-version, github.sha) }}
