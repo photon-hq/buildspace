@@ -83,6 +83,7 @@ jobs:
         with:
           codex-home: ${{ runner.temp }}/codex-release-notes
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-5.5
           sandbox: read-only
           prompt: |
             Generate release notes for buildspace v${{ steps.version.outputs.version }}.

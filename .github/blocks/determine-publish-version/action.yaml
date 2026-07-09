@@ -185,6 +185,7 @@ runs:
       uses: openai/codex-action@v1
       with:
         openai-api-key: ${{ inputs.openai-api-key }}
+        model: gpt-5.5
         safety-strategy: read-only
         effort: high
         prompt-file: ${{ steps.context.outputs.prompt-file }}
