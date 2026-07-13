@@ -12,7 +12,7 @@ inputs:
   node-version:
     description: '[string] Node.js version'
     required: false
-    default: '20'
+    default: '24'
   tag:
     description: "[string] NPM tag (e.g., 'latest', 'beta')"
     required: false
