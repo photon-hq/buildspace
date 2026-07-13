@@ -1103,7 +1103,7 @@ Builds and publishes multiple monorepo packages to npm in dependency order. Supp
 |-------|------|----------|---------|-------------|
 | `changed-packages` | string | Yes | — | JSON array of packages in topological order |
 | `bun-version` | string | No | `latest` | Bun version |
-| `node-version` | string | No | `20` | Node.js version |
+| `node-version` | string | No | `24` | Node.js version |
 | `tag` | string | No | `latest` | npm dist-tag |
 | `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
 | `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
@@ -1254,7 +1254,7 @@ Publishes a single package to npm (installs dependencies, builds, publishes). Tr
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `bun-version` | string | No | `latest` | Bun version |
-| `node-version` | string | No | `20` | Node.js version |
+| `node-version` | string | No | `24` | Node.js version |
 | `working-directory` | string | No | `.` | Directory containing `package.json` |
 | `build-command` | string | No | `bun run build` | Build command |
 | `tag` | string | No | `latest` | npm dist-tag |
