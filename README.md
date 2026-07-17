@@ -341,13 +341,14 @@ Complete release pipeline for TypeScript/JavaScript monorepos with independently
 | `prerelease` | boolean | No | `false` | Force prerelease |
 | `release` | boolean | No | `false` | Force release (bypasses label check) |
 | `dry-run` | boolean | No | `false` | Test without actually publishing |
+| `use-oidc` | boolean | No | `false` | Opt in to npm OIDC Trusted Publishing (requires caller `id-token: write` + a trusted publisher configured on npmjs.com for every package being released). Falls back to `NPM_TOKEN`. Default keeps least-privilege token publishing |
 
 #### Secrets
 
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `OPENAI_API_KEY` | Yes | For AI-powered versioning and release notes |
-| `NPM_TOKEN` | Yes | npm authentication token |
+| `NPM_TOKEN` | No | npm auth token; used as the fallback when OIDC Trusted Publishing isn't configured for a package |
 | `APP_ID` | No | GitHub App ID (for pushing to protected branches) |
 | `APP_PRIVATE_KEY` | No | GitHub App private key (for pushing to protected branches) |
 
@@ -360,6 +361,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      # id-token: write  # only needed when use-oidc: true (npm Trusted Publishing)
     with:
       service-name: photon-ts
       packages: |
@@ -370,10 +372,13 @@ jobs:
         ]
       root-build-command: "turbo build"
       include-dependents: true
+      # use-oidc: true   # opt in to npm OIDC Trusted Publishing
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
+
+> **Enabling OIDC Trusted Publishing (opt-in):** set `use-oidc: true`, add `id-token: write` to the caller's `permissions`, and configure a [trusted publisher](https://docs.npmjs.com/trusted-publishers) **for every package** in the monorepo on npmjs.com. The runner needs npm ≥ 11.5.1. Since `bun publish` doesn't speak OIDC yet ([oven-sh/bun#15601](https://github.com/oven-sh/bun/issues/15601)), the OIDC path packs each package with `bun pm pack` (preserving `workspace:*` rewriting) and publishes the tarball with `npm publish --provenance`; the token fallback continues to use `bun publish` exactly as before. Callers that don't set `use-oidc` are completely unaffected — they keep `contents: read` least-privilege and publish via `NPM_TOKEN` exactly as before.
 
 #### How It Works
 
@@ -1095,7 +1100,7 @@ Determines versions for all changed monorepo packages using a single AI call, bu
 
 **Path:** `.github/blocks/publish-npm-packages/action.yaml`
 
-Builds and publishes multiple monorepo packages to npm in dependency order. Supports both per-package builds and a single root build command.
+Builds and publishes multiple monorepo packages to npm in dependency order. Supports both per-package builds and a single root build command. Tries npm OIDC Trusted Publishing first (per package, when the calling job has `id-token: write`), then falls back to token-based `bun publish` with `npm-token`.
 
 #### Inputs
 
@@ -1107,8 +1112,8 @@ Builds and publishes multiple monorepo packages to npm in dependency order. Supp
 | `tag` | string | No | `latest` | npm dist-tag |
 | `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
 | `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
-| `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
-| `npm-token` | secret | Yes | — | npm authentication token |
+| `dry-run` | boolean | No | `false` | Run `bun publish --dry-run` |
+| `npm-token` | secret | No | — | npm token; used only as a fallback when OIDC Trusted Publishing is unavailable or fails for a package |
 
 #### Usage
 
@@ -1119,6 +1124,11 @@ Builds and publishes multiple monorepo packages to npm in dependency order. Supp
     root-build-command: "turbo build"
     npm-token: ${{ secrets.NPM_TOKEN }}
 ```
+
+#### Publishing modes
+
+1. **OIDC Trusted Publishing (preferred):** when the calling job has `id-token: write`, each package is packed with `bun pm pack` (preserving `workspace:*` rewriting) and published tokenlessly with `npm publish <tarball> --provenance`. Requires a configured [trusted publisher](https://docs.npmjs.com/trusted-publishers) for **every** package on npmjs.com and npm ≥ 11.5.1 on the runner. Done per-package, so partial OIDC coverage falls back per-package.
+2. **Token fallback:** if OIDC is unavailable (no `id-token: write`) or fails for a package, that package falls back to `bun publish` with `npm-token` (same behavior as before). This is the default today — keep providing `NPM_TOKEN` until every package has a trusted publisher configured.
 
 ---
 

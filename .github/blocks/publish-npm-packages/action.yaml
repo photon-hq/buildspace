@@ -30,8 +30,8 @@ inputs:
     required: false
     default: 'false'
   npm-token:
-    description: '[secret] NPM authentication token'
-    required: true
+    description: 'NPM authentication token. Used only as a fallback when npm OIDC Trusted Publishing is unavailable or fails. Not required if OIDC Trusted Publishing is fully configured for every package being released.'
+    required: false
 
 runs:
   using: 'composite'
@@ -81,11 +81,54 @@ runs:
             (cd "$PKG_PATH" && $BUILD_CMD)
           fi
 
+          # Dry-run only validates packaging, so do it before any auth checks.
+          # `bun publish --dry-run` is fine here because it doesn't hit the
+          # registry; we keep it on bun so workspace:* deps still resolve.
           if [ "$DRY_RUN" = "true" ]; then
             echo "Dry run: would publish $NAME with tag $TAG"
             (cd "$PKG_PATH" && bun publish --tag "$TAG" --access public --dry-run)
+            echo ""
+            continue
+          fi
+
+          # Step 1: try npm OIDC Trusted Publishing (tokenless, with
+          # provenance). bun publish doesn't yet support OIDC
+          # (oven-sh/bun#15601), so we use the documented workaround: pack
+          # with bun (preserves workspace:* rewriting that npm pack would
+          # leave broken) and publish the tarball with npm. The runner only
+          # sets ACTIONS_ID_TOKEN_REQUEST_TOKEN when the job has
+          # 'id-token: write', so when that permission is absent we skip OIDC
+          # entirely rather than run a publish that is guaranteed to fail on
+          # auth.
+          PUBLISHED=false
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "🔒 Attempting publish of $NAME via npm Trusted Publishing (OIDC)..."
+            if (
+              cd "$PKG_PATH"
+              rm -f -- *.tgz 2>/dev/null || true
+              bun pm pack
+              TARBALL=$(ls -t -- *.tgz | head -n 1)
+              [ -n "$TARBALL" ]
+              npm publish "$TARBALL" --tag "$TAG" --access public --provenance
+            ); then
+              echo "✅ Published $NAME via OIDC Trusted Publishing."
+              PUBLISHED=true
+            else
+              echo "⚠️ OIDC publish of $NAME failed. Falling back to NPM token."
+            fi
           else
-            echo "Publishing $NAME with tag $TAG"
+            echo "ℹ️ No OIDC id-token available (job lacks 'id-token: write'). Skipping OIDC; will use NPM token."
+          fi
+
+          # Step 2: fall back to the traditional token-based publish. Same
+          # bun publish flow as before, so workspace:* deps continue to
+          # resolve. Only reached when OIDC was skipped or failed.
+          if [ "$PUBLISHED" != "true" ]; then
+            if [ -z "$NODE_AUTH_TOKEN" ]; then
+              echo "❌ OIDC was unavailable or failed, and no NPM token was provided. Cannot publish $NAME."
+              exit 1
+            fi
+            echo "🔑 Publishing $NAME via NPM token with tag $TAG"
             (cd "$PKG_PATH" && bun publish --tag "$TAG" --access public)
           fi
 
