@@ -20,7 +20,12 @@ on:
         type: string
         required: false
         default: "latest"
-        description: "NPM tag to publish with"
+        description: "Package tag to use for npmjs.org and GitHub Packages"
+      publish-github-packages:
+        type: boolean
+        required: false
+        default: false
+        description: "Also publish changed packages to the GitHub Packages npm registry. Package names must use the repository owner's scope; caller must grant packages: write."
       build-command:
         type: string
         required: false
@@ -50,7 +55,7 @@ on:
         type: boolean
         required: false
         default: false
-        description: "Force release - does both GitHub release and npm publish"
+        description: "Force release - creates the GitHub Release and runs enabled package publishes"
       dry-run:
         type: boolean
         required: false
@@ -201,3 +206,27 @@ jobs:
           root-build-command: ${{ inputs.root-build-command }}
           dry-run: ${{ inputs.dry-run }}
           npm-token: ${{ secrets.NPM_TOKEN }}
+
+  github-packages-publish:
+    needs: [check-labels, detect-changes, bump-versions]
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    if: inputs.publish-github-packages == true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Publish GitHub Packages
+        uses: photon-hq/buildspace/.github/blocks/publish-github-packages@main
+        with:
+          changed-packages: ${{ needs.detect-changes.outputs.changed }}
+          bun-version: ${{ inputs.bun-version }}
+          tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
+          build-command: ${{ inputs.build-command }}
+          root-build-command: ${{ inputs.root-build-command }}
+          dry-run: ${{ inputs.dry-run }}
+          github-token: ${{ github.token }}

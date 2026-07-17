@@ -39,12 +39,14 @@ BuildSpace gives you two layers of CI/CD automation:
   - [create-github-release](#create-github-release)
   - [detect-changed-packages](#detect-changed-packages)
   - [bump-monorepo-versions](#bump-monorepo-versions)
+  - [publish-github-packages](#publish-github-packages)
   - [publish-npm-packages](#publish-npm-packages)
   - [rust-build](#rust-build)
   - [typescript-build](#typescript-build)
   - [sync-crates-version](#sync-crates-version)
   - [publish-crates](#publish-crates)
   - [publish-npm](#publish-npm)
+  - [publish-github-package](#publish-github-package)
   - [comment-on-pr](#comment-on-pr)
   - [update-docs](#update-docs)
   - [update-skills](#update-skills-1)
@@ -114,9 +116,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      # packages: write  # required when publish-github-packages: true
     with:
       service-name: my-package
       build-command: "npm run build"
+      # publish-github-packages: true
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -139,10 +143,12 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      # packages: write  # required when publish-github-packages: true
     with:
       service-name: photon-ts
-      packages: '[{"name":"photon","path":"packages/photon"},{"name":"@photon/openai-compatible","path":"packages/openai-compatible"}]'
+      packages: '[{"name":"@photon-hq/photon","path":"packages/photon"},{"name":"@photon-hq/openai-compatible","path":"packages/openai-compatible"}]'
       root-build-command: "turbo build"
+      # publish-github-packages: true
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -196,6 +202,8 @@ Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and relea
 
 Add these in your repo's **Settings > Secrets and variables > Actions**, or set them as **org-level secrets** under `photon-hq` so every repo inherits them automatically via `secrets: inherit`.
 
+GitHub Packages publishing does not need another stored secret. It uses the caller repository's short-lived `GITHUB_TOKEN`; grant the reusable-workflow job `packages: write` when `publish-github-packages` is enabled.
+
 ### PR Labels
 
 Control releases by adding labels to your PR before merging:
@@ -209,7 +217,7 @@ Control releases by adding labels to your PR before merging:
 
 ### Permissions
 
-Workflows that create releases or push commits need `contents: write`. Workflows that read PR labels need `pull-requests: read`. Workflows that post comments need `pull-requests: write`. Each workflow section below lists the exact permissions required.
+Workflows that create releases or push commits need `contents: write`. Workflows that read PR labels need `pull-requests: read`. Workflows that post comments need `pull-requests: write`. GitHub Packages publishing needs `packages: write`. Each workflow section below lists the exact permissions required.
 
 ---
 
@@ -272,7 +280,7 @@ jobs:
 
 **File:** `.github/workflows/typescript-service-release.yaml`
 
-Complete release pipeline for a single TypeScript/JavaScript package: checks PR labels, generates version and release notes with AI, bumps `package.json`, creates a GitHub Release, and publishes to npm.
+Complete release pipeline for a single TypeScript/JavaScript package: checks PR labels, generates version and release notes with AI, bumps `package.json`, creates a GitHub Release, publishes to npm, and can optionally publish the same package to GitHub Packages.
 
 #### Inputs
 
@@ -280,10 +288,12 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Display name for the service |
 | `bun-version` | string | No | `latest` | Bun version to use |
-| `npm-tag` | string | No | `latest` | npm dist-tag (e.g., `latest`, `beta`, `next`) |
-| `no-npm-publish` | boolean | No | `false` | Skip npm publishing (GitHub Release only) |
+| `npm-tag` | string | No | `latest` | Package tag for npmjs.org and GitHub Packages (e.g., `latest`, `beta`, `next`) |
+| `no-npm-publish` | boolean | No | `false` | Skip npmjs.org publishing |
+| `publish-github-packages` | boolean | No | `false` | Also publish to `npm.pkg.github.com`; requires an `@owner/package` name and caller `packages: write` |
 | `working-directory` | string | No | `.` | Directory containing `package.json` |
 | `build-command` | string | No | `bun run build` | Build command to run |
+| `publish-command` | string | No | `npm publish` | Publisher command; target-specific registry and publish flags are appended |
 | `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
 | `prerelease` | boolean | No | `false` | Force prerelease |
 | `release` | boolean | No | `false` | Force release (bypasses label check) |
@@ -307,10 +317,12 @@ jobs:
       contents: write
       pull-requests: read
       # id-token: write  # only needed when use-oidc: true (npm Trusted Publishing)
+      # packages: write  # only needed when publish-github-packages: true
     with:
       service-name: notebooklm-kit
       build-command: "npm run build"
       # use-oidc: true   # opt in to npm OIDC Trusted Publishing
+      # publish-github-packages: true
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -318,13 +330,15 @@ jobs:
 
 > **Enabling OIDC Trusted Publishing (opt-in):** set `use-oidc: true`, add `id-token: write` to the caller's `permissions`, configure a [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com, and ensure the runner has npm ≥ 11.5.1. Callers that don't set `use-oidc` are completely unaffected — they keep `contents: read` least-privilege and publish via `NPM_TOKEN` exactly as before.
 
+> **Publishing to GitHub Packages (opt-in):** set `publish-github-packages: true` and add `packages: write` to the caller's `permissions`. The package's `name` must be scoped to the repository owner (for example, `@photon-hq/notebooklm-kit`). BuildSpace authenticates with the automatic `GITHUB_TOKEN`, so no PAT or additional secret is required. Leave `no-npm-publish` as `false` to publish to both registries, or set it to `true` for GitHub Packages only.
+
 ---
 
 ### TypeScript Monorepo Release
 
 **File:** `.github/workflows/typescript-monorepo-release.yaml`
 
-Complete release pipeline for TypeScript/JavaScript monorepos with independently-versioned packages. Detects which packages changed since the last release, topologically sorts them by dependency order, uses a single AI call to determine all versions and generate combined release notes, bumps each `package.json`, creates a GitHub Release with a `release/YYYY-MM-DD.N` tag, and publishes all changed packages to npm in dependency order.
+Complete release pipeline for TypeScript/JavaScript monorepos with independently-versioned packages. Detects which packages changed since the last release, topologically sorts them by dependency order, uses a single AI call to determine all versions and generate combined release notes, bumps each `package.json`, creates a GitHub Release with a `release/YYYY-MM-DD.N` tag, publishes all changed packages to npm in dependency order, and can optionally mirror them to GitHub Packages.
 
 #### Inputs
 
@@ -333,7 +347,8 @@ Complete release pipeline for TypeScript/JavaScript monorepos with independently
 | `service-name` | string | Yes | — | Display name for the monorepo |
 | `packages` | string | Yes | — | JSON array of packages: `[{"name":"pkg","path":"packages/pkg"}]` |
 | `bun-version` | string | No | `latest` | Bun version to use |
-| `npm-tag` | string | No | `latest` | npm dist-tag |
+| `npm-tag` | string | No | `latest` | Package tag for npmjs.org and GitHub Packages |
+| `publish-github-packages` | boolean | No | `false` | Also publish changed packages to `npm.pkg.github.com`; every name must use the repository owner's scope and caller must grant `packages: write` |
 | `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
 | `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
 | `include-dependents` | boolean | No | `false` | Also release downstream dependents of changed packages |
@@ -360,20 +375,24 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      packages: write
     with:
       service-name: photon-ts
       packages: |
         [
-          {"name":"photon","path":"packages/photon"},
-          {"name":"@photon/openai-compatible","path":"packages/openai-compatible"},
-          {"name":"create-photon","path":"packages/create-photon"}
+          {"name":"@photon-hq/photon","path":"packages/photon"},
+          {"name":"@photon-hq/openai-compatible","path":"packages/openai-compatible"},
+          {"name":"@photon-hq/create-photon","path":"packages/create-photon"}
         ]
       root-build-command: "turbo build"
       include-dependents: true
+      publish-github-packages: true
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
+
+GitHub Packages uses the automatic `GITHUB_TOKEN`; no additional secret is needed. Every opted-in package must be scoped to the repository owner, such as `@photon-hq/openai-compatible`.
 
 #### How It Works
 
@@ -391,8 +410,8 @@ PR merged with "release" label
                                               │                 │
                                               ▼                 ▼
                                      ┌──────────────┐  ┌─────────────┐
-                                     │GitHub Release │  │ npm Publish │
-                                     │(combined tag) │  │ (in order)  │
+                                     │GitHub Release │  │npm + GitHub │
+                                     │(combined tag) │  │Pkg Publish  │
                                      └──────────────┘  └─────────────┘
 ```
 
@@ -1091,6 +1110,37 @@ Determines versions for all changed monorepo packages using a single AI call, bu
 
 ---
 
+### publish-github-packages
+
+**Path:** `.github/blocks/publish-github-packages/action.yaml`
+
+Builds and publishes changed monorepo packages to the GitHub Packages npm registry in dependency order. It authenticates with a GitHub token, validates that every package uses the repository owner's scope, and verifies each published version.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `changed-packages` | string | Yes | — | JSON array of packages in topological order |
+| `bun-version` | string | No | `latest` | Bun version |
+| `node-version` | string | No | `24` | Node.js version |
+| `tag` | string | No | `latest` | Package tag |
+| `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
+| `root-build-command` | string | No | `""` | Build once at repo root |
+| `dry-run` | boolean | No | `false` | Validate package contents without publishing |
+| `github-token` | secret | Yes | — | GitHub token with `packages: write` |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/publish-github-packages@main
+  with:
+    changed-packages: ${{ steps.detect.outputs.changed }}
+    root-build-command: "turbo build"
+    github-token: ${{ github.token }}
+```
+
+---
+
 ### publish-npm-packages
 
 **Path:** `.github/blocks/publish-npm-packages/action.yaml`
@@ -1259,6 +1309,7 @@ Publishes a single package to npm (installs dependencies, builds, publishes). Tr
 | `build-command` | string | No | `bun run build` | Build command |
 | `tag` | string | No | `latest` | npm dist-tag |
 | `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
+| `publish-command` | string | No | `npm publish` | Publisher command; registry, tag, access, and dry-run flags are appended |
 | `npm-token` | secret | No | — | npm token; used only as a fallback when OIDC Trusted Publishing is unavailable or fails |
 
 #### Usage
@@ -1274,6 +1325,36 @@ Publishes a single package to npm (installs dependencies, builds, publishes). Tr
 
 1. **OIDC Trusted Publishing (preferred):** when the calling job has `id-token: write`, the action publishes tokenlessly with provenance. Requires a configured [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com and npm ≥ 11.5.1 on the runner.
 2. **Token fallback:** if OIDC is unavailable (no `id-token: write`) or fails, the action publishes with `npm-token`. This is the default behavior today — keep providing `NPM_TOKEN` so publishing works until OIDC is fully set up.
+
+---
+
+### publish-github-package
+
+**Path:** `.github/blocks/publish-github-package/action.yaml`
+
+Builds and publishes one owner-scoped npm package to GitHub Packages. It uses an explicit registry flag so a package can be published to npmjs.org and GitHub Packages in the same release even when `publishConfig.registry` is present, then verifies the exact version is visible.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `bun-version` | string | No | `latest` | Bun version |
+| `node-version` | string | No | `24` | Node.js version |
+| `working-directory` | string | No | `.` | Directory containing `package.json` |
+| `build-command` | string | No | `bun run build` | Build command |
+| `tag` | string | No | `latest` | Package tag |
+| `dry-run` | boolean | No | `false` | Validate package contents without publishing |
+| `publish-command` | string | No | `npm publish` | Publisher command; registry, tag, and dry-run flags are appended |
+| `github-token` | secret | Yes | — | GitHub token with `packages: write` |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/publish-github-package@main
+  with:
+    build-command: "npm run build"
+    github-token: ${{ github.token }}
+```
 
 ---
 
@@ -1408,6 +1489,8 @@ buildspace/
 │   │   ├── generate-release-info/     # AI version + release notes
 │   │   ├── go-build/                  # Go cross-compilation
 │   │   ├── publish-crates/            # crates.io publishing
+│   │   ├── publish-github-package/     # GitHub Packages publishing (single package)
+│   │   ├── publish-github-packages/    # GitHub Packages publishing (monorepo, ordered)
 │   │   ├── publish-npm/               # npm publishing (single package)
 │   │   ├── publish-npm-packages/      # npm publishing (monorepo, ordered)
 │   │   ├── rust-build/                # Cross-platform Rust builds

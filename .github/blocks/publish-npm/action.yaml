@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'false'
   publish-command:
-    description: "[string] Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). The --tag, --access, and --dry-run flags are appended automatically."
+    description: "[string] Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). The --registry, --tag, --access, and --dry-run flags are appended automatically."
     required: false
     default: 'npm publish'
   npm-token:
@@ -96,7 +96,7 @@ runs:
         # from killing the script before we can branch on it.
         LOG="$(mktemp)"
         set +e
-        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --provenance $DRYRUN_FLAG 2>&1 | tee "$LOG"
+        ${{ inputs.publish-command }} --registry https://registry.npmjs.org --tag ${{ inputs.tag }} --access public --provenance $DRYRUN_FLAG 2>&1 | tee "$LOG"
         PUBLISH_EXIT=${PIPESTATUS[0]}
         set -e
 
@@ -137,7 +137,7 @@ runs:
         # would fail packaging validation for no reason.
         if [ "${{ inputs.dry-run }}" == "true" ]; then
           echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
-          ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public --dry-run
+          ${{ inputs.publish-command }} --registry https://registry.npmjs.org --tag ${{ inputs.tag }} --access public --dry-run
           exit 0
         fi
 
@@ -155,7 +155,7 @@ runs:
         # catches the wrapper-swallowed-exit case that broke spectrum-ts.
         LOG="$(mktemp)"
         set +e
-        ${{ inputs.publish-command }} --tag ${{ inputs.tag }} --access public 2>&1 | tee "$LOG"
+        ${{ inputs.publish-command }} --registry https://registry.npmjs.org --tag ${{ inputs.tag }} --access public 2>&1 | tee "$LOG"
         PUBLISH_EXIT=${PIPESTATUS[0]}
         set -e
 

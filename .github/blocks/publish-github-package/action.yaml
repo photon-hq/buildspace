@@ -1,0 +1,138 @@
+name: 'Publish to GitHub Packages'
+description: 'Build and publish a single npm package to the GitHub Packages registry'
+
+inputs:
+  bun-version:
+    description: '[string] Bun version to use'
+    required: false
+    default: 'latest'
+  node-version:
+    description: '[string] Node.js version'
+    required: false
+    default: '24'
+  working-directory:
+    description: '[string] Directory containing package.json'
+    required: false
+    default: '.'
+  build-command:
+    description: '[string] Build command'
+    required: false
+    default: 'bun run build'
+  tag:
+    description: "[string] Package tag (e.g., 'latest', 'beta')"
+    required: false
+    default: 'latest'
+  dry-run:
+    description: '[boolean] Run in dry-run mode (no actual publishing)'
+    required: false
+    default: 'false'
+  publish-command:
+    description: "[string] Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). The --registry, --tag, and --dry-run flags are appended automatically."
+    required: false
+    default: 'npm publish'
+  github-token:
+    description: '[secret] GitHub token with packages: write for the repository that owns the package'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    # Install and build before mapping the repository owner's npm scope to
+    # GitHub Packages. This keeps ordinary npmjs.org dependencies resolvable
+    # when a package is being published to both registries for the first time.
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: bun install
+
+    - name: Build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: ${{ inputs.build-command }}
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        registry-url: 'https://npm.pkg.github.com'
+        scope: ${{ format('@{0}', github.repository_owner) }}
+
+    - name: Publish to GitHub Packages
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+        PACKAGE_OWNER: ${{ github.repository_owner }}
+        REGISTRY_URL: 'https://npm.pkg.github.com'
+        TAG: ${{ inputs.tag }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: |
+        set -euo pipefail
+
+        NAME=$(jq -r .name package.json)
+        VERSION=$(jq -r .version package.json)
+        if [ -z "$NAME" ] || [ "$NAME" = "null" ] || [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+          echo "❌ Could not read name/version from package.json."
+          exit 1
+        fi
+
+        NAME_LOWER=$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]')
+        EXPECTED_PREFIX=$(printf '@%s/' "$PACKAGE_OWNER" | tr '[:upper:]' '[:lower:]')
+        case "$NAME_LOWER" in
+          "$EXPECTED_PREFIX"*) ;;
+          *)
+            echo "❌ GitHub Packages requires the package name to use the repository owner's scope."
+            echo "   Expected @${PACKAGE_OWNER}/<package>, found: $NAME"
+            exit 1
+            ;;
+        esac
+
+        DRYRUN_FLAG=""
+        if [ "$DRY_RUN" = "true" ]; then
+          DRYRUN_FLAG="--dry-run"
+          echo "🧪 Dry run mode enabled."
+        elif [ -z "$NODE_AUTH_TOKEN" ]; then
+          echo "❌ No GitHub token was provided. Grant the caller 'packages: write'."
+          exit 1
+        fi
+
+        echo "Publishing $NAME@$VERSION to GitHub Packages with tag $TAG..."
+        LOG=$(mktemp)
+        trap 'rm -f "$LOG"' EXIT
+
+        set +e
+        ${{ inputs.publish-command }} --registry "$REGISTRY_URL" --tag "$TAG" $DRYRUN_FLAG 2>&1 | tee "$LOG"
+        PUBLISH_EXIT=${PIPESTATUS[0]}
+        set -e
+
+        if [ "$PUBLISH_EXIT" -ne 0 ]; then
+          echo "❌ GitHub Packages publish exited non-zero ($PUBLISH_EXIT)."
+          exit "$PUBLISH_EXIT"
+        fi
+
+        if grep -qE '^npm (error|ERR!)' "$LOG"; then
+          echo "❌ Publisher reported success but npm emitted error lines in its output."
+          exit 1
+        fi
+
+        if [ "$DRY_RUN" = "true" ]; then
+          echo "✅ GitHub Packages dry run completed."
+          exit 0
+        fi
+
+        for attempt in 1 2 3 4 5 6; do
+          PUBLISHED_VERSION=$(npm view "$NAME@$VERSION" version --registry "$REGISTRY_URL" 2>/dev/null || true)
+          if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
+            echo "✅ $NAME@$VERSION is live on GitHub Packages."
+            exit 0
+          fi
+          echo "Attempt $attempt: package version is not visible yet — retrying in 5s..."
+          sleep 5
+        done
+
+        echo "❌ Publish verification failed: $NAME@$VERSION is not visible on GitHub Packages."
+        echo "Confirm the caller grants packages: write and the package scope matches @${PACKAGE_OWNER}."
+        exit 1

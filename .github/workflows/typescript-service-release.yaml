@@ -16,12 +16,17 @@ on:
         type: string
         required: false
         default: "latest"
-        description: "NPM tag to publish with"
+        description: "Package tag to use for npmjs.org and GitHub Packages"
       no-npm-publish:
         type: boolean
         required: false
         default: false
-        description: "Do not publish to npm"
+        description: "Do not publish to npmjs.org"
+      publish-github-packages:
+        type: boolean
+        required: false
+        default: false
+        description: "Also publish to the GitHub Packages npm registry. package.json name must use the repository owner's scope; caller must grant packages: write."
       working-directory:
         type: string
         required: false
@@ -36,7 +41,7 @@ on:
         type: string
         required: false
         default: "npm publish"
-        description: "Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). The --tag, --access, and --dry-run flags are appended automatically."
+        description: "Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). Registry, tag, access, and dry-run flags are appended automatically."
       labels-to-check:
         type: string
         required: false
@@ -51,7 +56,7 @@ on:
         type: boolean
         required: false
         default: false
-        description: "Force release - does both GitHub release and npm publish"
+        description: "Force release - creates the GitHub Release and runs enabled package publishes"
       dry-run:
         type: boolean
         required: false
@@ -222,8 +227,31 @@ jobs:
           dry-run: ${{ inputs.dry-run }}
           npm-token: ${{ secrets.NPM_TOKEN }}
 
+  github-packages-publish:
+    needs: [check-labels, release-info, bump-version]
+    if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && inputs.publish-github-packages == true
+    runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Publish to GitHub Packages
+        uses: photon-hq/buildspace/.github/blocks/publish-github-package@main
+        with:
+          bun-version: ${{ inputs.bun-version }}
+          tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
+          working-directory: ${{ inputs.working-directory }}
+          build-command: ${{ inputs.build-command }}
+          publish-command: ${{ inputs.publish-command }}
+          dry-run: ${{ inputs.dry-run }}
+          github-token: ${{ github.token }}
+
   notify:
-    needs: [check-labels, release-info, github-release, npm-publish, npm-publish-oidc]
+    needs: [check-labels, release-info, github-release, npm-publish, npm-publish-oidc, github-packages-publish]
     if: >-
       always() &&
       github.repository == 'photon-hq/spectrum-ts' &&
@@ -232,6 +260,7 @@ jobs:
       needs.github-release.result == 'success' &&
       (needs.npm-publish.result == 'success' || needs.npm-publish.result == 'skipped') &&
       (needs.npm-publish-oidc.result == 'success' || needs.npm-publish-oidc.result == 'skipped') &&
+      (needs.github-packages-publish.result == 'success' || needs.github-packages-publish.result == 'skipped') &&
       inputs.notify-on-release &&
       contains(fromJSON('["major","minor","patch"]'), needs.release-info.outputs.release_type)
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
