@@ -122,30 +122,36 @@ runs:
         impact shown by the diff is the source of truth. If the diff was
         truncated you may run `git diff` yourself (read-only) for any file.
 
-        Choose the highest bump that is concretely justified:
-        1. MAJOR — backward-INCOMPATIBLE. Use this only when an existing,
-           supported consumer must change code, configuration, stored data, or
-           usage to keep working. Concrete evidence includes:
-           - an explicit `BREAKING CHANGE:` footer or `type!:` marker; OR
-           - a public endpoint, route, export, option, or accepted input is
-             removed or renamed; OR
-           - a documented public schema/type changes incompatibly (a required
-             field is added, a field is removed, or its meaning/type changes);
-             OR
-           - an existing default or runtime/config contract changes such that a
-             previously valid, supported use case now fails or needs migration.
-           You may infer a major from the diff without a marker, but identify
-           the concrete public contract that existing consumers can no longer
-           use. Blast radius, visibility, changed-line count, or the fact that
-           behavior is automatic are NOT by themselves evidence of breakage.
-        2. MINOR — backward-compatible, user-visible functionality is ADDED.
-           This includes a new endpoint, flag, export, option, capability, or a
-           newly supported case in an existing operation. A feature does not
-           have to be opt-in. Returning richer information through an already
-           supported public type/variant can be minor when it handles data that
-           was previously ignored or lost and does not remove a supported use
-           case. A commit labeled `fix:` can therefore still be minor if it
-           gives users a meaningful new capability.
+        This project classifies releases by the practical migration burden on
+        developers, not by code-level incompatibility alone. Choose the highest
+        bump that is concretely justified:
+        1. MAJOR — a forced, substantially disruptive migration. Use this only
+           when existing supported consumers cannot keep their current code or
+           version working and must perform significant refactoring, data
+           migration, reconfiguration, or operational work. Examples include
+           older clients being rejected by a changed protocol, an existing
+           service/configuration ceasing to work until migrated, or a public
+           contract being redesigned so broadly that upgrading requires
+           extensive consumer changes.
+
+           An explicit `BREAKING CHANGE:` footer, a `type!:` marker, or a
+           technically incompatible diff is evidence to inspect, not an
+           automatic MAJOR. Do NOT choose MAJOR when consumers can safely keep
+           using the previous version and their existing code continues to run,
+           or when adopting the new version requires only small, localized
+           edits. In those cases there is no forced substantial migration, so
+           choose MINOR at most. Blast radius, visibility, changed-line count,
+           or the fact that behavior is automatic are also not sufficient by
+           themselves.
+        2. MINOR — new user-visible functionality, or an intentional public
+           API/behavior change that does not meet the MAJOR threshold. This
+           includes a new endpoint, flag, export, option, capability, newly
+           supported case, or a technically incompatible change whose adoption
+           is optional or needs only a small, localized consumer update.
+           Returning richer information through an already supported public
+           type/variant can be minor when it handles data that was previously
+           ignored or lost. A commit labeled `fix:` can therefore still be
+           minor if it gives users a meaningful new capability.
         3. PATCH — a backward-compatible correction or maintenance change that
            adds no new user capability: bug fixes that restore already-promised
            behavior, performance work, refactors, tests, docs, and chores.
@@ -153,9 +159,13 @@ runs:
         Use these tie-breakers:
         - Do not treat observed buggy or incomplete behavior as a compatibility
           guarantee unless it was a documented, supported contract.
-        - A behavior change can be PATCH or MINOR; it is MAJOR only when it
-          invalidates a supported contract and requires existing users to
-          migrate.
+        - Ask what happens to an existing consumer in practice. If their
+          current code/version keeps working and they are not forced to adopt
+          this release, the change is not MAJOR, even if the new API is
+          technically incompatible.
+        - A behavior or API change can be PATCH or MINOR; it is MAJOR only when
+          it forces a substantial migration to keep a supported use case
+          working.
         - To distinguish MINOR from PATCH, ask whether users can now do or
           receive something meaningful they could not before. If yes, MINOR;
           if the same promised capability merely works correctly, PATCH.
@@ -167,7 +177,10 @@ runs:
           exposed as attachment + text using an already-public group variant,
           while media without captions is unchanged: MINOR, not MAJOR.
         - A new optional API method or config flag: MINOR.
-        - A public field is renamed and callers must update: MAJOR.
+        - A public field is renamed, but adoption is optional and upgrading
+          needs only a few localized caller edits: MINOR, not MAJOR.
+        - A protocol change rejects existing clients and forces extensive
+          client migrations to restore service: MAJOR.
         - A crash is fixed without adding a capability: PATCH.
         PROMPT
           echo

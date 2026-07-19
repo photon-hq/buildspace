@@ -112,18 +112,26 @@ runs:
         hint, not the source of truth: most authors do not annotate breaking
         changes, so the diff is authoritative.
 
-        Rules (apply in order, per package, versioned independently):
-        - MAJOR — an explicit `BREAKING CHANGE:` footer or `type!:` marker, OR a
-          diff that is backward-incompatible even without one (a public/exported
-          symbol or entry point removed or renamed, a schema/required field or
-          return shape changed, default behavior or a config contract changed).
-          You are explicitly allowed to bump the major from the diff alone.
-        - MINOR — backward-compatible new functionality is ADDED (feat:).
+        Classify releases by practical developer migration burden, not by
+        code-level incompatibility alone. Rules (apply in order, per package,
+        versioned independently):
+        - MAJOR — a forced, substantially disruptive migration. Existing
+          supported consumers cannot keep their current code or version working
+          and must do significant refactoring, data migration, reconfiguration,
+          or operational work. A `BREAKING CHANGE:` footer, `type!:` marker, or
+          technically incompatible diff is evidence to inspect, not an
+          automatic major bump. If the previous version and existing consumer
+          code keep running, adoption is optional, or upgrading needs only
+          small localized edits, choose MINOR at most.
+        - MINOR — user-visible functionality is added, or a public API/behavior
+          changes without forcing a substantial migration. This includes a
+          technically incompatible change with optional adoption or only a
+          small, localized consumer update.
         - PATCH — fixes, perf, refactors, docs, chores; nothing public removed
           or broken.
-        Be conservative about MAJOR: purely additive changes are MINOR, and when
-        genuinely unclear pick the lower bump. For prereleases the -rc suffix is
-        added automatically.
+        Be conservative about MAJOR: purely additive changes are MINOR, and a
+        small or avoidable migration is not MAJOR. When genuinely unclear pick
+        the lower bump. For prereleases the -rc suffix is added automatically.
 
         PROMPT
         } > "$PROMPT_FILE"
