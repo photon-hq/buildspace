@@ -41,9 +41,23 @@ runs:
       with:
         bun-version: ${{ inputs.bun-version }}
 
+    # Credentials only, no scope mapping. A package whose own dependencies
+    # live on GitHub Packages needs a token to install them, but remapping the
+    # owner's scope here would break a package being published to both
+    # registries for the first time — its npmjs.org scope-siblings would stop
+    # resolving. Supplying the token without touching the registry mapping
+    # fixes the former and preserves the latter; a repository that routes a
+    # scope to GitHub Packages does so in its own .npmrc.
+    - name: Authenticate to GitHub Packages
+      shell: bash
+      env:
+        GITHUB_PACKAGES_TOKEN: ${{ inputs.github-token }}
+      run: |
+        printf '//npm.pkg.github.com/:_authToken=%s\n' \
+          "$GITHUB_PACKAGES_TOKEN" >> "$HOME/.npmrc"
+
     # Install and build before mapping the repository owner's npm scope to
-    # GitHub Packages. This keeps ordinary npmjs.org dependencies resolvable
-    # when a package is being published to both registries for the first time.
+    # GitHub Packages, for the reason above.
     - name: Install dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
