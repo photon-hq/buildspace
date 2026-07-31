@@ -42,6 +42,18 @@ runs:
 
     # Keep dependency installation on its existing registry configuration. The
     # GitHub Packages scope mapping is added only after dependencies are ready.
+    # Credentials only, no scope mapping — see publish-github-package for the
+    # reasoning. A package whose own dependencies live on GitHub Packages needs
+    # a token to install them; remapping the owner's scope this early would
+    # break one being published to both registries for the first time.
+    - name: Authenticate to GitHub Packages
+      shell: bash
+      env:
+        GITHUB_PACKAGES_TOKEN: ${{ inputs.github-token }}
+      run: |
+        printf '//npm.pkg.github.com/:_authToken=%s\n' \
+          "$GITHUB_PACKAGES_TOKEN" >> "$HOME/.npmrc"
+
     - name: Install dependencies
       shell: bash
       run: bun install
