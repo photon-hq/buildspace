@@ -2,6 +2,10 @@ name: 'Create GitHub Release'
 description: 'Create a GitHub release with artifacts'
 
 inputs:
+  target-commitish:
+    description: '[string] Optional exact commit for the release tag; empty preserves the default branch behavior'
+    required: false
+    default: ''
   version:
     description: '[string] The version to release (e.g., 1.2.3)'
     required: true
@@ -66,11 +70,31 @@ runs:
         pattern: ${{ inputs.artifact-pattern }}
         merge-multiple: true
 
+    - name: Verify an existing tag still identifies the requested source
+      if: inputs.target-commitish != ''
+      uses: actions/github-script@v7
+      env:
+        RELEASE_TAG: ${{ inputs.tag-prefix }}${{ inputs.version }}
+        TARGET_COMMIT: ${{ inputs.target-commitish }}
+      with:
+        github-token: ${{ steps.app-token.outputs.token || github.token }}
+        script: |
+          const desired = await github.rest.repos.getCommit({ ...context.repo, ref: process.env.TARGET_COMMIT });
+          try {
+            const existing = await github.rest.repos.getCommit({ ...context.repo, ref: `tags/${process.env.RELEASE_TAG}` });
+            if (existing.data.sha !== desired.data.sha) {
+              core.setFailed('Release tag already exists at a different source commit; refusing to reuse it.');
+            }
+          } catch (error) {
+            if (error.status !== 404) throw error;
+          }
+
     - name: Create Release
       id: gh-release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ inputs.tag-prefix }}${{ inputs.version }}
+        target_commitish: ${{ inputs.target-commitish }}
         name: ${{ inputs.title }}
         body: |
           ${{ inputs.notes }}

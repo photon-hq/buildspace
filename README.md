@@ -287,6 +287,7 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Display name for the service |
+| `source-sha` | string | No | `""` | Inspect and tag this exact full commit SHA; omission preserves existing behavior |
 | `bun-version` | string | No | `latest` | Bun version to use |
 | `npm-tag` | string | No | `latest` | Package tag for npmjs.org and GitHub Packages (e.g., `latest`, `beta`, `next`) |
 | `no-npm-publish` | boolean | No | `false` | Skip npmjs.org publishing |
@@ -329,6 +330,18 @@ jobs:
 ```
 
 > **Enabling OIDC Trusted Publishing (opt-in):** set `use-oidc: true`, add `id-token: write` to the caller's `permissions`, configure a [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com, and ensure the runner has npm ≥ 11.5.1. Callers that don't set `use-oidc` are completely unaffected — they keep `contents: read` least-privilege and publish via `NPM_TOKEN` exactly as before.
+
+**Exact-source releases:** pass `source-sha` when a merge receipt or another trusted
+workflow has selected a specific source commit. The checkout, version analysis,
+release notes, and tag use that commit. The shared workflow returns `version`,
+`tag`, and `source-sha` outputs. A retry reuses an existing release for that source
+rather than computing a second version, and an existing tag pointing elsewhere
+is rejected. The main-branch version bump remains separate from the pinned source;
+package publishing applies the computed version to its pinned checkout.
+
+Omitting `source-sha` retains existing caller behavior. Source-aware caller changes
+must be deployed after these workflow and composite-action changes reach `main`.
+Run `node --test test/source-release.test.mjs` for the exact-source regression tests.
 
 > **Publishing to GitHub Packages (opt-in):** set `publish-github-packages: true` and add `packages: write` to the caller's `permissions`. The package's `name` must be scoped to the repository owner (for example, `@photon-hq/notebooklm-kit`). BuildSpace authenticates with the automatic `GITHUB_TOKEN`, so no PAT or additional secret is required. Leave `no-npm-publish` as `false` to publish to both registries, or set it to `true` for GitHub Packages only.
 

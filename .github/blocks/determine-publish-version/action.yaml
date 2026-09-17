@@ -2,6 +2,10 @@ name: 'Determine Publish Version'
 description: 'Determine the version to publish based on commit history and semantic versioning'
 
 inputs:
+  source-sha:
+    description: '[string] Optional exact source commit for release analysis'
+    required: false
+    default: ''
   prerelease:
     description: "[boolean: 'true'/'false'] Whether this is a prerelease (appends -rc.N suffix)"
     required: false
@@ -92,7 +96,7 @@ runs:
       shell: bash
       env:
         BASE_SHA: ${{ steps.last-release.outputs.stable_sha }}
-        HEAD_SHA: ${{ github.sha }}
+        HEAD_SHA: ${{ inputs.source-sha || github.sha }}
         STABLE_VERSION: ${{ steps.last-release.outputs.stable_version }}
         PRERELEASE: ${{ inputs.prerelease }}
       run: |
