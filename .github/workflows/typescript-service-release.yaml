@@ -7,6 +7,11 @@ on:
         type: string
         required: true
         description: "The name of the service to release"
+      source-sha:
+        type: string
+        required: false
+        default: ""
+        description: "Optional full commit SHA to inspect and tag instead of the moving default branch"
       bun-version:
         type: string
         required: false
@@ -77,6 +82,16 @@ on:
         required: false
         default: true
         description: "Fire the post-release notify job on real releases (major | minor | patch). Callers not on the in-job allow-list skip cleanly. Set to false to opt a specific release out."
+    outputs:
+      version:
+        description: Released package version
+        value: ${{ jobs.release-info.outputs.version }}
+      tag:
+        description: GitHub release tag
+        value: ${{ jobs.github-release.outputs.tag }}
+      source-sha:
+        description: Commit used for release inspection and tagging
+        value: ${{ jobs.release-info.outputs.source-sha }}
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -123,24 +138,60 @@ jobs:
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.generate.outputs.version }}
-      release_notes: ${{ steps.generate.outputs.release_notes }}
+      version: ${{ steps.existing.outputs.version || steps.generate.outputs.version }}
+      source-sha: ${{ steps.source.outputs.sha }}
+      existing: ${{ steps.existing.outputs.version }}
+      release_notes: ${{ steps.existing.outputs.notes || steps.generate.outputs.release_notes }}
       release_type: ${{ steps.generate.outputs.release_type }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ inputs.source-sha || github.sha }}
+      - name: Validate release source
+        id: source
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.source-sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED_SHA" ] && ! [[ "$REQUESTED_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::source-sha must be a full commit SHA"
+            exit 1
+          fi
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          if [ -n "$REQUESTED_SHA" ] && [ "$ACTUAL_SHA" != "$REQUESTED_SHA" ]; then
+            echo "::error::Release checkout does not match source-sha"
+            exit 1
+          fi
+          echo "sha=$ACTUAL_SHA" >> "$GITHUB_OUTPUT"
+      - name: Reuse a release already created for this exact source
+        id: existing
+        if: inputs.source-sha != ''
+        uses: actions/github-script@v7
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        with:
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases, context.repo);
+            const release = releases.find(r => !r.draft && r.target_commitish === process.env.SOURCE_SHA);
+            if (release) {
+              core.setOutput('version', release.tag_name.replace(/^v/, ''));
+              core.setOutput('notes', release.body || '');
+            }
       - name: Generate Release Info
         id: generate
+        if: steps.existing.outputs.version == ''
         uses: photon-hq/buildspace/.github/blocks/generate-release-info@main
         with:
           service-name: ${{ inputs.service-name }}
+          source-sha: ${{ inputs.source-sha }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
   bump-version:
     needs: [check-labels, release-info]
-    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
+    if: (fromJSON(needs.check-labels.outputs.labels).release || inputs.release) && needs.release-info.outputs.existing == ''
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
@@ -161,16 +212,23 @@ jobs:
 
   github-release:
     needs: [check-labels, release-info, bump-version]
-    if: fromJSON(needs.check-labels.outputs.labels).release || inputs.release
+    if: >-
+      always() && needs.release-info.result == 'success' &&
+      (needs.bump-version.result == 'success' || needs.release-info.outputs.existing != '') &&
+      (fromJSON(needs.check-labels.outputs.labels).release || inputs.release)
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     permissions:
       contents: write
     steps:
       - name: Create GitHub Release
+        id: release
         uses: photon-hq/buildspace/.github/blocks/create-github-release@main
         with:
           version: ${{ needs.release-info.outputs.version }}
           title: "${{ inputs.service-name }} v${{ needs.release-info.outputs.version }}"
+          target-commitish: ${{ inputs.source-sha }}
           notes: ${{ needs.release-info.outputs.release_notes }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
           app-id: ${{ secrets.APP_ID }}
@@ -188,8 +246,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.source-sha || github.ref_name }}
           fetch-depth: 0
+      - name: Set the computed version in the pinned source checkout
+        if: inputs.source-sha != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          RELEASE_VERSION: ${{ needs.release-info.outputs.version }}
+        run: |
+          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("package.json", "utf8")); p.version = process.env.RELEASE_VERSION; writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
       - name: Publish to NPM
         uses: photon-hq/buildspace/.github/blocks/publish-npm@main
         with:
@@ -214,8 +279,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.source-sha || github.ref_name }}
           fetch-depth: 0
+      - name: Set the computed version in the pinned source checkout
+        if: inputs.source-sha != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          RELEASE_VERSION: ${{ needs.release-info.outputs.version }}
+        run: |
+          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("package.json", "utf8")); p.version = process.env.RELEASE_VERSION; writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
       - name: Publish to NPM
         uses: photon-hq/buildspace/.github/blocks/publish-npm@main
         with:
@@ -237,8 +309,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.source-sha || github.ref_name }}
           fetch-depth: 0
+      - name: Set the computed version in the pinned source checkout
+        if: inputs.source-sha != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          RELEASE_VERSION: ${{ needs.release-info.outputs.version }}
+        run: |
+          node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("package.json", "utf8")); p.version = process.env.RELEASE_VERSION; writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
       - name: Publish to GitHub Packages
         uses: photon-hq/buildspace/.github/blocks/publish-github-package@main
         with:

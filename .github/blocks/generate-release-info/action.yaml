@@ -2,6 +2,10 @@ name: 'Generate Release Info'
 description: 'Generate version number and release notes using AI'
 
 inputs:
+  source-sha:
+    description: '[string] Optional exact source commit for release analysis'
+    required: false
+    default: ''
   service-name:
     description: '[string] The name of the service (used in release notes)'
     required: true
@@ -31,6 +35,7 @@ runs:
       id: version-info
       uses: photon-hq/buildspace/.github/blocks/determine-publish-version@main
       with:
+        source-sha: ${{ inputs.source-sha }}
         prerelease: ${{ inputs.prerelease }}
         openai-api-key: ${{ inputs.openai-api-key }}
 
@@ -58,7 +63,7 @@ runs:
         model: gpt-5.5
         prompt: |
           Generate release notes for ${{ inputs.service-name }} v${{ steps.version.outputs.final }}.
-          ${{ steps.release-context.outputs.is_initial == 'true' && format('This is the initial release. Describe the key features and capabilities of {0} based on the codebase.', inputs.service-name) || format('Changes since v{0} (current commit: {1}).', steps.version-info.outputs.previous-version, github.sha) }}
+          ${{ steps.release-context.outputs.is_initial == 'true' && format('This is the initial release. Describe the key features and capabilities of {0} based on the codebase.', inputs.service-name) || format('Changes since v{0} (current commit: {1}).', steps.version-info.outputs.previous-version, inputs.source-sha || github.sha) }}
           
           REQUIREMENTS:
           1. NO title - start with content directly
