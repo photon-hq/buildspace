@@ -256,6 +256,11 @@ publish:
       NODE_AUTH_TOKEN=${{ github.token }}
 ```
 
+- ECR must enforce immutability for `main-*` and `hotfix-*` tags. Photon's
+  existing Terraform uses `IMMUTABLE_WITH_EXCLUSION` with only the exact floating
+  `main` tag excluded; never widen that exception to `main*` or `hotfix-*`.
+  This registry setting prevents another writer from replacing a tag between
+  the lookup and push. Provision it before adopting the publisher.
 - Source repositories own tests, hotfix branch/review policy and production
   dependency checks. Main/hotfix tags must identify the exact event commit.
 - Optional inputs configure context, platform, runner, environment, region and
