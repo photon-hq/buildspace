@@ -20,6 +20,7 @@ BuildSpace gives you two layers of CI/CD automation:
 - [Quick Start](#quick-start)
 - [Prerequisites](#prerequisites)
 - [Workflows](#workflows)
+  - [Immutable Image Publisher](#immutable-image-publisher)
   - [Rust Service Release](#rust-service-release)
   - [TypeScript Service Release](#typescript-service-release)
   - [TypeScript Monorepo Release](#typescript-monorepo-release)
@@ -62,6 +63,7 @@ BuildSpace gives you two layers of CI/CD automation:
 
 | I have a... | Use this workflow | Trigger |
 |---|---|---|
+| Container image for Kargo promotion | [`publish-image`](#immutable-image-publisher) | Push to main or a protected hotfix branch, after CI |
 | Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
@@ -224,6 +226,53 @@ Workflows that create releases or push commits need `contents: write`. Workflows
 ## Workflows
 
 Ready-to-use release pipelines. Each workflow composes the lower-level [blocks](#blocks-composite-actions) internally - you don't need to know about individual blocks unless you're building a custom pipeline.
+
+---
+
+### Immutable Image Publisher
+
+`.github/workflows/publish-image.yml` builds and attests the caller's exact commit
+once, or reuses an existing image after verifying its original attestation.
+Promoting to another environment does not call this workflow.
+
+Call it as a job **after required source CI**, pinned to a reviewed commit:
+
+```yaml
+publish:
+  needs: [test]
+  uses: photon-hq/buildspace/.github/workflows/publish-image.yml@<reviewed-commit-sha>
+  permissions:
+    contents: read
+    packages: read
+    attestations: write
+    id-token: write
+  with:
+    image: example-service
+    tag: main-${{ github.sha }}
+    dockerfile: Dockerfile
+    aws-role: arn:aws:iam::<account>:role/<service-publish-role>
+  secrets:
+    build-secrets: |
+      NODE_AUTH_TOKEN=${{ github.token }}
+```
+
+- Source repositories own tests, hotfix branch/review policy and production
+  dependency checks. Main/hotfix tags must identify the exact event commit.
+- Optional inputs configure context, platform, runner, environment, region and
+  uncached build stages. All other behavior is shared. A matrix can call it for
+  several independent images.
+- The caller's repository identity and configured environment remain the AWS
+  OIDC subject. The reusable workflow becomes the attestation signer:
+  `photon-hq/buildspace/.github/workflows/publish-image.yml`. Verifiers must check
+  that signer plus the caller repository, source ref and source SHA.
+- `legacy-signer-workflow` permits reuse of an existing image from a reviewed
+  predecessor. It does not overwrite or re-attest the image. Missing attestations
+  and ECR access errors fail the job.
+- Supply only the BuildKit secrets needed by the Dockerfile. The workflow returns
+  `digest`; use the per-job result for matrix builds, not a combined matrix output.
+
+Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 -m unittest discover -s test`
+(requires PyYAML 6.0.3).
 
 ---
 
