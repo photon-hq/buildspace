@@ -1,0 +1,151 @@
+name: Publish immutable image
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: ECR repository name
+        required: true
+        type: string
+      tag:
+        description: Immutable main-<sha> or hotfix-<baseline>-<sha> tag
+        required: true
+        type: string
+      dockerfile:
+        required: true
+        type: string
+      context:
+        default: .
+        type: string
+      platform:
+        default: linux/amd64
+        type: string
+      runner:
+        default: ubuntu-24.04
+        type: string
+      environment:
+        default: staging
+        type: string
+      aws-role:
+        required: true
+        type: string
+      aws-region:
+        default: us-west-1
+        type: string
+      no-cache-filters:
+        default: ''
+        type: string
+      legacy-signer-workflow:
+        description: Original workflow identity allowed when reusing pre-migration images
+        default: ''
+        type: string
+    secrets:
+      build-secrets:
+        description: Newline-delimited BuildKit secrets (NAME=value)
+        required: false
+    outputs:
+      digest:
+        description: Published or reused image digest
+        value: ${{ jobs.publish.outputs.digest }}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/hotfix/')
+    runs-on: ${{ inputs.runner }}
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
+      attestations: write
+      id-token: write
+    concurrency:
+      group: publish-${{ github.repository }}-${{ inputs.image }}-${{ inputs.tag }}
+      cancel-in-progress: false
+    outputs:
+      digest: ${{ steps.reuse.outputs.digest || steps.build.outputs.digest }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      IMAGE: ${{ inputs.image }}
+      IMAGE_TAG: ${{ inputs.tag }}
+      LEGACY_SIGNER: ${{ inputs.legacy-signer-workflow }}
+    steps:
+      - name: Require the tag to identify the event source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            [[ "$IMAGE_TAG" == "main-$GITHUB_SHA" ]]
+          else
+            [[ "$GITHUB_REF" =~ ^refs/heads/hotfix/[^/]+/([a-f0-9]{40})$ ]]
+            [[ "$IMAGE_TAG" == "hotfix-${BASH_REMATCH[1]}-$GITHUB_SHA" ]]
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@633526dcc9c26211a4282d6d8de3d8b5cb7ad07b
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+      - uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
+        id: registry
+      - name: Reuse an existing image with its original attestation
+        id: reuse
+        env:
+          REGISTRY: ${{ steps.registry.outputs.registry }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images --repository-name "$IMAGE" --image-ids "imageTag=$IMAGE_TAG" > "$RUNNER_TEMP/image.json" 2> "$RUNNER_TEMP/ecr-error"; then
+            digest=$(jq -er '.imageDetails[0].imageDigest' "$RUNNER_TEMP/image.json")
+            args=("oci://$REGISTRY/$IMAGE@$digest" --repo "$GITHUB_REPOSITORY" --source-digest "$GITHUB_SHA" --source-ref "$GITHUB_REF")
+            if ! gh attestation verify "${args[@]}" --signer-workflow photon-hq/buildspace/.github/workflows/publish-image.yml; then
+              [[ -n "$LEGACY_SIGNER" ]]
+              gh attestation verify "${args[@]}" --signer-workflow "$LEGACY_SIGNER"
+            fi
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          elif ! grep -q ImageNotFoundException "$RUNNER_TEMP/ecr-error"; then
+            cat "$RUNNER_TEMP/ecr-error" >&2
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+        if: steps.reuse.outputs.digest == ''
+      - name: Build and push
+        id: build
+        if: steps.reuse.outputs.digest == ''
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          platforms: ${{ inputs.platform }}
+          provenance: false
+          no-cache-filters: ${{ inputs.no-cache-filters }}
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          secrets: ${{ secrets.build-secrets }}
+          cache-from: type=gha,scope=${{ inputs.image }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image }}
+      - name: Attest the new image
+        id: attest
+        if: steps.reuse.outputs.digest == ''
+        continue-on-error: true
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: false
+      - name: Retry attestation once for this newly built image
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.attest.outcome == 'failure' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: false
