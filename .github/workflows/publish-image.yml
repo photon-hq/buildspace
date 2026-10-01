@@ -113,6 +113,14 @@ jobs:
           ref: ${{ github.sha }}
           submodules: ${{ inputs.submodules }}
           persist-credentials: false
+      - name: Read the commit time
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          created=$(TZ=UTC git show -s --date=format-local:%Y-%m-%dT%H:%M:%SZ --format=%cd "$GITHUB_SHA")
+          [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+          echo "created=$created" >> "$GITHUB_OUTPUT"
       # Trusted code from the attested commit, like the Dockerfile it prepares
       # for; not a sandbox. It runs before AWS credentials are configured, with
       # the job token and the OIDC request credentials cleared.
@@ -186,6 +194,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.source.outputs.created }}
           secrets: |
             ${{ secrets.build-secrets }}
             ${{ steps.app-token.outputs.token && format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token) || '' }}

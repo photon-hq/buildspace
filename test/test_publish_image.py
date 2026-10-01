@@ -118,6 +118,35 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertNotEqual(self.run_step(step, PREPARE=f'false\ntouch {later}').returncode, 0)
         self.assertFalse(later.exists())
 
+    def test_created_label_is_the_commit_time_in_utc(self):
+        step = next(s for s in STEPS if s.get('id') == 'source')
+        checkout = next(i for i, s in enumerate(STEPS) if s.get('uses', '').startswith('actions/checkout'))
+        prepare = next(i for i, s in enumerate(STEPS) if s.get('id') == 'prepare')
+        self.assertEqual(STEPS.index(step), checkout + 1)
+        self.assertLess(STEPS.index(step), prepare)
+        self.assertNotIn('if', step)
+        labels = next(s for s in STEPS if s.get('id') == 'build')['with']['labels'].split('\n')
+        self.assertIn('org.opencontainers.image.created=${{ steps.source.outputs.created }}', labels)
+        repo = self.root / 'repo'
+        repo.mkdir()
+        git = dict(self.env, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.com',
+                   GIT_COMMITTER_NAME='t', GIT_COMMITTER_EMAIL='t@example.com',
+                   GIT_AUTHOR_DATE='2020-05-06T07:08:09+00:00',
+                   GIT_COMMITTER_DATE='2026-01-02T03:04:05+08:00',
+                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        subprocess.run(['git', 'init', '-q', str(repo)], env=git, check=True)
+        subprocess.run(['git', '-C', str(repo), 'commit', '-q', '--allow-empty', '-m', 'c'], env=git, check=True)
+        sha = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], env=git, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', step['run']], cwd=repo,
+                                env={**self.env, 'GITHUB_SHA': sha, 'TZ': 'Asia/Shanghai'},
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'output').read_text(), 'created=2026-01-01T19:04:05Z\n')
+        missing = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', step['run']], cwd=repo,
+                                 env={**self.env, 'GITHUB_SHA': 'c' * 40}, capture_output=True, text=True)
+        self.assertNotEqual(missing.returncode, 0)
+
     def test_caller_build_args_cannot_replace_the_event_commit(self):
         args = next(s for s in STEPS if s.get('id') == 'build')['with']['build-args'].split('\n')
         args = [a for a in args if a]
