@@ -110,7 +110,7 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertLess(STEPS.index(step), aws)
         self.assertEqual(STEPS[checkout]['with']['submodules'], '${{ inputs.submodules }}')
         marker = self.root / 'prepared'
-        ok = self.run_step(step, PREPARE=f'mkdir -p context\ntouch {marker}')
+        ok = self.run_step(step, PREPARE=f'true\ntouch {marker}')
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertTrue(marker.exists())
         later = self.root / 'later'
