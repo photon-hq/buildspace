@@ -273,6 +273,12 @@ publish:
 - `legacy-signer-workflow` permits reuse of an existing image from a reviewed
   predecessor. It does not overwrite or re-attest the image. Missing attestations
   and ECR access errors fail the job.
+- For private Git dependencies fetched during the build, set
+  `app-token-repositories` and pass `app-id` and `app-private-key`. The workflow
+  mints a GitHub App token limited to reading those repositories and mounts it
+  as the BuildKit secret named by `app-token-secret` (default `github_token`).
+  A token minted in the caller cannot be passed in: job outputs that contain a
+  secret are dropped.
 - Supply only the BuildKit secrets needed by the Dockerfile. The workflow returns
   `digest`; use the per-job result for matrix builds, not a combined matrix output.
 
