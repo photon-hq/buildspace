@@ -1,0 +1,44 @@
+name: Check production dependencies
+description: Check committed pnpm workspace pins against Photon's production package policy
+inputs:
+  image-tag:
+    description: Immutable main-<sha> or hotfix-<baseline>-<sha> tag from Kargo
+    default: ''
+  source-ref:
+    description: Git ref for a manual check; supply this or image-tag
+    default: ''
+  github-token:
+    description: Token with contents read and packages read in the calling repository
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: 24
+    - name: Install checker dependencies only
+      shell: bash
+      env:
+        CHECKER_PATH: ${{ github.action_path }}
+      run: npm ci --prefix "$CHECKER_PATH" --ignore-scripts --no-audit --no-fund
+    - name: Check the selected source's production packages
+      shell: bash
+      env:
+        CHECKER_PATH: ${{ github.action_path }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        SOURCE_REF: ${{ inputs.source-ref }}
+        NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        if [[ -n "$IMAGE_TAG" ]]; then
+          [[ -z "$SOURCE_REF" ]] || { echo "Supply image-tag or source-ref, not both" >&2; exit 1; }
+          [[ "$IMAGE_TAG" =~ ^(main|hotfix-[a-f0-9]{40})-([a-f0-9]{40})$ ]] || { echo "Invalid immutable image tag" >&2; exit 1; }
+          SOURCE_REF="${BASH_REMATCH[2]}"
+        fi
+        [[ -n "$SOURCE_REF" ]] || { echo "Supply image-tag or source-ref" >&2; exit 1; }
+        node "$CHECKER_PATH/check-production-dependencies.mjs" --ref "$SOURCE_REF"
