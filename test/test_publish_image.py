@@ -84,7 +84,7 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
     def test_reuse_skips_build_and_attestation(self):
         for step_id in ['build', 'attest']:
             self.assertEqual(next(s for s in STEPS if s.get('id') == step_id)['if'], "steps.reuse.outputs.digest == ''")
-        retry = STEPS[-1]
+        retry = next(s for s in STEPS if s.get('name', '').startswith('Retry attestation'))
         self.assertEqual(retry['if'], "${{ !cancelled() && steps.build.outcome == 'success' && steps.attest.outcome == 'failure' }}")
         self.assertNotIn('continue-on-error', retry)
 
@@ -103,7 +103,8 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
     def test_prepare_runs_fail_fast_without_the_job_token_and_before_credentials(self):
         step = next(s for s in STEPS if s.get('id') == 'prepare')
         self.assertEqual(step['if'], "inputs.prepare != ''")
-        self.assertEqual(step['env']['GH_TOKEN'], '')
+        for name in ['GH_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL']:
+            self.assertEqual(step['env'][name], '')
         aws = next(i for i, s in enumerate(STEPS) if 'configure-aws-credentials' in s.get('uses', ''))
         checkout = next(i for i, s in enumerate(STEPS) if s.get('uses', '').startswith('actions/checkout'))
         self.assertLess(checkout, STEPS.index(step))
@@ -121,6 +122,29 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         args = next(s for s in STEPS if s.get('id') == 'build')['with']['build-args'].split('\n')
         args = [a for a in args if a]
         self.assertEqual(args, ['${{ inputs.build-args }}', 'GIT_SHA=${{ github.sha }}'])
+
+    def test_tag_is_added_last_and_only_to_the_attested_digest(self):
+        build = next(s for s in STEPS if s.get('id') == 'build')
+        self.assertNotIn('tags', build['with'])
+        self.assertNotIn('push', build['with'])
+        self.assertIn('push-by-digest=true', build['with']['outputs'])
+        step = STEPS[-1]
+        self.assertEqual(step['id'], 'tag')
+        self.assertEqual(step['if'], "steps.reuse.outputs.digest == ''")
+        log = self.root / 'docker.log'
+        self.stub('docker', '''#!/bin/sh
+echo "$@" >> "$TEST_DOCKER_LOG"
+case "$3" in
+  inspect) printf '{"digest":"%s"}\\n' "$TEST_TAGGED" ;;
+esac
+''')
+        ok = self.run_step(step, DIGEST=DIGEST, TEST_TAGGED=DIGEST, TEST_DOCKER_LOG=str(log))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn(f'buildx imagetools create --tag registry.example.com/worker:main-{SHA} registry.example.com/worker@{DIGEST}',
+                      log.read_text())
+        moved = self.run_step(step, DIGEST=DIGEST, TEST_TAGGED='sha256:' + 'c' * 64, TEST_DOCKER_LOG=str(log))
+        self.assertNotEqual(moved.returncode, 0)
+        self.assertIn('not the attested', moved.stderr)
 
 
 if __name__ == '__main__':

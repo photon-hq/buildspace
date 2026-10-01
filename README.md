@@ -271,10 +271,14 @@ publish:
 - `submodules` is passed to the checkout, for a repository whose image source
   lives in a pinned submodule.
 - `prepare` runs a script from the caller in the checkout, for a build context
-  the repository generates (for example a patched copy of a submodule). It runs
-  before any credential exists and without the job token, and it is part of the
-  attested commit in the same sense as the Dockerfile: what it does is reviewed
-  where that commit is reviewed.
+  the repository generates (for example a patched copy of a submodule). It is
+  trusted code from the caller's reviewed commit, in the same sense as the
+  Dockerfile, and is not a sandbox. It runs before AWS credentials are
+  configured, with the job token and the OIDC request credentials cleared.
+- The image is pushed by digest, attested, and only then tagged. A tag therefore
+  never exists without its attestation: a pipeline that discovers images by tag
+  cannot pick up an unattested one, and a run that failed to attest leaves
+  nothing for the next attempt to trip over.
 - The caller's repository identity and configured environment remain the AWS
   OIDC subject. The reusable workflow becomes the attestation signer:
   `photon-hq/buildspace/.github/workflows/publish-image.yml`. Verifiers must check
