@@ -275,6 +275,12 @@ publish:
   trusted code from the caller's reviewed commit, in the same sense as the
   Dockerfile, and is not a sandbox. It runs before AWS credentials are
   configured, with the job token and the OIDC request credentials cleared.
+- Every image carries `org.opencontainers.image.created` set to the committer
+  time of the event commit, in UTC. Without it the image inherits the label of
+  its base image, or falls back to the build time of its newest layer, which a
+  fully cached build shares with the previous image. A pipeline that orders
+  images by creation time then follows source order, and a rerun of an older
+  commit does not become the newest image.
 - The image is pushed by digest, attested, and only then tagged. A tag therefore
   never exists without its attestation: a pipeline that discovers images by tag
   cannot pick up an unattested one, and a run that failed to attest leaves
