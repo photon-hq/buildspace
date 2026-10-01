@@ -39,6 +39,18 @@ on:
         description: Original workflow identity allowed when reusing pre-migration images
         default: ''
         type: string
+      build-args:
+        description: Newline-delimited non-secret build arguments (NAME=value); GIT_SHA is always the event commit
+        default: ''
+        type: string
+      submodules:
+        description: Passed to actions/checkout (false, true or recursive)
+        default: 'false'
+        type: string
+      prepare:
+        description: Trusted script from the caller's commit, run in the checkout before AWS credentials are configured, for a build context the repository generates
+        default: ''
+        type: string
       app-token-repositories:
         description: Newline-delimited repositories a minted GitHub App token may read during the build
         default: ''
@@ -99,7 +111,23 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
+          submodules: ${{ inputs.submodules }}
           persist-credentials: false
+      # Trusted code from the attested commit, like the Dockerfile it prepares
+      # for; not a sandbox. It runs before AWS credentials are configured, with
+      # the job token and the OIDC request credentials cleared.
+      - name: Prepare the build context
+        id: prepare
+        if: inputs.prepare != ''
+        shell: bash
+        env:
+          GH_TOKEN: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          PREPARE: ${{ inputs.prepare }}
+        run: |
+          set -euo pipefail
+          bash -euo pipefail -c "$PREPARE"
       - uses: aws-actions/configure-aws-credentials@633526dcc9c26211a4282d6d8de3d8b5cb7ad07b
         with:
           role-to-assume: ${{ inputs.aws-role }}
@@ -139,19 +167,22 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ inputs.app-token-repositories }}
           permission-contents: read
-      - name: Build and push
+      # Pushed by digest only. The tag is added after the attestation exists.
+      - name: Build and push by digest
         id: build
         if: steps.reuse.outputs.digest == ''
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
-          push: true
+          outputs: type=image,name=${{ steps.registry.outputs.registry }}/${{ inputs.image }},push-by-digest=true,name-canonical=true,push=true
           platforms: ${{ inputs.platform }}
           provenance: false
           no-cache-filters: ${{ inputs.no-cache-filters }}
-          build-args: GIT_SHA=${{ github.sha }}
-          tags: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
+          # GIT_SHA last, so a caller cannot replace the event commit.
+          build-args: |
+            ${{ inputs.build-args }}
+            GIT_SHA=${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -176,3 +207,29 @@ jobs:
           subject-name: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: false
+      # The tag is what a deployment pipeline discovers and what a retry reuses,
+      # so it must never exist without the attestation. A run that fails before
+      # this step leaves an untagged image and the next attempt builds again.
+      - name: Tag the attested image
+        id: tag
+        if: steps.reuse.outputs.digest == ''
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecr batch-get-image --repository-name "$IMAGE" --image-ids "imageDigest=$DIGEST" \
+            --accepted-media-types application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json \
+              application/vnd.oci.image.index.v1+json application/vnd.docker.distribution.manifest.list.v2+json \
+            --output json > "$RUNNER_TEMP/built-image.json"
+          jq -ej '.images[0].imageManifest' "$RUNNER_TEMP/built-image.json" > "$RUNNER_TEMP/built-manifest.json"
+          media_type=$(jq -er '.images[0].imageManifestMediaType' "$RUNNER_TEMP/built-image.json")
+          [[ "sha256:$(sha256sum "$RUNNER_TEMP/built-manifest.json" | cut -d' ' -f1)" == "$DIGEST" ]] || {
+            echo "The manifest read back does not hash to the attested $DIGEST" >&2
+            exit 1
+          }
+          # Re-putting the same manifest bytes adds the tag without changing the
+          # digest. --image-digest makes the registry refuse anything else, so a
+          # tag for a different manifest is never created.
+          aws ecr put-image --repository-name "$IMAGE" --image-tag "$IMAGE_TAG" --image-digest "$DIGEST" \
+            --image-manifest "file://$RUNNER_TEMP/built-manifest.json" --image-manifest-media-type "$media_type" > /dev/null

@@ -84,7 +84,7 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
     def test_reuse_skips_build_and_attestation(self):
         for step_id in ['build', 'attest']:
             self.assertEqual(next(s for s in STEPS if s.get('id') == step_id)['if'], "steps.reuse.outputs.digest == ''")
-        retry = STEPS[-1]
+        retry = next(s for s in STEPS if s.get('name', '').startswith('Retry attestation'))
         self.assertEqual(retry['if'], "${{ !cancelled() && steps.build.outcome == 'success' && steps.attest.outcome == 'failure' }}")
         self.assertNotIn('continue-on-error', retry)
 
@@ -99,6 +99,65 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertIn('${{ secrets.build-secrets }}', build['with']['secrets'])
         self.assertIn("format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token)", build['with']['secrets'])
         self.assertEqual(WORKFLOW['on']['workflow_call']['inputs']['app-token-repositories']['default'], '')
+
+    def test_prepare_runs_fail_fast_without_the_job_token_and_before_credentials(self):
+        step = next(s for s in STEPS if s.get('id') == 'prepare')
+        self.assertEqual(step['if'], "inputs.prepare != ''")
+        for name in ['GH_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_URL']:
+            self.assertEqual(step['env'][name], '')
+        aws = next(i for i, s in enumerate(STEPS) if 'configure-aws-credentials' in s.get('uses', ''))
+        checkout = next(i for i, s in enumerate(STEPS) if s.get('uses', '').startswith('actions/checkout'))
+        self.assertLess(checkout, STEPS.index(step))
+        self.assertLess(STEPS.index(step), aws)
+        self.assertEqual(STEPS[checkout]['with']['submodules'], '${{ inputs.submodules }}')
+        marker = self.root / 'prepared'
+        ok = self.run_step(step, PREPARE=f'true\ntouch {marker}')
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertTrue(marker.exists())
+        later = self.root / 'later'
+        self.assertNotEqual(self.run_step(step, PREPARE=f'false\ntouch {later}').returncode, 0)
+        self.assertFalse(later.exists())
+
+    def test_caller_build_args_cannot_replace_the_event_commit(self):
+        args = next(s for s in STEPS if s.get('id') == 'build')['with']['build-args'].split('\n')
+        args = [a for a in args if a]
+        self.assertEqual(args, ['${{ inputs.build-args }}', 'GIT_SHA=${{ github.sha }}'])
+
+    def test_tag_is_added_last_and_only_to_the_attested_digest(self):
+        import hashlib
+        import json
+        build = next(s for s in STEPS if s.get('id') == 'build')
+        self.assertNotIn('tags', build['with'])
+        self.assertNotIn('push', build['with'])
+        self.assertIn('push-by-digest=true', build['with']['outputs'])
+        step = STEPS[-1]
+        self.assertEqual(step['id'], 'tag')
+        self.assertEqual(step['if'], "steps.reuse.outputs.digest == ''")
+        self.assertNotIn('imagetools', step['run'])
+        manifest = '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}'
+        digest = 'sha256:' + hashlib.sha256(manifest.encode()).hexdigest()
+        stored = self.root / 'stored.json'
+        stored.write_text(json.dumps({'images': [{'imageManifest': manifest,
+                                                   'imageManifestMediaType': 'application/vnd.oci.image.manifest.v1+json'}]}))
+        log = self.root / 'aws.log'
+        self.stub('aws', '''#!/bin/sh
+echo "$@" >> "$TEST_AWS_LOG"
+case "$2" in
+  batch-get-image) cat "$TEST_STORED" ;;
+esac
+''')
+        env = dict(TEST_STORED=str(stored), TEST_AWS_LOG=str(log))
+        ok = self.run_step(step, DIGEST=digest, **env)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        calls = log.read_text()
+        self.assertIn(f'imageDigest={digest}', calls)
+        self.assertIn(f'ecr put-image --repository-name worker --image-tag main-{SHA} --image-digest {digest}', calls)
+        self.assertEqual((self.root / 'built-manifest.json').read_text(), manifest)
+        log.write_text('')
+        other = self.run_step(step, DIGEST='sha256:' + 'c' * 64, **env)
+        self.assertNotEqual(other.returncode, 0)
+        self.assertIn('does not hash to the attested', other.stderr)
+        self.assertNotIn('put-image', log.read_text())
 
 
 if __name__ == '__main__':
