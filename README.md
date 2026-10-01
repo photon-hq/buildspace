@@ -279,6 +279,20 @@ publish:
 Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 -m unittest discover -s test`
 (requires PyYAML 6.0.3).
 
+#### Shared image verification
+
+Kargo callers can use `.github/workflows/verify-image.yml` instead of copying
+source, digest and attestation checks into each repository. Keep the caller's
+workflow name `Release preflight` and its dispatch inputs; pin the reusable job
+to a reviewed commit and pass `service`, `app`, `request-sha`, `image-tag`,
+`image-digest`, `image` (full ECR repository URL), and `aws-role` (read-only).
+`aws-region` defaults to `us-west-1`. Grant `contents: read`, `attestations: read`
+and `id-token: write`. Existing caller OIDC restrictions still apply.
+
+It verifies a main/hotfix source, selected ECR digest and the shared publisher's
+attestation. It does not build, deploy or repeat source CI. Services needing a
+production package policy keep that check in their own preflight.
+
 ---
 
 ### Rust Service Release

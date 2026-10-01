@@ -1,0 +1,88 @@
+# Shared image identity check; service dependency policy stays with the caller.
+name: Verify release image
+on:
+  workflow_call:
+    inputs:
+      service: {type: string, required: true}
+      app: {type: string, required: true}
+      request-sha: {type: string, required: true}
+      image-tag: {type: string, required: true}
+      image-digest: {type: string, required: true}
+      image: {type: string, required: true}
+      aws-role: {type: string, required: true}
+      aws-region: {type: string, default: us-west-1}
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APP: ${{ inputs.app }}
+      EXPECTED_APP: ${{ inputs.service }}
+      REQUEST_SHA: ${{ inputs.request-sha }}
+      IMAGE_TAG: ${{ inputs.image-tag }}
+      IMAGE_DIGEST: ${{ inputs.image-digest }}
+      IMAGE_REPO: ${{ inputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the selected source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$APP" == "$EXPECTED_APP" ]] || exit 1
+          [[ "$REQUEST_SHA" == "$GITHUB_SHA" ]] || exit 1
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          if [[ "$IMAGE_TAG" =~ ^main-([a-f0-9]{40})$ ]]; then
+            sha="${BASH_REMATCH[1]}"
+            ref=refs/heads/main
+          else
+            [[ "$IMAGE_TAG" =~ ^hotfix-([a-f0-9]{40})-([a-f0-9]{40})$ ]] || exit 1
+            baseline="${BASH_REMATCH[1]}"
+            sha="${BASH_REMATCH[2]}"
+            ref="refs/heads/hotfix/$APP/$baseline"
+            release="$APP-$baseline"
+            gh release view "$release" --json isDraft,isPrerelease | jq -e '.isDraft == false and .isPrerelease == false'
+            [[ "$(git rev-parse "$release^{commit}")" == "$baseline" ]] || exit 1
+            git merge-base --is-ancestor "$baseline" "$sha"
+          fi
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' fetch origin "$ref"
+          git merge-base --is-ancestor "$sha" FETCH_HEAD
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@633526dcc9c26211a4282d6d8de3d8b5cb7ad07b
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+      - uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
+      - name: Verify image and build attestation
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_REF: ${{ steps.source.outputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(aws ecr describe-images --repository-name "${IMAGE_REPO#*/}" --image-ids "imageTag=$IMAGE_TAG" --query 'imageDetails[0].imageDigest' --output text)
+          [[ "$actual" == "$IMAGE_DIGEST" ]] || exit 1
+          gh attestation verify "oci://$IMAGE_REPO@$IMAGE_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow photon-hq/buildspace/.github/workflows/publish-image.yml \
+            --source-digest "$SOURCE_SHA" --source-ref "$SOURCE_REF"
+          {
+            echo '## Release image verification'
+            echo "- Source: $SOURCE_SHA"
+            echo "- Image: $IMAGE_REPO@$IMAGE_DIGEST"
+            echo '- Build identity: verified'
+          } >> "$GITHUB_STEP_SUMMARY"
