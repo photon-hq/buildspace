@@ -266,6 +266,15 @@ publish:
 - Optional inputs configure context, platform, runner, environment, region and
   uncached build stages. All other behavior is shared. A matrix can call it for
   several independent images.
+- `build-args` adds non-secret build arguments. `GIT_SHA` is always the event
+  commit and cannot be replaced.
+- `submodules` is passed to the checkout, for a repository whose image source
+  lives in a pinned submodule.
+- `prepare` runs a script from the caller in the checkout, for a build context
+  the repository generates (for example a patched copy of a submodule). It runs
+  before any credential exists and without the job token, and it is part of the
+  attested commit in the same sense as the Dockerfile: what it does is reviewed
+  where that commit is reviewed.
 - The caller's repository identity and configured environment remain the AWS
   OIDC subject. The reusable workflow becomes the attestation signer:
   `photon-hq/buildspace/.github/workflows/publish-image.yml`. Verifiers must check

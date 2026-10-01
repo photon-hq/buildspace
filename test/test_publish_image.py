@@ -100,6 +100,28 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertIn("format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token)", build['with']['secrets'])
         self.assertEqual(WORKFLOW['on']['workflow_call']['inputs']['app-token-repositories']['default'], '')
 
+    def test_prepare_runs_fail_fast_without_the_job_token_and_before_credentials(self):
+        step = next(s for s in STEPS if s.get('id') == 'prepare')
+        self.assertEqual(step['if'], "inputs.prepare != ''")
+        self.assertEqual(step['env']['GH_TOKEN'], '')
+        aws = next(i for i, s in enumerate(STEPS) if 'configure-aws-credentials' in s.get('uses', ''))
+        checkout = next(i for i, s in enumerate(STEPS) if s.get('uses', '').startswith('actions/checkout'))
+        self.assertLess(checkout, STEPS.index(step))
+        self.assertLess(STEPS.index(step), aws)
+        self.assertEqual(STEPS[checkout]['with']['submodules'], '${{ inputs.submodules }}')
+        marker = self.root / 'prepared'
+        ok = self.run_step(step, PREPARE=f'mkdir -p context\ntouch {marker}')
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertTrue(marker.exists())
+        later = self.root / 'later'
+        self.assertNotEqual(self.run_step(step, PREPARE=f'false\ntouch {later}').returncode, 0)
+        self.assertFalse(later.exists())
+
+    def test_caller_build_args_cannot_replace_the_event_commit(self):
+        args = next(s for s in STEPS if s.get('id') == 'build')['with']['build-args'].split('\n')
+        args = [a for a in args if a]
+        self.assertEqual(args, ['${{ inputs.build-args }}', 'GIT_SHA=${{ github.sha }}'])
+
 
 if __name__ == '__main__':
     unittest.main()

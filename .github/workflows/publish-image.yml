@@ -39,6 +39,18 @@ on:
         description: Original workflow identity allowed when reusing pre-migration images
         default: ''
         type: string
+      build-args:
+        description: Newline-delimited non-secret build arguments (NAME=value); GIT_SHA is always the event commit
+        default: ''
+        type: string
+      submodules:
+        description: Passed to actions/checkout (false, true or recursive)
+        default: 'false'
+        type: string
+      prepare:
+        description: Script run in the checkout before credentials exist, for a build context the repository generates
+        default: ''
+        type: string
       app-token-repositories:
         description: Newline-delimited repositories a minted GitHub App token may read during the build
         default: ''
@@ -99,7 +111,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
+          submodules: ${{ inputs.submodules }}
           persist-credentials: false
+      # Runs before AWS credentials and without the job token. The script is
+      # part of the attested commit, like the Dockerfile it prepares for.
+      - name: Prepare the build context
+        id: prepare
+        if: inputs.prepare != ''
+        shell: bash
+        env:
+          GH_TOKEN: ''
+          PREPARE: ${{ inputs.prepare }}
+        run: |
+          set -euo pipefail
+          bash -euo pipefail -c "$PREPARE"
       - uses: aws-actions/configure-aws-credentials@633526dcc9c26211a4282d6d8de3d8b5cb7ad07b
         with:
           role-to-assume: ${{ inputs.aws-role }}
@@ -150,7 +175,10 @@ jobs:
           platforms: ${{ inputs.platform }}
           provenance: false
           no-cache-filters: ${{ inputs.no-cache-filters }}
-          build-args: GIT_SHA=${{ github.sha }}
+          # GIT_SHA last, so a caller cannot replace the event commit.
+          build-args: |
+            ${{ inputs.build-args }}
+            GIT_SHA=${{ github.sha }}
           tags: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}:${{ inputs.tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
