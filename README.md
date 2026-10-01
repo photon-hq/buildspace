@@ -278,7 +278,10 @@ publish:
 - The image is pushed by digest, attested, and only then tagged. A tag therefore
   never exists without its attestation: a pipeline that discovers images by tag
   cannot pick up an unattested one, and a run that failed to attest leaves
-  nothing for the next attempt to trip over.
+  nothing for the next attempt to trip over. The tag is added by putting the
+  same manifest bytes back with the expected digest, so the registry refuses a
+  tag for any other manifest. The publishing role needs `ecr:BatchGetImage` as
+  well as `ecr:PutImage`.
 - The caller's repository identity and configured environment remain the AWS
   OIDC subject. The reusable workflow becomes the attestation signer:
   `photon-hq/buildspace/.github/workflows/publish-image.yml`. Verifiers must check

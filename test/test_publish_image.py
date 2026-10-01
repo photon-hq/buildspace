@@ -124,6 +124,8 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertEqual(args, ['${{ inputs.build-args }}', 'GIT_SHA=${{ github.sha }}'])
 
     def test_tag_is_added_last_and_only_to_the_attested_digest(self):
+        import hashlib
+        import json
         build = next(s for s in STEPS if s.get('id') == 'build')
         self.assertNotIn('tags', build['with'])
         self.assertNotIn('push', build['with'])
@@ -131,20 +133,31 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         step = STEPS[-1]
         self.assertEqual(step['id'], 'tag')
         self.assertEqual(step['if'], "steps.reuse.outputs.digest == ''")
-        log = self.root / 'docker.log'
-        self.stub('docker', '''#!/bin/sh
-echo "$@" >> "$TEST_DOCKER_LOG"
-case "$3" in
-  inspect) printf '{"digest":"%s"}\\n' "$TEST_TAGGED" ;;
+        self.assertNotIn('imagetools', step['run'])
+        manifest = '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}'
+        digest = 'sha256:' + hashlib.sha256(manifest.encode()).hexdigest()
+        stored = self.root / 'stored.json'
+        stored.write_text(json.dumps({'images': [{'imageManifest': manifest,
+                                                   'imageManifestMediaType': 'application/vnd.oci.image.manifest.v1+json'}]}))
+        log = self.root / 'aws.log'
+        self.stub('aws', '''#!/bin/sh
+echo "$@" >> "$TEST_AWS_LOG"
+case "$2" in
+  batch-get-image) cat "$TEST_STORED" ;;
 esac
 ''')
-        ok = self.run_step(step, DIGEST=DIGEST, TEST_TAGGED=DIGEST, TEST_DOCKER_LOG=str(log))
+        env = dict(TEST_STORED=str(stored), TEST_AWS_LOG=str(log))
+        ok = self.run_step(step, DIGEST=digest, **env)
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertIn(f'buildx imagetools create --tag registry.example.com/worker:main-{SHA} registry.example.com/worker@{DIGEST}',
-                      log.read_text())
-        moved = self.run_step(step, DIGEST=DIGEST, TEST_TAGGED='sha256:' + 'c' * 64, TEST_DOCKER_LOG=str(log))
-        self.assertNotEqual(moved.returncode, 0)
-        self.assertIn('not the attested', moved.stderr)
+        calls = log.read_text()
+        self.assertIn(f'imageDigest={digest}', calls)
+        self.assertIn(f'ecr put-image --repository-name worker --image-tag main-{SHA} --image-digest {digest}', calls)
+        self.assertEqual((self.root / 'built-manifest.json').read_text(), manifest)
+        log.write_text('')
+        other = self.run_step(step, DIGEST='sha256:' + 'c' * 64, **env)
+        self.assertNotEqual(other.returncode, 0)
+        self.assertIn('does not hash to the attested', other.stderr)
+        self.assertNotIn('put-image', log.read_text())
 
 
 if __name__ == '__main__':

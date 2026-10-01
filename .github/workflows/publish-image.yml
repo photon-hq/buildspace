@@ -214,11 +214,22 @@ jobs:
         id: tag
         if: steps.reuse.outputs.digest == ''
         env:
-          REGISTRY: ${{ steps.registry.outputs.registry }}
           DIGEST: ${{ steps.build.outputs.digest }}
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx imagetools create --tag "$REGISTRY/$IMAGE:$IMAGE_TAG" "$REGISTRY/$IMAGE@$DIGEST"
-          tagged=$(docker buildx imagetools inspect "$REGISTRY/$IMAGE:$IMAGE_TAG" --format '{{json .Manifest}}' | jq -er .digest)
-          [[ "$tagged" == "$DIGEST" ]] || { echo "Tag resolves to $tagged, not the attested $DIGEST" >&2; exit 1; }
+          aws ecr batch-get-image --repository-name "$IMAGE" --image-ids "imageDigest=$DIGEST" \
+            --accepted-media-types application/vnd.oci.image.manifest.v1+json application/vnd.docker.distribution.manifest.v2+json \
+              application/vnd.oci.image.index.v1+json application/vnd.docker.distribution.manifest.list.v2+json \
+            --output json > "$RUNNER_TEMP/built-image.json"
+          jq -ej '.images[0].imageManifest' "$RUNNER_TEMP/built-image.json" > "$RUNNER_TEMP/built-manifest.json"
+          media_type=$(jq -er '.images[0].imageManifestMediaType' "$RUNNER_TEMP/built-image.json")
+          [[ "sha256:$(sha256sum "$RUNNER_TEMP/built-manifest.json" | cut -d' ' -f1)" == "$DIGEST" ]] || {
+            echo "The manifest read back does not hash to the attested $DIGEST" >&2
+            exit 1
+          }
+          # Re-putting the same manifest bytes adds the tag without changing the
+          # digest. --image-digest makes the registry refuse anything else, so a
+          # tag for a different manifest is never created.
+          aws ecr put-image --repository-name "$IMAGE" --image-tag "$IMAGE_TAG" --image-digest "$DIGEST" \
+            --image-manifest "file://$RUNNER_TEMP/built-manifest.json" --image-manifest-media-type "$media_type" > /dev/null
