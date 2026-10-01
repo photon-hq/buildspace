@@ -1,0 +1,12 @@
+{
+  "name": "photon-production-dependency-check",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "semver": "7.7.4",
+    "yaml": "2.9.0"
+  }
+}

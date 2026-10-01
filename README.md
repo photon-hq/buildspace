@@ -281,6 +281,40 @@ Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 
 
 ---
 
+### Production dependency check
+
+**Action:** `.github/blocks/check-production-dependencies`
+
+- Shared by Kargo source-repository preflights and manual checks.
+- Pass `image-tag` (`main-<sha>` or `hotfix-<baseline>-<sha>`) or `source-ref`.
+- Reads that commit's pnpm workspace manifests and lockfile; never changes pins
+  or installs service dependencies. Only the checker's locked public dependencies
+  are installed, with lifecycle scripts disabled.
+- All direct/transitive `@photon-hq/*` registry packages must use exact stable,
+  published, non-deprecated versions. Dev, optional and peer dependencies are
+  included. Valid local `workspace:` links are source in the same commit;
+  their package dependencies are still audited.
+- Uses the caller's token with `contents: read` and `packages: read`. The calling
+  repository needs read access to its internal packages. No Buf or AWS token.
+- Reports the package/version/results table in the Actions summary and fails on
+  blockers or unknown registry results. Kargo runs it once in production-ready.
+
+```yaml
+steps:
+  - uses: photon-hq/buildspace/.github/blocks/check-production-dependencies@<reviewed-commit-sha>
+    with:
+      image-tag: ${{ inputs.image-tag }}
+      github-token: ${{ github.token }}
+```
+
+Pin the action to a reviewed commit. For manual checks, replace `image-tag` with
+`source-ref: main`. A standalone checkout step is unnecessary: the action checks
+out the calling repository with full history and reads the chosen ref from Git.
+Local validation: `npm ci --prefix .github/blocks/check-production-dependencies`
+and `node --test .github/blocks/check-production-dependencies/*.test.mjs` (Node 24+).
+
+---
+
 ### Rust Service Release
 
 **File:** `.github/workflows/rust-service-release.yaml`
