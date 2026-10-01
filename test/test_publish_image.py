@@ -88,6 +88,18 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertEqual(retry['if'], "${{ !cancelled() && steps.build.outcome == 'success' && steps.attest.outcome == 'failure' }}")
         self.assertNotIn('continue-on-error', retry)
 
+    def test_app_token_is_read_only_scoped_and_minted_only_for_a_build(self):
+        mint = next(s for s in STEPS if s.get('id') == 'app-token')
+        self.assertEqual(mint['if'], "steps.reuse.outputs.digest == '' && inputs.app-token-repositories != ''")
+        self.assertEqual(mint['with']['permission-contents'], 'read')
+        self.assertEqual(mint['with']['repositories'], '${{ inputs.app-token-repositories }}')
+        self.assertEqual([k for k in mint['with'] if k.startswith('permission-')], ['permission-contents'])
+        build = next(s for s in STEPS if s.get('id') == 'build')
+        self.assertLess(STEPS.index(mint), STEPS.index(build))
+        self.assertIn('${{ secrets.build-secrets }}', build['with']['secrets'])
+        self.assertIn("format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token)", build['with']['secrets'])
+        self.assertEqual(WORKFLOW['on']['workflow_call']['inputs']['app-token-repositories']['default'], '')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -39,9 +39,22 @@ on:
         description: Original workflow identity allowed when reusing pre-migration images
         default: ''
         type: string
+      app-token-repositories:
+        description: Newline-delimited repositories a minted GitHub App token may read during the build
+        default: ''
+        type: string
+      app-token-secret:
+        description: BuildKit secret id that receives the minted token
+        default: github_token
+        type: string
     secrets:
       build-secrets:
         description: Newline-delimited BuildKit secrets (NAME=value)
+        required: false
+      app-id:
+        description: GitHub App that mints the token for app-token-repositories
+        required: false
+      app-private-key:
         required: false
     outputs:
       digest:
@@ -114,6 +127,18 @@ jobs:
           fi
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
         if: steps.reuse.outputs.digest == ''
+      # A token minted in the caller cannot cross the job boundary: GitHub drops
+      # job outputs that contain a secret.
+      - name: Mint a read-only token for private build dependencies
+        id: app-token
+        if: steps.reuse.outputs.digest == '' && inputs.app-token-repositories != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.app-token-repositories }}
+          permission-contents: read
       - name: Build and push
         id: build
         if: steps.reuse.outputs.digest == ''
@@ -130,7 +155,9 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          secrets: ${{ secrets.build-secrets }}
+          secrets: |
+            ${{ secrets.build-secrets }}
+            ${{ steps.app-token.outputs.token && format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token) || '' }}
           cache-from: type=gha,scope=${{ inputs.image }}
           cache-to: type=gha,mode=max,scope=${{ inputs.image }}
       - name: Attest the new image
