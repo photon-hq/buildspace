@@ -92,6 +92,8 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         mint = next(s for s in STEPS if s.get('id') == 'app-token')
         self.assertEqual(mint['if'], "steps.reuse.outputs.digest == '' && inputs.app-token-repositories != ''")
         self.assertEqual(mint['with']['permission-contents'], 'read')
+        self.assertEqual(mint['with']['client-id'], '${{ inputs.app-client-id }}')
+        self.assertEqual(mint['with']['app-id'], '${{ secrets.app-id }}')
         self.assertEqual(mint['with']['repositories'], '${{ inputs.app-token-repositories }}')
         self.assertEqual([k for k in mint['with'] if k.startswith('permission-')], ['permission-contents'])
         build = next(s for s in STEPS if s.get('id') == 'build')
@@ -99,6 +101,24 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertIn('${{ secrets.build-secrets }}', build['with']['secrets'])
         self.assertIn("format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token)", build['with']['secrets'])
         self.assertEqual(WORKFLOW['on']['workflow_call']['inputs']['app-token-repositories']['default'], '')
+
+    def test_private_key_decode_is_optional_exclusive_and_masked(self):
+        import base64
+        step = next(s for s in STEPS if s.get('id') == 'app-key')
+        mint = next(s for s in STEPS if s.get('id') == 'app-token')
+        self.assertEqual(step['if'], mint['if'])
+        self.assertEqual(mint['with']['private-key'], '${{ steps.app-key.outputs.key }}')
+        key = '-----BEGIN PRIVATE KEY-----\nfixture%only\n-----END PRIVATE KEY-----'
+        result = self.run_step(step, APP_KEY='', APP_KEY_BASE64=base64.b64encode(key.encode()).decode())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('::add-mask::-----BEGIN PRIVATE KEY-----%0Afixture%25only', result.stdout)
+        self.assertIn(key, (self.root / 'output').read_text())
+        self.assertFalse((self.root / 'private-key.pem').exists())
+        self.assertNotEqual(self.run_step(step, APP_KEY='x', APP_KEY_BASE64='eA==').returncode, 0)
+        self.assertNotEqual(self.run_step(step, APP_KEY='', APP_KEY_BASE64='').returncode, 0)
+        self.assertNotEqual(self.run_step(step, APP_KEY='', APP_KEY_BASE64='not base64').returncode, 0)
+        plain = self.run_step(step, APP_KEY=key, APP_KEY_BASE64='')
+        self.assertEqual(plain.returncode, 0, plain.stderr)
 
     def test_prepare_runs_fail_fast_without_the_job_token_and_before_credentials(self):
         step = next(s for s in STEPS if s.get('id') == 'prepare')

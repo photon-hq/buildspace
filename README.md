@@ -187,6 +187,23 @@ Available versions are listed on the [GitHub Releases](https://github.com/photon
 
 ---
 
+### Private source dependencies in image builds
+
+`publish-image.yml` can mint a short-lived, contents-read token for an explicit
+newline-delimited `app-token-repositories` allowlist. `app-token-secret` selects
+its BuildKit secret ID (default `github_token`). Supply the public `app-client-id`
+input (or the legacy `app-id` secret), and exactly one
+of `app-private-key` (PEM) or `app-private-key-base64` (base64 PEM). The latter
+matches the existing `ARGOCD_GITHUB_APP_PRIVATE_KEY_BASE64` secret convention.
+The key is decoded and masked within the publisher job; neither key nor token
+is exported across jobs. BuildKit receives only the token secret, never a build
+argument or image environment value. The Dockerfile must use a secret mount and
+an ephemeral, repository-scoped Git configuration when installing dependencies.
+
+This workflow grants no repository access. The App must already be installed
+on every allowlisted repository with contents-read permission, and the caller
+must have access to the selected secret. Validate those settings before release.
+
 ## Prerequisites
 
 ### Required Secrets

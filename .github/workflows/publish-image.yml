@@ -51,6 +51,10 @@ on:
         description: Trusted script from the caller's commit, run in the checkout before AWS credentials are configured, for a build context the repository generates
         default: ''
         type: string
+      app-client-id:
+        description: GitHub App client ID for private source dependencies
+        default: ''
+        type: string
       app-token-repositories:
         description: Newline-delimited repositories a minted GitHub App token may read during the build
         default: ''
@@ -67,6 +71,10 @@ on:
         description: GitHub App that mints the token for app-token-repositories
         required: false
       app-private-key:
+        description: PEM key; mutually exclusive with app-private-key-base64
+        required: false
+      app-private-key-base64:
+        description: Base64-encoded PEM key; decoded only in the publisher job
         required: false
     outputs:
       digest:
@@ -165,13 +173,39 @@ jobs:
         if: steps.reuse.outputs.digest == ''
       # A token minted in the caller cannot cross the job boundary: GitHub drops
       # job outputs that contain a secret.
+      - name: Prepare the private dependency App key
+        id: app-key
+        if: steps.reuse.outputs.digest == '' && inputs.app-token-repositories != ''
+        shell: bash
+        env:
+          APP_KEY: ${{ secrets.app-private-key }}
+          APP_KEY_BASE64: ${{ secrets.app-private-key-base64 }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_KEY" && -n "$APP_KEY_BASE64" ]]; then
+            echo "Provide exactly one private dependency App key format" >&2
+            exit 1
+          fi
+          if [[ -n "$APP_KEY_BASE64" ]]; then
+            APP_KEY=$(python3 -c 'import base64, os; print(base64.b64decode(os.environ["APP_KEY_BASE64"], validate=True).decode("utf-8"), end="")')
+          fi
+          [[ -n "$APP_KEY" ]] || { echo "Private dependency App key is required" >&2; exit 1; }
+          # Mask before writing the multiline output; never write a key file or
+          # pass a key through a job output. The token action revokes its token.
+          escaped="${APP_KEY//%/%25}"
+          escaped="${escaped//$'\r'/%0D}"
+          escaped="${escaped//$'\n'/%0A}"
+          printf '::add-mask::%s\n' "$escaped"
+          delimiter="app-key-$(openssl rand -hex 16)"
+          printf 'key<<%s\n%s\n%s\n' "$delimiter" "$APP_KEY" "$delimiter" >> "$GITHUB_OUTPUT"
       - name: Mint a read-only token for private build dependencies
         id: app-token
         if: steps.reuse.outputs.digest == '' && inputs.app-token-repositories != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
+          client-id: ${{ inputs.app-client-id }}
           app-id: ${{ secrets.app-id }}
-          private-key: ${{ secrets.app-private-key }}
+          private-key: ${{ steps.app-key.outputs.key }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ inputs.app-token-repositories }}
           permission-contents: read
