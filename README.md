@@ -270,6 +270,12 @@ publish:
   commit and cannot be replaced.
 - `submodules` is passed to the checkout, for a repository whose image source
   lives in a pinned submodule.
+- For submodules in private repositories of the same owner, also set
+  `submodule-repositories` and pass `app-id` and `app-private-key`. The job
+  token reads only the calling repository, so the checkout then uses a GitHub
+  App token limited to reading the calling repository and the listed ones. The
+  App must be installed on all of them. The token is not persisted in the
+  checkout and is not passed to `prepare` or to the build.
 - `prepare` runs a script from the caller in the checkout, for a build context
   the repository generates (for example a patched copy of a submodule). It is
   trusted code from the caller's reviewed commit, in the same sense as the
