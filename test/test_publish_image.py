@@ -100,6 +100,23 @@ sys.exit(0 if a[a.index('--signer-workflow')+1] == os.environ['TEST_SIGNER'] els
         self.assertIn("format('{0}={1}', inputs.app-token-secret, steps.app-token.outputs.token)", build['with']['secrets'])
         self.assertEqual(WORKFLOW['on']['workflow_call']['inputs']['app-token-repositories']['default'], '')
 
+    def test_checkout_token_is_read_only_and_covers_the_caller_and_its_submodules(self):
+        mint = next(s for s in STEPS if s.get('id') == 'checkout-token')
+        checkout = next(s for s in STEPS if s.get('uses', '').startswith('actions/checkout'))
+        self.assertEqual(STEPS.index(mint) + 1, STEPS.index(checkout))
+        self.assertEqual(mint['if'], "inputs.submodule-repositories != ''")
+        self.assertEqual(mint['with']['owner'], '${{ github.repository_owner }}')
+        self.assertEqual(mint['with']['repositories'].split(),
+                         ['${{', 'github.event.repository.name', '}}', '${{', 'inputs.submodule-repositories', '}}'])
+        self.assertEqual([(k, v) for k, v in mint['with'].items() if k.startswith('permission-')],
+                         [('permission-contents', 'read')])
+        self.assertEqual(checkout['with']['token'], '${{ steps.checkout-token.outputs.token || github.token }}')
+        self.assertEqual(checkout['with']['persist-credentials'], 'false')
+        self.assertEqual(WORKFLOW['on']['workflow_call']['inputs']['submodule-repositories']['default'], '')
+        for step in STEPS:
+            if step is not checkout:
+                self.assertNotIn('steps.checkout-token', str(step))
+
     def test_prepare_runs_fail_fast_without_the_job_token_and_before_credentials(self):
         step = next(s for s in STEPS if s.get('id') == 'prepare')
         self.assertEqual(step['if'], "inputs.prepare != ''")

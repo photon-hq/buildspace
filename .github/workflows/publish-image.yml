@@ -47,6 +47,10 @@ on:
         description: Passed to actions/checkout (false, true or recursive)
         default: 'false'
         type: string
+      submodule-repositories:
+        description: Newline-delimited repositories of the same owner that the checkout may read as private submodules
+        default: ''
+        type: string
       prepare:
         description: Trusted script from the caller's commit, run in the checkout before AWS credentials are configured, for a build context the repository generates
         default: ''
@@ -64,7 +68,7 @@ on:
         description: Newline-delimited BuildKit secrets (NAME=value)
         required: false
       app-id:
-        description: GitHub App that mints the token for app-token-repositories
+        description: GitHub App that mints the tokens for submodule-repositories and app-token-repositories
         required: false
       app-private-key:
         required: false
@@ -108,10 +112,26 @@ jobs:
             [[ "$GITHUB_REF" =~ ^refs/heads/hotfix/[^/]+/([a-f0-9]{40})$ ]]
             [[ "$IMAGE_TAG" == "hotfix-${BASH_REMATCH[1]}-$GITHUB_SHA" ]]
           fi
+      # The job token reads only the calling repository. This token replaces it
+      # for the checkout, so it covers the caller as well as its submodules. The
+      # checkout precedes the reuse check, so a reused image mints it too.
+      - name: Mint a read-only token for private submodules
+        id: checkout-token
+        if: inputs.submodule-repositories != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            ${{ inputs.submodule-repositories }}
+          permission-contents: read
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           submodules: ${{ inputs.submodules }}
+          token: ${{ steps.checkout-token.outputs.token || github.token }}
           persist-credentials: false
       - name: Read the commit time
         id: source
