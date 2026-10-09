@@ -10,7 +10,7 @@ import yaml
 
 STAGE = yaml.load(Path('.github/workflows/npm-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/npm-promote.yml').read_text(), Loader=yaml.BaseLoader)
-CALLER_SCRIPTS = ('inputs.pack', 'inputs.verify', 'inputs.install')
+CALLER_SCRIPTS = re.compile(r'inputs\.(pack|verify|install)\b')
 
 
 def step(job, name):
@@ -32,7 +32,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(build['if'], "github.ref == 'refs/heads/main' || inputs.dry-run")
         for name, job in STAGE['jobs'].items():
             if name != 'build':
-                self.assertFalse(any(script in yaml.dump(job) for script in CALLER_SCRIPTS), name)
+                self.assertIsNone(CALLER_SCRIPTS.search(yaml.dump(job)), name)
 
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
