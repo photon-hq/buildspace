@@ -142,7 +142,7 @@ jobs:
         run: |
           node "$RELEASE_TOOLS/npm-release.mjs" collect \
             --staging "$RUNNER_TEMP/pack/staging" --production "$RUNNER_TEMP/pack/production" \
-            --suffix "$STAGING_SUFFIX" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --suffix="$STAGING_SUFFIX" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
             --output "$RUNNER_TEMP/npm-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
