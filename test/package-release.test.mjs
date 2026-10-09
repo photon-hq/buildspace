@@ -18,7 +18,7 @@ import {
   resolveCandidate,
   waitForCi,
   workspaceManifest,
-} from "../.github/npm-release/npm-release.mjs";
+} from "../.github/package-release/package-release.mjs";
 
 const SHA = "a".repeat(40);
 const SUFFIX = "-staging.900.1";
@@ -26,7 +26,7 @@ const REPOSITORY = "photon-hq/adapter";
 let root;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "npm-release-"));
+  root = mkdtempSync(join(tmpdir(), "package-release-"));
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -462,7 +462,7 @@ const resolveWith = (fake, overrides = {}) =>
     tagPrefix: "",
     version: "",
     environment: "production",
-    signerWorkflow: "photon-hq/buildspace/.github/workflows/npm-stage.yml",
+    signerWorkflow: "photon-hq/buildspace/.github/workflows/package-stage.yml",
     output: join(root, "candidate"),
     run: fake.run,
     registry: fake.registry,
@@ -476,7 +476,7 @@ test("promotion resolves the current staging build and verifies each candidate's
   assert.equal(changes, undefined);
   const attestations = commands(fake.calls, "gh", "attestation");
   assert.equal(attestations.length, 2);
-  for (const flag of [["--repo", REPOSITORY], ["--signer-workflow", "photon-hq/buildspace/.github/workflows/npm-stage.yml"], ["--source-digest", SHA], ["--source-ref", "refs/heads/main"]])
+  for (const flag of [["--repo", REPOSITORY], ["--signer-workflow", "photon-hq/buildspace/.github/workflows/package-stage.yml"], ["--source-digest", SHA], ["--source-ref", "refs/heads/main"]])
     assert.equal(attestations[0][attestations[0].indexOf(flag[0]) + 1], flag[1]);
 
   await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });

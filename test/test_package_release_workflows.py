@@ -1,4 +1,4 @@
-"""Check the npm stage/promote workflows' trust boundaries and pack step."""
+"""Check the package stage/promote workflows' trust boundaries and pack step."""
 import os
 from pathlib import Path
 import re
@@ -10,8 +10,8 @@ import unittest
 
 import yaml
 
-STAGE = yaml.load(Path('.github/workflows/npm-stage.yml').read_text(), Loader=yaml.BaseLoader)
-PROMOTE = yaml.load(Path('.github/workflows/npm-promote.yml').read_text(), Loader=yaml.BaseLoader)
+STAGE = yaml.load(Path('.github/workflows/package-stage.yml').read_text(), Loader=yaml.BaseLoader)
+PROMOTE = yaml.load(Path('.github/workflows/package-promote.yml').read_text(), Loader=yaml.BaseLoader)
 CALLER_SCRIPTS = re.compile(r'inputs\.(pack|verify|install)\b|cargo ')
 
 
@@ -62,7 +62,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(PROMOTE['on']['workflow_call']['inputs']['environment']['default'], 'production')
         self.assertIn('--channel production', step(publish, 'Publish the candidates under latest')['run'])
         signer = step(resolve, 'Resolve and verify the candidates')['env']['SIGNER_WORKFLOW']
-        self.assertEqual(signer, '${{ job.workflow_repository }}/.github/workflows/npm-stage.yml')
+        self.assertEqual(signer, '${{ job.workflow_repository }}/.github/workflows/package-stage.yml')
         self.assertNotEqual(STAGE['jobs']['publish']['concurrency']['group'], publish['concurrency']['group'])
 
 

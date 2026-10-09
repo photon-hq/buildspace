@@ -543,7 +543,7 @@ async function ensureRelease(run, { directory, manifest, channel, tag, title, fi
   }
   const paths = (names) => names.map((name) => join(directory, name));
   if (existing === undefined) {
-    const notesFile = join(await mkdtemp(join(tmpdir(), "npm-release-")), "notes.md");
+    const notesFile = join(await mkdtemp(join(tmpdir(), "package-release-")), "notes.md");
     await writeFile(notesFile, notes);
     run("gh", [
       "release",
@@ -1038,7 +1038,7 @@ async function main() {
       return;
     }
     default:
-      throw new Error("Usage: npm-release.mjs wait-ci|collect|publish|resolve [options]");
+      throw new Error("Usage: package-release.mjs wait-ci|collect|publish|resolve [options]");
   }
 }
 

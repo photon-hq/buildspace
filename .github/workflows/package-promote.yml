@@ -1,4 +1,4 @@
-name: Promote npm packages
+name: Promote packages
 
 on:
   workflow_call:
@@ -63,8 +63,8 @@ jobs:
           git init -q "$RUNNER_TEMP/buildspace"
           git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
           git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
-          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/npm-release" --ignore-scripts --no-audit --no-fund
-          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/npm-release" >> "$GITHUB_ENV"
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
       - name: Resolve and verify the candidates
         id: resolve
         env:
@@ -72,16 +72,16 @@ jobs:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           ENVIRONMENT: ${{ inputs.environment }}
-          SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/npm-stage.yml
+          SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/package-stage.yml
         run: |
-          node "$RELEASE_TOOLS/npm-release.mjs" resolve \
+          node "$RELEASE_TOOLS/package-release.mjs" resolve \
             --version "$STAGING_VERSION" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
             --environment "$ENVIRONMENT" --signer-workflow "$SIGNER_WORKFLOW" \
-            --output "$RUNNER_TEMP/npm-release"
+            --output "$RUNNER_TEMP/package-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: npm-promotion
-          path: ${{ runner.temp }}/npm-release/
+          name: package-promotion
+          path: ${{ runner.temp }}/package-release/
           if-no-files-found: error
           retention-days: 7
 
@@ -95,7 +95,7 @@ jobs:
       contents: write
       packages: write
     concurrency:
-      group: npm-production-${{ github.repository }}
+      group: package-production-${{ github.repository }}
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
@@ -111,8 +111,8 @@ jobs:
           git init -q "$RUNNER_TEMP/buildspace"
           git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
           git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
-          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/npm-release" --ignore-scripts --no-audit --no-fund
-          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/npm-release" >> "$GITHUB_ENV"
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
@@ -120,14 +120,14 @@ jobs:
           scope: '@${{ github.repository_owner }}'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: npm-promotion
-          path: ${{ runner.temp }}/npm-release
+          name: package-promotion
+          path: ${{ runner.temp }}/package-release
       - name: Publish the candidates under latest
         env:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
         run: |
-          node "$RELEASE_TOOLS/npm-release.mjs" publish --channel production --directory "$RUNNER_TEMP/npm-release" \
+          node "$RELEASE_TOOLS/package-release.mjs" publish --channel production --directory "$RUNNER_TEMP/package-release" \
             --package "$PACKAGE" --tag-prefix "$TAG_PREFIX"
 
   notify-downstream:
