@@ -647,10 +647,12 @@ async function main() {
       });
       const warnings = [];
       for (const pkg of manifest.packages) {
+        const { version, integrity: packed } = pkg.production;
         const metadata = await registryMetadata(pkg.name);
+        const released = metadata.versions[version];
         const latest = metadata["dist-tags"].latest;
-        if (metadata.versions[pkg.production.version] || (latest && !semver.gt(pkg.production.version, latest)))
-          warnings.push(`${pkg.name}@${pkg.production.version} is already released (latest ${latest}); bump the version to make a build promotable.`);
+        if (released ? released.dist?.integrity !== packed : latest && !semver.gt(version, latest))
+          warnings.push(`${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Bump its version.`);
       }
       for (const warning of warnings) console.log(`::warning::${warning}`);
       const primary = manifest.packages.find(({ name }) => name === manifest.package);

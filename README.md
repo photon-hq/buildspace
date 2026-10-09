@@ -408,8 +408,10 @@ source commit, and moves `latest`.
   `optionalDependencies` are not exact stable published versions (or packages
   promoted with it), or whose `@photon-hq/*` peer ranges no published stable
   version satisfies. Promote dependencies first.
-- **Versions.** Bump `package.json` after a promotion: a candidate whose version
-  is already released is reported on the staging run and cannot be promoted.
+- **Versions.** Bump a package's `package.json` version before promoting changed
+  contents again; the staging run warns when a candidate cannot be promoted. A
+  package released earlier with byte-identical contents (for example an
+  unchanged sibling in a multi-package repository) is left as it is.
 - **Retries.** Every publish step accepts its own earlier work: a version already
   published with the same integrity, a tag on the same commit, an existing
   release missing assets. Anything else stops before writing. Channel tags never
