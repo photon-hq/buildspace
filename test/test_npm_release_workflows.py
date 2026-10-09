@@ -2,7 +2,9 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -10,7 +12,7 @@ import yaml
 
 STAGE = yaml.load(Path('.github/workflows/npm-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/npm-promote.yml').read_text(), Loader=yaml.BaseLoader)
-CALLER_SCRIPTS = re.compile(r'inputs\.(pack|verify|install)\b')
+CALLER_SCRIPTS = re.compile(r'inputs\.(pack|verify|install)\b|cargo ')
 
 
 def step(job, name):
@@ -40,7 +42,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(publish['needs'], 'build')
         names = [s.get('name') for s in publish['steps']]
         self.assertLess(names.index('Attest every packed file'), names.index('Publish the staging build and attach its candidates'))
+        self.assertLess(names.index('Attest every packaged crate'), names.index('Publish the staging build and attach its candidates'))
+        self.assertEqual(step(publish, 'Attest every packaged crate')['if'], "inputs.crates != ''")
         self.assertEqual(publish['concurrency']['cancel-in-progress'], 'false')
+
+    def test_crates_are_packaged_after_verification_and_before_the_npm_packs(self):
+        names = [s.get('name') for s in STAGE['jobs']['build']['steps']]
+        self.assertLess(names.index('Verify'), names.index('Package the Rust crates'))
+        self.assertLess(names.index('Package the Rust crates'), names.index('Pack the staging build and its production candidate'))
+        self.assertIn('--crates="$CRATES"', step(STAGE['jobs']['publish'], 'Publish the staging build and attach its candidates')['run'])
 
     def test_promotion_resolves_read_only_and_publishes_behind_the_environment(self):
         resolve = PROMOTE['jobs']['resolve']
@@ -87,6 +97,45 @@ class PackStepTests(unittest.TestCase):
     def test_packing_requires_a_clean_checkout(self):
         (self.root / 'package.json').write_text('{"version":"9.9.9"}\n')
         self.assertNotEqual(self.pack('true').returncode, 0)
+
+
+@unittest.skipUnless(shutil.which('cargo'), 'cargo is not installed')
+class CrateStepTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.git = ['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com']
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+        (self.root / 'src').mkdir()
+        (self.root / 'src/lib.rs').write_text('pub fn adapter() {}\n')
+        (self.root / 'Cargo.toml').write_text('[package]\nname = "adapter"\nversion = "0.4.0"\nedition = "2021"\npublish = false\n')
+        (self.root / '.gitignore').write_text('/target\n')
+        subprocess.run(['cargo', 'generate-lockfile', '--offline', '--quiet'], cwd=self.root, check=True)
+        subprocess.run([*self.git, 'add', '.'], check=True)
+        subprocess.run([*self.git, 'commit', '-qm', 'source'], check=True)
+        self.script = step(STAGE['jobs']['build'], 'Package the Rust crates')['run']
+
+    def package(self, crates):
+        env = dict(os.environ, RUNNER_TEMP=str(self.root / 'temp'), CRATES=crates, CARGO_NET_OFFLINE='true')
+        return subprocess.run(['bash', '-c', self.script], cwd=self.root, env=env, capture_output=True, text=True)
+
+    def test_each_crate_is_packaged_from_the_checked_out_commit(self):
+        result = self.package('adapter')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        head = subprocess.run([*self.git, 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()
+        with tarfile.open(self.root / 'temp/pack/crates/adapter-0.4.0.crate') as crate:
+            names = crate.getnames()
+            vcs = crate.extractfile('adapter-0.4.0/.cargo_vcs_info.json').read().decode()
+        self.assertIn(head, vcs)
+        self.assertNotIn('adapter-0.4.0/Cargo.lock', names)
+
+    def test_uncommitted_changes_and_invalid_names_fail(self):
+        self.assertNotEqual(self.package('--allow-dirty').returncode, 0)
+        (self.root / 'src/lib.rs').write_text('pub fn changed() {}\n')
+        result = self.package('adapter')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('uncommitted', result.stderr)
 
 
 if __name__ == '__main__':

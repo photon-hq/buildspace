@@ -65,7 +65,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | I have a... | Use this workflow | Trigger |
 |---|---|---|
 | Container image for Kargo promotion | [`publish-image`](#immutable-image-publisher) | Push to main or a protected hotfix branch, after CI |
-| Internal npm package on GitHub Packages | [`npm-stage` + `npm-promote`](#npm-stage-and-promote) | Push to main; promotion by dispatch and approval |
+| Internal npm package on GitHub Packages, with any internal Rust crates built beside it | [`npm-stage` + `npm-promote`](#npm-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
@@ -322,7 +322,8 @@ Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 
 `.github/workflows/npm-stage.yml` and `.github/workflows/npm-promote.yml` publish
 internal `@photon-hq/*` packages to GitHub Packages the way `publish-image` and
 Kargo ship images: every main commit is built and tested once, and production
-receives exactly the files that staging tested.
+receives exactly the files that staging tested. Internal Rust crates built from
+the same commit are staged and promoted with them.
 
 Each main push packs the caller's packages twice from the same checkout: a
 staging build `X.Y.Z-staging.<run id>.<attempt>`, published under the `staging`
@@ -351,6 +352,7 @@ jobs:
       ci-workflow: ci.yml
       verify: pnpm verify
       pack: pnpm release:pack
+      crates: photon-adapter # optional: Rust crates released with the packages
       downstream: fusor-v2 base-bffs
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
@@ -410,10 +412,26 @@ source commit, and moves `latest`.
   `optionalDependencies` are not exact stable published versions (or packages
   promoted with it), or whose `@photon-hq/*` peer ranges no published stable
   version satisfies. Promote dependencies first.
-- **Versions.** Bump a package's `package.json` version before promoting changed
-  contents again; the staging run warns when a candidate cannot be promoted. A
-  package released earlier with byte-identical contents (for example an
-  unchanged sibling in a multi-package repository) is left as it is.
+- **Rust crates** named in `crates` are staged and promoted with the packages.
+  Cargo fetches internal crates from Git, not a registry, so a crate's release is
+  the build's tag: consumers pin the production tag and the crate's own exact
+  version, as the release notes show, for example
+  `photon-error = { version = "=0.1.0", git = "https://github.com/photon-hq/error", tag = "v0.3.0" }`
+  (pin the staging tag to try a staging build). After `verify`, the build job runs
+  `cargo package --locked --no-verify --exclude-lockfile` for each crate (Cargo
+  1.87+, clean checkout); the `.crate` records its source commit and is attested
+  and attached to both releases. Promotion refuses a crate whose version is not
+  newer than in the latest production release, unless its packaged files are
+  unchanged, and one whose normal or build dependencies from the owner's GitHub
+  repositories, inherited ones included, are not pinned to a `vX.Y.Z` tag with an
+  exact `=X.Y.Z` version. An npm package still names each release, and the job
+  token reads only the calling repository, so a crate whose build fetches another
+  private repository cannot be staged yet.
+- **Versions.** Bump a package's `package.json` version, or a crate's
+  `Cargo.toml` version, before promoting changed contents again; the staging run
+  warns when a candidate cannot be promoted. A package released earlier with
+  byte-identical contents (for example an unchanged sibling in a multi-package
+  repository) is left as it is.
 - **Retries.** Every publish step accepts its own earlier work: a version already
   published with the same integrity, a tag on the same commit, an existing
   release missing assets. Anything else stops before writing. Channel tags never
@@ -427,7 +445,8 @@ source commit, and moves `latest`.
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
 Local validation: `node --test test/npm-release.test.mjs` (after
-`npm ci --prefix .github/npm-release`) and `python3 -m unittest discover -s test`.
+`npm ci --prefix .github/npm-release`) and `python3 -m unittest discover -s test`
+(the crate packaging test runs when `cargo` is installed).
 
 ---
 
