@@ -423,7 +423,7 @@ source commit, and moves `latest`.
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
 Local validation: `node --test test/npm-release.test.mjs` (after
-`npm ci --prefix .github/npm-release`) and `python3 -m unittest test.test_npm_release_workflows`.
+`npm ci --prefix .github/npm-release`) and `python3 -m unittest discover -s test`.
 
 ---
 
