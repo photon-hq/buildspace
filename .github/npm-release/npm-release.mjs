@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   appendFile,
   copyFile,
@@ -10,18 +11,24 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { gunzipSync } from "node:zlib";
 import semver from "semver";
+import { parse as parseToml } from "smol-toml";
 
 const REGISTRY = "https://npm.pkg.github.com";
 const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUFFIX = /^-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
+const CRATE_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const EXACT_STABLE = /^=\s*(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const MANIFEST = "release-manifest.json";
 const CHANNEL_TAG = { staging: "staging", production: "latest" };
 const DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
+const CRATE_DEPENDENCY_TABLES = ["dependencies", "build-dependencies", "build_dependencies"];
 
 export const sha256 = (buffer) =>
   createHash("sha256").update(buffer).digest("hex");
@@ -29,6 +36,8 @@ export const integrity = (buffer) =>
   `sha512-${createHash("sha512").update(buffer).digest("base64")}`;
 const fileName = (name, version) =>
   `${name.slice(1).replace("/", "-")}-${version}.tgz`;
+const crateFile = (name, version) => `${name}-${version}.crate`;
+const sorted = (values) => JSON.stringify([...values].sort());
 
 export function exec(command, args) {
   return execFileSync(command, args, {
@@ -73,6 +82,72 @@ export function readTarballManifest(path) {
       maxBuffer: 16 * 1024 * 1024,
     })
   );
+}
+
+/** The regular files of a gzipped tar archive, such as a `.crate`, by path. */
+export function readArchive(path) {
+  const archive = gunzipSync(readFileSync(path));
+  const files = new Map();
+  let longName;
+  for (let offset = 0; offset + 512 <= archive.length; ) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const field = (start, length) =>
+      header.subarray(start, start + length).toString("utf8").replace(/\0.*$/s, "");
+    const size = Number.parseInt(field(124, 12).trim() || "0", 8);
+    const type = String.fromCharCode(header[156]);
+    const body = archive.subarray(offset + 512, offset + 512 + size);
+    offset += 512 + Math.ceil(size / 512) * 512;
+    if (type === "L") {
+      longName = body.toString("utf8").replace(/\0.*$/s, "");
+      continue;
+    }
+    const prefix = header.subarray(257, 263).toString("latin1") === "ustar\0" ? field(345, 155) : "";
+    const name = longName ?? (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
+    longName = undefined;
+    if (type === "5") continue;
+    if (type !== "0" && type !== "\0") throw new Error(`${path}: ${name} is not a regular file`);
+    if (files.has(name)) throw new Error(`${path} holds ${name} more than once`);
+    files.set(name, body);
+  }
+  return files;
+}
+
+/**
+ * What a `.crate` says about itself: the normalized manifest's name and
+ * version, the commit `cargo package` recorded, and a digest of every file but
+ * that record, so an unchanged crate from another commit compares equal.
+ */
+export function readCrate(path) {
+  const files = readArchive(path);
+  const roots = new Set([...files.keys()].map((name) => name.split("/")[0]));
+  if (roots.size !== 1) throw new Error(`${path} is not a crate`);
+  const [root] = roots;
+  const text = (name) => files.get(`${root}/${name}`)?.toString("utf8");
+  const manifest = parseToml(text("Cargo.toml") ?? "");
+  const vcs = JSON.parse(text(".cargo_vcs_info.json") ?? "{}");
+  const digest = createHash("sha256");
+  for (const name of [...files.keys()].sort())
+    if (name !== `${root}/.cargo_vcs_info.json`) digest.update(`${name}\0${sha256(files.get(name))}\n`);
+  return {
+    root,
+    name: manifest.package?.name,
+    version: manifest.package?.version,
+    sourceSha: vcs.git?.sha1,
+    dirty: vcs.git?.dirty === true,
+    path: vcs.path_in_vcs,
+    original: text("Cargo.toml.orig") ?? "",
+    digest: digest.digest("hex"),
+  };
+}
+
+/** Why a crate cannot describe this build, if it cannot. */
+function crateProblem(crate, sourceSha) {
+  if (typeof crate.name !== "string" || !CRATE_NAME.test(crate.name)) return `invalid crate name ${crate.name}`;
+  if (!STABLE.test(crate.version ?? "")) return `${crate.name} ${crate.version}: a production candidate must be X.Y.Z`;
+  if (crate.root !== `${crate.name}-${crate.version}`) return `${crate.name} is packaged under ${crate.root}`;
+  if (crate.sourceSha !== sourceSha || crate.dirty)
+    return `${crate.name} was packaged from ${crate.sourceSha ?? "an unknown commit"}${crate.dirty ? " with uncommitted changes" : ""}, not ${sourceSha}`;
 }
 
 /** A package's internal dependencies are published before it. */
@@ -122,13 +197,34 @@ async function readPacked(directory, scope) {
   return packed;
 }
 
+async function readCrates(directory, expected, sourceSha) {
+  const files = expected.length
+    ? (await readdir(directory)).filter((file) => file.endsWith(".crate")).sort()
+    : [];
+  const packaged = new Map();
+  for (const file of files) {
+    const path = join(directory, file);
+    const crate = readCrate(path);
+    const problem = crateProblem(crate, sourceSha);
+    if (problem) throw new Error(`${file}: ${problem}`);
+    if (packaged.has(crate.name)) throw new Error(`${crate.name} was packaged more than once`);
+    packaged.set(crate.name, { path, version: crate.version });
+  }
+  if (sorted(packaged.keys()) !== sorted(expected))
+    throw new Error(`The packaged crates (${[...packaged.keys()].join(", ") || "none"}) are not the crates input (${expected.join(", ")})`);
+  return packaged;
+}
+
 /**
- * Validate the two packs of one source commit and lay them out with a manifest
- * that promotion can verify: the staging build and its stable candidate.
+ * Validate the two packs of one source commit, and the crates packaged from it,
+ * and lay them out with a manifest that promotion can verify: the staging build
+ * and its stable candidates.
  */
 export async function collect({
   stagingDirectory,
   productionDirectory,
+  crateDirectory,
+  crates = [],
   suffix,
   sourceSha,
   repository,
@@ -142,6 +238,7 @@ export async function collect({
   const names = releaseNames(repository, packageInput, tagPrefix);
   const staging = await readPacked(stagingDirectory, names.scope);
   const production = await readPacked(productionDirectory, names.scope);
+  const packaged = await readCrates(crateDirectory, crates, sourceSha);
   const packed = [...production.keys()].sort();
   if (JSON.stringify(packed) !== JSON.stringify([...staging.keys()].sort()))
     throw new Error("The staging and production packs contain different packages");
@@ -178,9 +275,15 @@ export async function collect({
       staging: await entry(staging.get(name)),
       production: await entry(production.get(name)),
     });
+  const crateEntries = [];
+  for (const [name, { path, version }] of [...packaged].sort(([left], [right]) => left.localeCompare(right))) {
+    const file = crateFile(name, version);
+    await copyFile(path, join(output, file));
+    crateEntries.push({ name, version, file, sha256: sha256(await readFile(path)) });
+  }
   const primary = packages.find(({ name }) => name === names.primary);
   const manifest = {
-    formatVersion: 1,
+    formatVersion: 2,
     repository,
     sourceSha,
     runUrl,
@@ -189,25 +292,29 @@ export async function collect({
     stagingTag: `${names.tagPrefix}${primary.staging.version}`,
     productionTag: `v${primary.production.version}`,
     packages,
+    crates: crateEntries,
   };
   await writeFile(join(output, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
 
+/** Format 1 predates crates; it is read as a build without any. */
 export async function readManifest(directory) {
   const manifest = JSON.parse(await readFile(join(directory, MANIFEST), "utf8"));
-  if (manifest.formatVersion !== 1 || !Array.isArray(manifest.packages))
+  if (manifest.formatVersion === 1) manifest.crates = [];
+  if (![1, 2].includes(manifest.formatVersion) || !Array.isArray(manifest.packages) || !Array.isArray(manifest.crates))
     throw new Error("Unsupported release manifest");
   return manifest;
 }
 
 async function verifyFiles(directory, manifest, channels) {
-  for (const pkg of manifest.packages)
-    for (const channel of channels) {
-      const { file, sha256: expected } = pkg[channel];
-      if (sha256(await readFile(join(directory, file))) !== expected)
-        throw new Error(`${file} does not match the release manifest`);
-    }
+  const files = [
+    ...manifest.packages.flatMap((pkg) => channels.map((channel) => pkg[channel])),
+    ...manifest.crates,
+  ];
+  for (const { file, sha256: expected } of files)
+    if (sha256(await readFile(join(directory, file))) !== expected)
+      throw new Error(`${file} does not match the release manifest`);
 }
 
 /**
@@ -218,7 +325,7 @@ async function verifyFiles(directory, manifest, channels) {
 export async function verifyManifest(
   directory,
   manifest,
-  { repository, sourceSha, runId, packageInput, tagPrefix, channels }
+  { repository, sourceSha, runId, packageInput, tagPrefix, channels, crates }
 ) {
   const names = releaseNames(repository, packageInput, tagPrefix);
   const fail = (reason) => {
@@ -240,7 +347,22 @@ export async function verifyManifest(
     for (const channel of channels)
       if (pkg[channel].file !== fileName(pkg.name, pkg[channel].version)) fail(`file ${pkg[channel].file}`);
   }
+  const crateNames = new Set();
+  for (const crate of manifest.crates) {
+    if (!CRATE_NAME.test(crate.name ?? "") || crateNames.has(crate.name)) fail(`crate ${crate.name}`);
+    crateNames.add(crate.name);
+    if (!STABLE.test(crate.version ?? "")) fail(`${crate.name} version`);
+    if (crate.file !== crateFile(crate.name, crate.version)) fail(`file ${crate.file}`);
+  }
+  if (crates && sorted(crateNames) !== sorted(crates)) fail(`crates ${[...crateNames].join(", ") || "none"}`);
   await verifyFiles(directory, manifest, channels);
+  for (const crate of manifest.crates) {
+    const contents = readCrate(join(directory, crate.file));
+    const problem = crateProblem(contents, manifest.sourceSha);
+    if (problem) fail(problem);
+    if (contents.name !== crate.name || contents.version !== crate.version)
+      fail(`${crate.file} holds ${contents.name} ${contents.version}`);
+  }
   const packed = new Map();
   for (const pkg of manifest.packages)
     for (const channel of channels) {
@@ -345,6 +467,24 @@ function packageTable(manifest, channels) {
   ];
 }
 
+/** A build's crates, and the Cargo dependency that pins them at a tag. */
+function crateTable(manifest, tag) {
+  if (!manifest.crates.length) return [];
+  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+  return [
+    "",
+    "| Crate | Version |",
+    "| --- | --- |",
+    ...manifest.crates.map(({ name, version }) => `| \`${name}\` | \`${version}\` |`),
+    "",
+    "```toml",
+    ...manifest.crates.map(
+      ({ name, version }) => `${name} = { version = "=${version}", git = "${server}/${manifest.repository}", tag = "${tag}" }`
+    ),
+    "```",
+  ];
+}
+
 export function releaseNotes(manifest, channel, changes) {
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
   const source = `[\`${manifest.sourceSha.slice(0, 12)}\`](${server}/${manifest.repository}/commit/${manifest.sourceSha})`;
@@ -354,11 +494,13 @@ export function releaseNotes(manifest, channel, changes) {
           `Staging build of ${source} ([run](${manifest.runUrl})). The production candidates are attached; promote this build with \`staging-version: ${manifest.packages.find(({ name }) => name === manifest.package).staging.version}\`.`,
           "",
           ...packageTable(manifest, ["staging", "production"]),
+          ...crateTable(manifest, manifest.stagingTag),
         ]
       : [
           `Promoted from [\`${manifest.stagingTag}\`](${server}/${manifest.repository}/releases/tag/${manifest.stagingTag}), built from ${source} ([run](${manifest.runUrl})).`,
           "",
           ...packageTable(manifest, ["production"]),
+          ...crateTable(manifest, manifest.productionTag),
         ];
   if (changes) {
     lines.push(
@@ -431,6 +573,7 @@ async function ensureRelease(run, { directory, manifest, channel, tag, title, fi
  * Publish one channel of a verified build. Every step can be retried: a version
  * already published with the same contents, an existing tag on the same commit
  * and an existing release are accepted; anything else stops before changing it.
+ * Crates have no registry: the release tag is what Cargo resolves them from.
  */
 export async function publish({
   directory,
@@ -439,6 +582,7 @@ export async function publish({
   sourceSha,
   packageInput,
   tagPrefix,
+  crates,
   runId,
   runAttempt,
   run = exec,
@@ -454,6 +598,7 @@ export async function publish({
     packageInput,
     tagPrefix,
     channels: uploaded,
+    crates,
   });
   const parking = `candidate-${runId}-${runAttempt}`;
   if (!/^candidate-\d+-\d+$/.test(parking)) throw new Error("Invalid run coordinates");
@@ -492,6 +637,7 @@ export async function publish({
     title: `${manifest.package} ${released}`,
     files: [
       ...manifest.packages.flatMap((pkg) => uploaded.map((name) => pkg[name].file)),
+      ...manifest.crates.map(({ file }) => file),
       MANIFEST,
     ],
     notes: releaseNotes(manifest, channel, changes),
@@ -552,6 +698,119 @@ export async function dependencyFindings(candidates, scope, registry) {
 }
 
 /**
+ * The crates of the latest production release, the one the primary package's
+ * `latest` names, as a lookup by crate name.
+ */
+export function releasedCrates({ repository, latest, run = exec }) {
+  const tag = latest && `v${latest}`;
+  let directory;
+  let crates;
+  return async (name) => {
+    if (!tag) return undefined;
+    if (!crates) {
+      directory = await mkdtemp(join(tmpdir(), "released-crates-"));
+      try {
+        run("gh", ["release", "download", tag, "--repo", repository, "--pattern", MANIFEST, "--dir", directory, "--clobber"]);
+        ({ crates } = await readManifest(directory));
+      } catch (error) {
+        if (!notFound(error, /release not found|no assets/i)) throw error;
+        crates = [];
+      }
+    }
+    const crate = crates.find((entry) => entry.name === name);
+    if (!crate) return undefined;
+    run("gh", ["release", "download", tag, "--repo", repository, "--pattern", crate.file, "--dir", directory, "--clobber"]);
+    const path = join(directory, crate.file);
+    if (sha256(await readFile(path)) !== crate.sha256) throw new Error(`${tag}: ${crate.file} does not match its release manifest`);
+    return { tag, version: crate.version, digest: readCrate(path).digest };
+  };
+}
+
+/** A crate keeps its version only while its contents are unchanged, and otherwise moves forward. */
+export async function crateVersionFindings(manifest, directory, released) {
+  const findings = [];
+  for (const crate of manifest.crates) {
+    const previous = await released(crate.name);
+    if (!previous) continue;
+    if (previous.version === crate.version) {
+      if (previous.digest !== readCrate(join(directory, crate.file)).digest)
+        findings.push(`${crate.name} ${crate.version} is already released in ${previous.tag} with other contents; bump its version and stage again`);
+    } else if (!semver.gt(crate.version, previous.version))
+      findings.push(`${crate.name} ${crate.version} is not newer than ${previous.version} in ${previous.tag}; bump its version and stage again`);
+  }
+  return findings;
+}
+
+/** The workspace manifest a crate inherits from, read lazily at the build's source commit. */
+export function workspaceManifest({ repository, sourceSha, crate, run = exec }) {
+  let workspace;
+  return async () => {
+    if (workspace) return workspace;
+    const own = parseToml(crate.original);
+    if (own.workspace) return (workspace = own);
+    const directories = [];
+    if (typeof own.package?.workspace === "string")
+      directories.push(posix.normalize(posix.join(crate.path ?? "", own.package.workspace)));
+    else
+      for (let directory = crate.path ?? ""; directory !== "." && directory !== ""; ) {
+        directory = posix.dirname(directory);
+        directories.push(directory);
+      }
+    for (const directory of directories) {
+      const file = directory === "." ? "Cargo.toml" : `${directory}/Cargo.toml`;
+      let text;
+      try {
+        text = run("gh", [
+          "api",
+          "-H",
+          "Accept: application/vnd.github.raw+json",
+          `repos/${repository}/contents/${file.split("/").map(encodeURIComponent).join("/")}?ref=${sourceSha}`,
+        ]);
+      } catch (error) {
+        if (notFound(error)) continue;
+        throw error;
+      }
+      const manifest = parseToml(text);
+      if (manifest.workspace) return (workspace = manifest);
+    }
+    throw new Error(`${crate.name} inherits from a workspace, but no workspace manifest is above ${crate.path || "the repository root"}`);
+  };
+}
+
+/**
+ * Findings that keep a crate from production: a normal or build dependency
+ * fetched from one of the owner's repositories that is not pinned to a release
+ * tag and an exact stable version. Cargo resolves internal crates from Git, so
+ * the tag is their release.
+ */
+export async function crateDependencyFindings({ crate, owner, workspace }) {
+  const manifest = parseToml(crate.original);
+  const internal = new RegExp(`^(?:https?|ssh|git)://(?:[^@/]+@)?github\\.com[:/]${owner}/`, "i");
+  const findings = [];
+  for (const section of [manifest, ...Object.values(manifest.target ?? {})])
+    for (const table of CRATE_DEPENDENCY_TABLES)
+      for (const [key, declared] of Object.entries(section?.[table] ?? {})) {
+        let dependency = typeof declared === "string" ? { version: declared } : declared;
+        if (dependency.workspace === true) {
+          const inherited = (await workspace()).workspace?.dependencies?.[key];
+          dependency = { ...(typeof inherited === "string" ? { version: inherited } : inherited), ...dependency };
+        }
+        if (!internal.test(dependency.git ?? "")) continue;
+        const subject = `${crate.name} ${table}: ${dependency.package ?? key}`;
+        const reference =
+          dependency.rev !== undefined ? `rev ${dependency.rev}`
+          : dependency.branch !== undefined ? `branch ${dependency.branch}`
+          : dependency.tag !== undefined ? `tag ${dependency.tag}`
+          : "its default branch";
+        if (!RELEASE_TAG.test(dependency.tag ?? "") || dependency.rev !== undefined || dependency.branch !== undefined)
+          findings.push(`${subject} must pin a release tag vX.Y.Z of ${dependency.git}, not ${reference}`);
+        if (!EXACT_STABLE.test(dependency.version ?? ""))
+          findings.push(`${subject} must require an exact stable version (=X.Y.Z), not ${dependency.version ?? "any version"}`);
+      }
+  return findings;
+}
+
+/**
  * Find a staging build's candidates and prove they may become production:
  * built by the stage workflow from main, unchanged, newer than `latest`, and
  * depending only on released packages.
@@ -599,16 +858,15 @@ export async function resolveCandidate({
   const { status } = JSON.parse(run("gh", ["api", `repos/${repository}/compare/${manifest.sourceSha}...main`]));
   if (!["ahead", "identical"].includes(status))
     throw new Error(`${manifest.sourceSha} is not in the history of main`);
-  for (const pkg of manifest.packages)
-    run("gh", ["release", "download", tag, "--repo", repository, "--pattern", pkg.production.file, "--dir", output, "--clobber"]);
+  const files = [...manifest.packages.map((pkg) => pkg.production.file), ...manifest.crates.map(({ file }) => file)];
+  for (const file of files)
+    run("gh", ["release", "download", tag, "--repo", repository, "--pattern", file, "--dir", output, "--clobber"]);
   await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, channels: ["production"] });
-  const candidates = [];
-  for (const pkg of manifest.packages) {
-    const path = join(output, pkg.production.file);
+  for (const file of files)
     run("gh", [
       "attestation",
       "verify",
-      path,
+      join(output, file),
       "--repo",
       repository,
       "--signer-workflow",
@@ -618,8 +876,11 @@ export async function resolveCandidate({
       "--source-ref",
       "refs/heads/main",
     ]);
-    candidates.push({ name: pkg.name, version: pkg.production.version, manifest: readTarballManifest(path) });
-  }
+  const candidates = manifest.packages.map((pkg) => ({
+    name: pkg.name,
+    version: pkg.production.version,
+    manifest: readTarballManifest(join(output, pkg.production.file)),
+  }));
   const findings = await dependencyFindings(candidates, names.scope, lookup);
   for (const pkg of manifest.packages) {
     const { version: candidate, integrity: expected } = pkg.production;
@@ -631,9 +892,15 @@ export async function resolveCandidate({
     else if (!existing && latest && !semver.gt(candidate, latest))
       findings.push(`${pkg.name}@${candidate} is not newer than latest ${latest}; bump the version and stage again`);
   }
+  const latest = (await lookup(names.primary))["dist-tags"].latest;
+  findings.push(...(await crateVersionFindings(manifest, output, releasedCrates({ repository, latest, run }))));
+  for (const { file } of manifest.crates) {
+    const crate = readCrate(join(output, file));
+    const workspace = workspaceManifest({ repository, sourceSha: manifest.sourceSha, crate, run });
+    findings.push(...(await crateDependencyFindings({ crate, owner: repository.split("/")[0], workspace })));
+  }
   if (findings.length)
     throw new Error(`${tag} cannot be promoted:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
-  const latest = (await lookup(names.primary))["dist-tags"].latest;
   const changes =
     latest && latest !== primary.production.version
       ? changesSince(run, repository, `v${latest}`, manifest.sourceSha)
@@ -659,6 +926,8 @@ async function main() {
     allowPositionals: true,
     options: {
       channel: { type: "string" },
+      "crate-directory": { type: "string" },
+      crates: { type: "string" },
       directory: { type: "string" },
       environment: { type: "string" },
       output: { type: "string" },
@@ -676,6 +945,7 @@ async function main() {
   const env = process.env;
   const repository = env.GITHUB_REPOSITORY;
   const runUrl = `${env.GITHUB_SERVER_URL}/${repository}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}`;
+  const crates = values.crates?.split(/\s+/).filter(Boolean);
   switch (positionals[0]) {
     case "wait-ci":
       await waitForCi({
@@ -690,6 +960,8 @@ async function main() {
       const manifest = await collect({
         stagingDirectory: resolve(values.staging),
         productionDirectory: resolve(values.production),
+        crateDirectory: values["crate-directory"] && resolve(values["crate-directory"]),
+        crates: crates ?? [],
         suffix: values.suffix,
         sourceSha: env.GITHUB_SHA,
         repository,
@@ -699,14 +971,18 @@ async function main() {
         runUrl,
       });
       const warnings = [];
+      const lookup = cached(registryMetadata);
       for (const pkg of manifest.packages) {
         const { version, integrity: packed } = pkg.production;
-        const metadata = await registryMetadata(pkg.name);
+        const metadata = await lookup(pkg.name);
         const released = metadata.versions[version];
         const latest = metadata["dist-tags"].latest;
         if (released ? released.dist?.integrity !== packed : latest && !semver.gt(version, latest))
           warnings.push(`${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Bump its version.`);
       }
+      const crateHistory = releasedCrates({ repository, latest: (await lookup(manifest.package))["dist-tags"].latest });
+      for (const finding of await crateVersionFindings(manifest, resolve(values.output), crateHistory))
+        warnings.push(`This build cannot be promoted: ${finding}.`);
       for (const warning of warnings) console.log(`::warning::${warning}`);
       const primary = manifest.packages.find(({ name }) => name === manifest.package);
       await summarize(
@@ -714,6 +990,7 @@ async function main() {
           "### Staged packages",
           "",
           ...packageTable(manifest, ["staging", "production"]),
+          ...crateTable(manifest, manifest.stagingTag),
           "",
           `Promote with \`staging-version: ${primary.staging.version}\`.`,
           ...warnings.map((warning) => `\n> [!WARNING]\n> ${warning}`),
@@ -730,6 +1007,7 @@ async function main() {
         sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
+        crates,
         runId: env.GITHUB_RUN_ID,
         runAttempt: env.GITHUB_RUN_ATTEMPT,
       });

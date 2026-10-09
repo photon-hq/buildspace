@@ -14,6 +14,10 @@ on:
       install:
         default: pnpm install --frozen-lockfile
         type: string
+      crates:
+        description: Space-separated Rust crates released with the packages; Cargo resolves them from the build's tags
+        default: ''
+        type: string
       ci-workflow:
         description: Workflow file (for example ci.yml) whose push run on this exact commit must succeed first
         default: ''
@@ -113,6 +117,19 @@ jobs:
         env:
           VERIFY: ${{ inputs.verify }}
         run: bash -euo pipefail -c "$VERIFY"
+      # Cargo records the commit in each .crate and refuses uncommitted changes.
+      - name: Package the Rust crates
+        if: inputs.crates != ''
+        env:
+          CRATES: ${{ inputs.crates }}
+        run: |
+          set -euo pipefail
+          for crate in $CRATES; do
+            [[ "$crate" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] || { echo "::error::Invalid crate name: $crate" >&2; exit 1; }
+            CARGO_TARGET_DIR="$RUNNER_TEMP/cargo" cargo package --locked --no-verify --exclude-lockfile --package="$crate"
+          done
+          mkdir -p "$RUNNER_TEMP/pack/crates"
+          cp "$RUNNER_TEMP"/cargo/package/*.crate "$RUNNER_TEMP/pack/crates/"
       # Both packs come from the same checkout; neither may change tracked files.
       - name: Pack the staging build and its production candidate
         env:
@@ -138,10 +155,12 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
+          CRATES: ${{ inputs.crates }}
           STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
         run: |
           node "$RELEASE_TOOLS/npm-release.mjs" collect \
             --staging "$RUNNER_TEMP/pack/staging" --production "$RUNNER_TEMP/pack/production" \
+            --crates="$CRATES" --crate-directory "$RUNNER_TEMP/pack/crates" \
             --suffix="$STAGING_SUFFIX" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
             --output "$RUNNER_TEMP/npm-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -196,13 +215,19 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: ${{ runner.temp }}/npm-release/*.tgz
+      - name: Attest every packaged crate
+        if: inputs.crates != ''
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ runner.temp }}/npm-release/*.crate
       - name: Publish the staging build and attach its candidates
         env:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
+          CRATES: ${{ inputs.crates }}
         run: |
           node "$RELEASE_TOOLS/npm-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/npm-release" \
-            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX"
+            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" --crates="$CRATES"
 
   notify-downstream:
     needs: publish

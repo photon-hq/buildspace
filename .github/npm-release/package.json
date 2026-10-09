@@ -6,6 +6,7 @@
     "node": ">=24"
   },
   "dependencies": {
-    "semver": "7.7.4"
+    "semver": "7.7.4",
+    "smol-toml": "1.9.0"
   }
 }
