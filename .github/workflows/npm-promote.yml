@@ -1,0 +1,163 @@
+name: Promote npm packages
+
+on:
+  workflow_call:
+    inputs:
+      staging-version:
+        description: Staging version of the build to promote; defaults to the package's current staging tag
+        default: ''
+        type: string
+      package:
+        description: Package whose version names the build; defaults to @<owner>/<repository>
+        default: ''
+        type: string
+      tag-prefix:
+        description: Staging release tag prefix; defaults to <repository>-staging-
+        default: ''
+        type: string
+      environment:
+        description: Environment whose required reviewers approve the promotion
+        default: production
+        type: string
+      downstream:
+        description: Space-separated repositories of the same owner to notify after publishing
+        default: ''
+        type: string
+    secrets:
+      APP_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
+    outputs:
+      version:
+        value: ${{ jobs.resolve.outputs.version }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Read-only: finds the candidates, proves where they came from, and shows the
+  # reviewer what an approval will publish.
+  resolve:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+      attestations: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_AUTH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/npm-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/npm-release" >> "$GITHUB_ENV"
+      - name: Resolve and verify the candidates
+        id: resolve
+        env:
+          STAGING_VERSION: ${{ inputs.staging-version }}
+          PACKAGE: ${{ inputs.package }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/npm-stage.yml
+        run: |
+          node "$RELEASE_TOOLS/npm-release.mjs" resolve \
+            --version "$STAGING_VERSION" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --environment "$ENVIRONMENT" --signer-workflow "$SIGNER_WORKFLOW" \
+            --output "$RUNNER_TEMP/npm-release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-promotion
+          path: ${{ runner.temp }}/npm-release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Waits for the environment's reviewers, then publishes the verified files.
+  publish:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+      packages: write
+    concurrency:
+      group: npm-production-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_AUTH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/npm-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/npm-release" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: '@${{ github.repository_owner }}'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-promotion
+          path: ${{ runner.temp }}/npm-release
+      - name: Publish the candidates under latest
+        run: node "$RELEASE_TOOLS/npm-release.mjs" publish --channel production --directory "$RUNNER_TEMP/npm-release"
+
+  notify-downstream:
+    needs: publish
+    if: inputs.downstream != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions: {}
+    steps:
+      - name: List downstream repositories
+        id: downstream
+        env:
+          DOWNSTREAM: ${{ inputs.downstream }}
+        run: echo "repositories=$(echo $DOWNSTREAM | tr ' ' ',')" >> "$GITHUB_OUTPUT"
+      - name: Mint dispatch token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.downstream.outputs.repositories }}
+          permission-contents: write
+          permission-metadata: read
+      - name: Ask downstream repositories to check for updates
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          DOWNSTREAM: ${{ inputs.downstream }}
+        run: |
+          failed=0
+          for repo in $DOWNSTREAM; do
+            gh api "repos/$GITHUB_REPOSITORY_OWNER/$repo/dispatches" --method POST \
+              -f event_type=internal-package-published \
+              -f "client_payload[source]=$GITHUB_REPOSITORY" \
+              -f "client_payload[sha]=$GITHUB_SHA" || failed=1
+          done
+          exit "$failed"

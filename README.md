@@ -21,6 +21,7 @@ BuildSpace gives you two layers of CI/CD automation:
 - [Prerequisites](#prerequisites)
 - [Workflows](#workflows)
   - [Immutable Image Publisher](#immutable-image-publisher)
+  - [npm Stage and Promote](#npm-stage-and-promote)
   - [Rust Service Release](#rust-service-release)
   - [TypeScript Service Release](#typescript-service-release)
   - [TypeScript Monorepo Release](#typescript-monorepo-release)
@@ -64,6 +65,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | I have a... | Use this workflow | Trigger |
 |---|---|---|
 | Container image for Kargo promotion | [`publish-image`](#immutable-image-publisher) | Push to main or a protected hotfix branch, after CI |
+| Internal npm package on GitHub Packages | [`npm-stage` + `npm-promote`](#npm-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
@@ -312,6 +314,116 @@ publish:
 
 Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 -m unittest discover -s test`
 (requires PyYAML 6.0.3).
+
+---
+
+### npm Stage and Promote
+
+`.github/workflows/npm-stage.yml` and `.github/workflows/npm-promote.yml` publish
+internal `@photon-hq/*` packages to GitHub Packages the way `publish-image` and
+Kargo ship images: every main commit is built and tested once, and production
+receives exactly the files that staging tested.
+
+Each main push packs the caller's packages twice from the same checkout: a
+staging build `X.Y.Z-staging.<run id>.<attempt>`, published under the `staging`
+dist-tag, and the production candidate `X.Y.Z`. Both are attested and attached to
+a GitHub prerelease, `<repository>-staging-<staging version>`, with a
+`release-manifest.json` holding their checksums and source commit. Promotion
+publishes a build's stored candidates under `latest` after an environment
+reviewer approves; nothing is rebuilt.
+
+```yaml
+# .github/workflows/publish-staging.yml
+name: Publish staging
+on:
+  push:
+    branches: [main]
+jobs:
+  stage:
+    uses: photon-hq/buildspace/.github/workflows/npm-stage.yml@<reviewed-commit-sha>
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      attestations: write
+      id-token: write
+    with:
+      ci-workflow: ci.yml
+      verify: pnpm verify
+      pack: pnpm release:pack
+      downstream: fusor-v2 base-bffs
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+```
+
+```yaml
+# .github/workflows/promote.yml
+name: Promote to production
+on:
+  workflow_dispatch:
+    inputs:
+      staging-version:
+        description: Staging build to promote; blank promotes the current staging tag
+        default: ''
+jobs:
+  promote:
+    uses: photon-hq/buildspace/.github/workflows/npm-promote.yml@<reviewed-commit-sha>
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      attestations: read
+    with:
+      staging-version: ${{ inputs.staging-version }}
+```
+
+To promote, run the promote workflow from `main` (Actions, or
+`gh workflow run promote.yml -f staging-version=1.4.0-staging.123456789.1`). Its
+first job shows what will be published and the commits since the current
+`latest`, then the run waits for the `production` environment's reviewers. After
+approval it publishes the candidates, creates the `vX.Y.Z` tag and Release on the
+source commit, and moves `latest`.
+
+- **The `pack` script** is the caller's. It runs twice, with `RELEASE_CHANNEL`
+  (`staging` or `production`), `RELEASE_SUFFIX` (`-staging.<run id>.<attempt>`,
+  or empty) and `PACK_DESTINATION`. It must write one `.tgz` per package to
+  `PACK_DESTINATION`, each versioned `<package.json version>$RELEASE_SUFFIX`, and
+  test what it packed. It must leave tracked files unchanged; the job fails
+  otherwise. `verify` runs once before both packs. Both run with
+  `NODE_AUTH_TOKEN` able to read packages.
+- **Several packages** from one repository are staged and promoted together.
+  They are published in dependency order, and the build is named after
+  `package` (default `@<owner>/<repository>`), which must be one of them.
+  `tag-prefix` overrides the staging tag prefix.
+- **Trust boundaries.** Only the build job runs caller code, and it can read but
+  not write. A separate job attests the files and publishes them. The staging
+  job uses the `environment` input (default `staging`); restrict that
+  environment to `main`. Promotion requires `main`, verifies each candidate's
+  checksum and its attestation (signer `photon-hq/buildspace/.github/workflows/npm-stage.yml`,
+  the caller repository, `refs/heads/main` and the source commit), and refuses
+  unless the `production` environment exists with required reviewers.
+- **Promotion refuses** a candidate that is not newer than `latest` or is already
+  published with other contents, and one whose `@photon-hq/*` `dependencies` or
+  `optionalDependencies` are not exact stable published versions (or packages
+  promoted with it), or whose `@photon-hq/*` peer ranges no published stable
+  version satisfies. Promote dependencies first.
+- **Versions.** Bump `package.json` after a promotion: a candidate whose version
+  is already released is reported on the staging run and cannot be promoted.
+- **Retries.** Every publish step accepts its own earlier work: a version already
+  published with the same integrity, a tag on the same commit, an existing
+  release missing assets. Anything else stops before writing. Channel tags never
+  move to an older version; a temporary `candidate-<run>-<attempt>` dist-tag is
+  left only by a failed run.
+- `ci-workflow` waits up to `ci-wait-minutes` (default 20) for that workflow's
+  push run on the exact commit to succeed. `dry-run: true` verifies and packs
+  without publishing and is the only mode allowed outside `main`, so a pull
+  request branch can dispatch it.
+- `downstream` repositories receive an `internal-package-published` dispatch after
+  each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
+
+Local validation: `node --test test/npm-release.test.mjs` (after
+`npm ci --prefix .github/npm-release`) and `python3 -m unittest test.test_npm_release_workflows`.
 
 ---
 

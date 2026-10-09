@@ -1,0 +1,11 @@
+{
+  "name": "photon-npm-release",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "semver": "7.7.4"
+  }
+}
