@@ -21,7 +21,7 @@ BuildSpace gives you two layers of CI/CD automation:
 - [Prerequisites](#prerequisites)
 - [Workflows](#workflows)
   - [Immutable Image Publisher](#immutable-image-publisher)
-  - [npm Stage and Promote](#npm-stage-and-promote)
+  - [Package Stage and Promote](#package-stage-and-promote)
   - [Rust Service Release](#rust-service-release)
   - [TypeScript Service Release](#typescript-service-release)
   - [TypeScript Monorepo Release](#typescript-monorepo-release)
@@ -65,7 +65,7 @@ BuildSpace gives you two layers of CI/CD automation:
 | I have a... | Use this workflow | Trigger |
 |---|---|---|
 | Container image for Kargo promotion | [`publish-image`](#immutable-image-publisher) | Push to main or a protected hotfix branch, after CI |
-| Internal npm package on GitHub Packages, with any internal Rust crates built beside it | [`npm-stage` + `npm-promote`](#npm-stage-and-promote) | Push to main; promotion by dispatch and approval |
+| Internal npm package on GitHub Packages, with any internal Rust crates built beside it | [`package-stage` + `package-promote`](#package-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
@@ -317,9 +317,9 @@ Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 
 
 ---
 
-### npm Stage and Promote
+### Package Stage and Promote
 
-`.github/workflows/npm-stage.yml` and `.github/workflows/npm-promote.yml` publish
+`.github/workflows/package-stage.yml` and `.github/workflows/package-promote.yml` publish
 internal `@photon-hq/*` packages to GitHub Packages the way `publish-image` and
 Kargo ship images: every main commit is built and tested once, and production
 receives exactly the files that staging tested. Internal Rust crates built from
@@ -341,7 +341,7 @@ on:
     branches: [main]
 jobs:
   stage:
-    uses: photon-hq/buildspace/.github/workflows/npm-stage.yml@<reviewed-commit-sha>
+    uses: photon-hq/buildspace/.github/workflows/package-stage.yml@<reviewed-commit-sha>
     permissions:
       contents: write
       packages: write
@@ -370,7 +370,7 @@ on:
         default: ''
 jobs:
   promote:
-    uses: photon-hq/buildspace/.github/workflows/npm-promote.yml@<reviewed-commit-sha>
+    uses: photon-hq/buildspace/.github/workflows/package-promote.yml@<reviewed-commit-sha>
     permissions:
       contents: write
       packages: write
@@ -379,6 +379,11 @@ jobs:
     with:
       staging-version: ${{ inputs.staging-version }}
 ```
+
+These were `npm-stage.yml` and `npm-promote.yml` before crates joined them. A caller
+moving off the old names changes both `uses:` lines and pins in one commit; its
+next main push stages a build that `package-promote.yml` can promote, since builds
+signed by the old stage workflow can't be.
 
 To promote, run the promote workflow from `main` (Actions, or
 `gh workflow run promote.yml -f staging-version=1.4.0-staging.123456789.1`). Its
@@ -404,7 +409,7 @@ source commit, and moves `latest`.
   order) from the files themselves and its own run. The staging
   job uses the `environment` input (default `staging`); restrict that
   environment to `main`. Promotion requires `main`, verifies each candidate's
-  checksum and its attestation (signer `photon-hq/buildspace/.github/workflows/npm-stage.yml`,
+  checksum and its attestation (signer `photon-hq/buildspace/.github/workflows/package-stage.yml`,
   the caller repository, `refs/heads/main` and the source commit), and refuses
   unless the `production` environment exists with required reviewers.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already
@@ -444,8 +449,8 @@ source commit, and moves `latest`.
 - `downstream` repositories receive an `internal-package-published` dispatch after
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
-Local validation: `node --test test/npm-release.test.mjs` (after
-`npm ci --prefix .github/npm-release`) and `python3 -m unittest discover -s test`
+Local validation: `node --test test/package-release.test.mjs` (after
+`npm ci --prefix .github/package-release`) and `python3 -m unittest discover -s test`
 (the crate packaging test runs when `cargo` is installed).
 
 ---

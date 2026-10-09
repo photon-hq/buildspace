@@ -1,5 +1,5 @@
 {
-  "name": "photon-npm-release",
+  "name": "photon-package-release",
   "private": true,
   "type": "module",
   "engines": {
