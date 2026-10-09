@@ -197,7 +197,12 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/npm-release/*.tgz
       - name: Publish the staging build and attach its candidates
-        run: node "$RELEASE_TOOLS/npm-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/npm-release"
+        env:
+          PACKAGE: ${{ inputs.package }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
+        run: |
+          node "$RELEASE_TOOLS/npm-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/npm-release" \
+            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX"
 
   notify-downstream:
     needs: publish

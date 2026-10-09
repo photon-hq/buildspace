@@ -259,14 +259,29 @@ function world({ published = {}, tags = {}, releases = {}, latest = {}, staging 
 }
 
 const commands = (calls, command, first) => calls.filter((call) => call[0] === command && call[1] === first);
+const publishWith = (fake, overrides = {}) =>
+  publish({
+    directory: join(root, "release"),
+    channel: "staging",
+    repository: REPOSITORY,
+    sourceSha: SHA,
+    packageInput: "",
+    tagPrefix: "",
+    runId: "900",
+    runAttempt: "1",
+    run: fake.run,
+    registry: fake.registry,
+    log: () => {},
+    ...overrides,
+  });
 
 test("staging publication parks, verifies, records the release, then moves the channel", async () => {
   packBoth();
   await collectBoth();
   const fake = world();
-  const { tag } = await publish({ directory: join(root, "release"), channel: "staging", runId: "77", runAttempt: "2", run: fake.run, registry: fake.registry, log: () => {} });
+  const { tag } = await publishWith(fake, { runAttempt: "2" });
   assert.equal(tag, `adapter-staging-1.2.0${SUFFIX}`);
-  assert.deepEqual(commands(fake.calls, "npm", "publish").map((call) => call.at(-3)), ["candidate-77-2", "candidate-77-2"]);
+  assert.deepEqual(commands(fake.calls, "npm", "publish").map((call) => call.at(-3)), ["candidate-900-2", "candidate-900-2"]);
   assert.match(commands(fake.calls, "npm", "publish")[0][2], /adapter-core-0\.3\.0-staging/);
   assert.equal(fake.state.tags[tag], SHA);
   const release = fake.state.releases[tag];
@@ -284,8 +299,8 @@ test("staging publication parks, verifies, records the release, then moves the c
   assert.deepEqual(distTags.map((call) => call.slice(2, 5)), [
     ["add", `@photon-hq/adapter-core@0.3.0${SUFFIX}`, "staging"],
     ["add", `@photon-hq/adapter@1.2.0${SUFFIX}`, "staging"],
-    ["rm", "@photon-hq/adapter-core", "candidate-77-2"],
-    ["rm", "@photon-hq/adapter", "candidate-77-2"],
+    ["rm", "@photon-hq/adapter-core", "candidate-900-2"],
+    ["rm", "@photon-hq/adapter", "candidate-900-2"],
   ]);
 });
 
@@ -298,7 +313,7 @@ test("a retried publication accepts its own earlier work and finishes it", async
     tags: { [manifest.stagingTag]: SHA },
     releases: { [manifest.stagingTag]: { prerelease: true, assets: [core.staging.file] } },
   });
-  await publish({ directory: join(root, "release"), channel: "staging", runId: "77", runAttempt: "3", run: fake.run, registry: fake.registry, log: () => {} });
+  await publishWith(fake, { runAttempt: "3" });
   assert.equal(commands(fake.calls, "npm", "publish").length, 1);
   assert.equal(fake.calls.some((call) => call.includes("--method")), false);
   assert.equal(commands(fake.calls, "gh", "release").filter((call) => call[2] === "upload").length, 1);
@@ -314,22 +329,48 @@ test("publication stops before writing when a version, tag or file disagrees", a
   await t.test("version published with other contents", async () => {
     const { core } = await staged();
     const fake = world({ published: { [`@photon-hq/adapter-core@${core.staging.version}`]: "sha512-other" } });
-    await assert.rejects(publish({ directory: join(root, "release"), channel: "staging", runId: "1", runAttempt: "1", run: fake.run, registry: fake.registry }), /different contents/);
+    await assert.rejects(publishWith(fake), /different contents/);
     assert.equal(commands(fake.calls, "npm", "publish").length, 0);
   });
   await t.test("tag on another commit", async () => {
     const { manifest } = await staged();
     const fake = world({ tags: { [manifest.stagingTag]: "b".repeat(40) } });
-    await assert.rejects(publish({ directory: join(root, "release"), channel: "staging", runId: "1", runAttempt: "1", run: fake.run, registry: fake.registry, log: () => {} }), /already names/);
+    await assert.rejects(publishWith(fake), /already names/);
     assert.equal(fake.state.releases[manifest.stagingTag], undefined);
   });
   await t.test("file changed after collection", async () => {
     const { core } = await staged();
     writeFileSync(join(root, "release", core.production.file), "tampered");
     const fake = world();
-    await assert.rejects(publish({ directory: join(root, "release"), channel: "staging", runId: "1", runAttempt: "1", run: fake.run, registry: fake.registry }), /does not match/);
+    await assert.rejects(publishWith(fake), /does not match/);
     assert.equal(fake.calls.length, 0);
   });
+});
+
+test("the publishing job trusts no manifest claim the files and run do not support", async (t) => {
+  const forge = async (edit) => {
+    packBoth();
+    await collectBoth();
+    const path = join(root, "release/release-manifest.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8"));
+    edit(manifest);
+    writeFileSync(path, JSON.stringify(manifest));
+  };
+  const cases = {
+    "tag on another name": [(m) => { m.stagingTag = "v9.9.9"; }, /release tags/],
+    "another source commit": [(m) => { m.sourceSha = "b".repeat(40); }, /source/],
+    "another run's suffix": [(m) => { m.suffix = "-staging.1.1"; for (const pkg of m.packages) pkg.staging.version = `${pkg.production.version}-staging.1.1`; }, /suffix/],
+    "unstable candidate": [(m) => { m.packages[0].production.version = "0.3.0-rc.1"; }, /versions/],
+    "file outside the release": [(m) => { m.packages[0].staging.file = "../escape.tgz"; }, /file/],
+    "another package name": [(m) => { m.packages[0].name = "@photon-hq/other"; }, /holds|publish order|file/],
+  };
+  for (const [name, [edit, error]] of Object.entries(cases))
+    await t.test(name, async () => {
+      await forge(edit);
+      const fake = world();
+      await assert.rejects(publishWith(fake), error);
+      assert.equal(fake.calls.length, 0);
+    });
 });
 
 test("a channel tag never moves to an older version", async () => {
@@ -337,7 +378,7 @@ test("a channel tag never moves to an older version", async () => {
   await collectBoth();
   const fake = world({ staging: { "@photon-hq/adapter": "9.0.0-staging.1.1" } });
   const logs = [];
-  await publish({ directory: join(root, "release"), channel: "staging", runId: "1", runAttempt: "1", run: fake.run, registry: fake.registry, log: (line) => logs.push(line) });
+  await publishWith(fake, { log: (line) => logs.push(line) });
   assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call[3]), [`@photon-hq/adapter-core@0.3.0${SUFFIX}`]);
   assert.ok(logs.some((line) => line.includes("Kept @photon-hq/adapter@staging on 9.0.0-staging.1.1")));
 });
@@ -383,7 +424,7 @@ async function stagedWorld(options = {}) {
   packBoth(options.pack);
   const manifest = await collectBoth();
   const fake = world({ ...options.world, staging: { "@photon-hq/adapter": `1.2.0${SUFFIX}` } });
-  await publish({ directory: join(root, "release"), channel: "staging", runId: "900", runAttempt: "1", run: fake.run, registry: fake.registry, log: () => {} });
+  await publishWith(fake);
   fake.calls.length = 0;
   return { manifest, fake };
 }
@@ -412,7 +453,7 @@ test("promotion resolves the current staging build and verifies each candidate's
   for (const flag of [["--repo", REPOSITORY], ["--signer-workflow", "photon-hq/buildspace/.github/workflows/npm-stage.yml"], ["--source-digest", SHA], ["--source-ref", "refs/heads/main"]])
     assert.equal(attestations[0][attestations[0].indexOf(flag[0]) + 1], flag[1]);
 
-  await publish({ directory: join(root, "candidate"), channel: "production", runId: "901", runAttempt: "1", run: fake.run, registry: fake.registry, log: () => {} });
+  await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
   assert.equal(fake.state.published["@photon-hq/adapter@1.2.0"], manifest.packages[1].production.integrity);
   assert.equal(fake.state.tags["v1.2.0"], SHA);
   const release = fake.state.releases["v1.2.0"];

@@ -397,7 +397,9 @@ source commit, and moves `latest`.
   `package` (default `@<owner>/<repository>`), which must be one of them.
   `tag-prefix` overrides the staging tag prefix.
 - **Trust boundaries.** Only the build job runs caller code, and it can read but
-  not write. A separate job attests the files and publishes them. The staging
+  not write. A separate job attests the files and publishes them, after
+  rebuilding every manifest claim (source commit, run, scope, versions, tags,
+  order) from the files themselves and its own run. The staging
   job uses the `environment` input (default `staging`); restrict that
   environment to `main`. Promotion requires `main`, verifies each candidate's
   checksum and its attestation (signer `photon-hq/buildspace/.github/workflows/npm-stage.yml`,

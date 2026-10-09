@@ -210,6 +210,57 @@ async function verifyFiles(directory, manifest, channels) {
     }
 }
 
+/**
+ * Rebuild a manifest's claims from the files it lists and the caller's own
+ * coordinates. The build job ran repository code, so a job that writes trusts
+ * nothing in the manifest until it matches.
+ */
+export async function verifyManifest(
+  directory,
+  manifest,
+  { repository, sourceSha, runId, packageInput, tagPrefix, channels }
+) {
+  const names = releaseNames(repository, packageInput, tagPrefix);
+  const fail = (reason) => {
+    throw new Error(`The release manifest does not describe this build: ${reason}`);
+  };
+  if (manifest.repository !== repository) fail(`repository ${manifest.repository}`);
+  if (!SHA.test(manifest.sourceSha) || (sourceSha && manifest.sourceSha !== sourceSha))
+    fail(`source ${manifest.sourceSha}`);
+  if (!SUFFIX.test(manifest.suffix) || (runId && !manifest.suffix.startsWith(`-staging.${runId}.`)))
+    fail(`suffix ${manifest.suffix}`);
+  if (manifest.package !== names.primary) fail(`package ${manifest.package}`);
+  const seen = new Set();
+  for (const pkg of manifest.packages) {
+    if (typeof pkg.name !== "string" || !pkg.name.startsWith(names.scope) || seen.has(pkg.name))
+      fail(`package ${pkg.name}`);
+    seen.add(pkg.name);
+    if (!STABLE.test(pkg.production.version) || pkg.staging.version !== `${pkg.production.version}${manifest.suffix}`)
+      fail(`${pkg.name} versions`);
+    for (const channel of channels)
+      if (pkg[channel].file !== fileName(pkg.name, pkg[channel].version)) fail(`file ${pkg[channel].file}`);
+  }
+  await verifyFiles(directory, manifest, channels);
+  const packed = new Map();
+  for (const pkg of manifest.packages)
+    for (const channel of channels) {
+      const { file, version } = pkg[channel];
+      const contents = readTarballManifest(join(directory, file));
+      if (contents.name !== pkg.name || contents.version !== version)
+        fail(`${file} holds ${contents.name}@${contents.version}`);
+      if (channel === "production") packed.set(pkg.name, contents);
+    }
+  const primary = manifest.packages.find(({ name }) => name === names.primary);
+  if (!primary) fail(`${names.primary} is missing`);
+  if (
+    manifest.stagingTag !== `${names.tagPrefix}${primary.staging.version}` ||
+    manifest.productionTag !== `v${primary.production.version}`
+  )
+    fail("release tags");
+  if (JSON.stringify(publishOrder(packed)) !== JSON.stringify(manifest.packages.map(({ name }) => name)))
+    fail("publish order");
+}
+
 /** Fail while CI on the exact commit has failed; wait while it is pending. */
 export function ciStatus(response, { sha, workflow }) {
   const latest = (response.workflow_runs ?? [])
@@ -384,6 +435,10 @@ async function ensureRelease(run, { directory, manifest, channel, tag, title, fi
 export async function publish({
   directory,
   channel,
+  repository,
+  sourceSha,
+  packageInput,
+  tagPrefix,
   runId,
   runAttempt,
   run = exec,
@@ -392,7 +447,14 @@ export async function publish({
 }) {
   const manifest = await readManifest(directory);
   const uploaded = channel === "staging" ? ["staging", "production"] : ["production"];
-  await verifyFiles(directory, manifest, uploaded);
+  await verifyManifest(directory, manifest, {
+    repository,
+    sourceSha,
+    runId: channel === "staging" ? runId : undefined,
+    packageInput,
+    tagPrefix,
+    channels: uploaded,
+  });
   const parking = `candidate-${runId}-${runAttempt}`;
   if (!/^candidate-\d+-\d+$/.test(parking)) throw new Error("Invalid run coordinates");
   const parked = [];
@@ -530,13 +592,7 @@ export async function resolveCandidate({
   }
   const manifest = await readManifest(output);
   const primary = manifest.packages.find(({ name }) => name === names.primary);
-  if (
-    manifest.repository !== repository ||
-    manifest.package !== names.primary ||
-    manifest.stagingTag !== tag ||
-    primary?.staging.version !== version ||
-    !SHA.test(manifest.sourceSha)
-  )
+  if (manifest.stagingTag !== tag || primary?.staging.version !== version)
     throw new Error(`The manifest attached to ${tag} does not describe ${names.primary}@${version}`);
   if (tagCommit(run, repository, tag) !== manifest.sourceSha)
     throw new Error(`${tag} no longer names the commit it was built from`);
@@ -545,13 +601,10 @@ export async function resolveCandidate({
     throw new Error(`${manifest.sourceSha} is not in the history of main`);
   for (const pkg of manifest.packages)
     run("gh", ["release", "download", tag, "--repo", repository, "--pattern", pkg.production.file, "--dir", output, "--clobber"]);
-  await verifyFiles(output, manifest, ["production"]);
+  await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, channels: ["production"] });
   const candidates = [];
   for (const pkg of manifest.packages) {
     const path = join(output, pkg.production.file);
-    const packed = readTarballManifest(path);
-    if (packed.name !== pkg.name || packed.version !== pkg.production.version)
-      throw new Error(`${pkg.production.file} does not contain ${pkg.name}@${pkg.production.version}`);
     run("gh", [
       "attestation",
       "verify",
@@ -565,7 +618,7 @@ export async function resolveCandidate({
       "--source-ref",
       "refs/heads/main",
     ]);
-    candidates.push({ name: pkg.name, version: pkg.production.version, manifest: packed });
+    candidates.push({ name: pkg.name, version: pkg.production.version, manifest: readTarballManifest(path) });
   }
   const findings = await dependencyFindings(candidates, names.scope, lookup);
   for (const pkg of manifest.packages) {
@@ -673,6 +726,10 @@ async function main() {
       const { tag } = await publish({
         directory: resolve(values.directory),
         channel: values.channel,
+        repository,
+        sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
+        packageInput: values.package,
+        tagPrefix: values["tag-prefix"],
         runId: env.GITHUB_RUN_ID,
         runAttempt: env.GITHUB_RUN_ATTEMPT,
       });
