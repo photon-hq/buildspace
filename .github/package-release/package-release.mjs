@@ -22,6 +22,7 @@ const REGISTRY = "https://npm.pkg.github.com";
 const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUFFIX = /^-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
+const IMAGE_TAG = /^(?:main|hotfix-[a-f0-9]{40})-([a-f0-9]{40})$/;
 const CRATE_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const PRODUCTION_TAG_PREFIX = /^(?:[a-z0-9][a-z0-9._-]*-)?v$/;
@@ -832,12 +833,66 @@ export async function crateDependencyFindings({ crate, owner, workspace }) {
  * built by the stage workflow from main, unchanged, newer than `latest`, and
  * depending only on released packages.
  */
+/**
+ * The staging build a main commit carries: the newest one staged at that commit
+ * or at an ancestor. A repository that stages only the commits that change its
+ * packages has no build of its own for the commits in between, and none of
+ * them may have a stage run that published nothing.
+ */
+export function stagedBuild({ repository, names, sourceSha, run = exec }) {
+  const api = (path) => JSON.parse(run("gh", ["api", path]));
+  const known = new Map([[sourceSha, true]]);
+  const carried = (commit) => {
+    if (!known.has(commit))
+      known.set(commit, api(`repos/${repository}/compare/${commit}...${sourceSha}`).status === "ahead");
+    return known.get(commit);
+  };
+  const builds = [];
+  for (let page = 1; ; page++) {
+    const refs = api(`repos/${repository}/git/matching-refs/tags/${names.tagPrefix}?per_page=100&page=${page}`);
+    for (const { ref, object } of refs) {
+      const tag = ref.slice("refs/tags/".length);
+      const coordinates = /-staging\.(\d+)\.(\d+)$/.exec(tag);
+      if (coordinates && semver.valid(tag.slice(names.tagPrefix.length)))
+        builds.push({ tag, object, runId: Number(coordinates[1]), attempt: Number(coordinates[2]) });
+    }
+    if (refs.length < 100) break;
+  }
+  builds.sort((left, right) => right.runId - left.runId || right.attempt - left.attempt);
+  const build = builds.find(({ tag, object }) =>
+    carried(object.type === "commit" ? object.sha : tagCommit(run, repository, tag))
+  );
+  if (!build) throw new Error(`${names.primary} has no staging build at or before ${sourceSha}`);
+  const { workflow_id: workflow } = api(`repos/${repository}/actions/runs/${build.runId}`);
+  for (let page = 1; page <= 10; page++) {
+    const { workflow_runs: runs } = api(
+      `repos/${repository}/actions/workflows/${workflow}/runs?branch=main&event=push&per_page=100&page=${page}`
+    );
+    for (const later of runs) {
+      if (later.id <= build.runId) return build.tag.slice(names.tagPrefix.length);
+      if (carried(later.head_sha))
+        throw new Error(
+          `${later.html_url} staged ${later.head_sha} after ${build.tag} and published no build (${later.conclusion ?? later.status}); rerun it, or promote a commit before it`
+        );
+    }
+    if (runs.length < 100) return build.tag.slice(names.tagPrefix.length);
+  }
+  throw new Error(`${build.tag} is more than 1000 stage runs old; promote it by its staging version`);
+}
+
+/**
+ * Find the candidates to promote and prove where they came from. `pending` is
+ * false when there is nothing left to publish: a hotfix image, whose packages
+ * are not staged, or a build whose candidates are all released already.
+ */
 export async function resolveCandidate({
   repository,
   packageInput,
   tagPrefix,
   productionTagPrefix,
   version: requested,
+  imageTag = "",
+  approvedBy = "",
   environment,
   signerWorkflow,
   output,
@@ -845,6 +900,10 @@ export async function resolveCandidate({
   registry = registryMetadata,
 }) {
   const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
+  const sourceSha = IMAGE_TAG.exec(imageTag)?.[1];
+  if (imageTag && requested) throw new Error("Supply a staging version or an image tag, not both");
+  if (imageTag && !sourceSha) throw new Error("Invalid immutable image tag");
+  if (sourceSha && !imageTag.startsWith("main-")) return { pending: false };
   const environmentRules = (() => {
     try {
       return JSON.parse(run("gh", ["api", `repos/${repository}/environments/${environment}`])).protection_rules ?? [];
@@ -853,10 +912,14 @@ export async function resolveCandidate({
       throw error;
     }
   })();
-  if (!environmentRules.some((rule) => rule.type === "required_reviewers" && rule.reviewers?.length))
+  if (!approvedBy && !environmentRules.some((rule) => rule.type === "required_reviewers" && rule.reviewers?.length))
     throw new Error(`The ${environment} environment must exist and require a reviewer before anything is promoted`);
   const lookup = cached(registry);
-  const version = requested || (await lookup(names.primary))["dist-tags"].staging;
+  const version =
+    requested ||
+    (sourceSha
+      ? stagedBuild({ repository, names, sourceSha, run })
+      : (await lookup(names.primary))["dist-tags"].staging);
   if (!version) throw new Error(`${names.primary} has no staging build`);
   const tag = `${names.tagPrefix}${version}`;
   await mkdir(output, { recursive: true });
@@ -900,6 +963,7 @@ export async function resolveCandidate({
     manifest: readTarballManifest(join(output, pkg.production.file)),
   }));
   const findings = await dependencyFindings(candidates, names.scope, lookup);
+  let published = true;
   for (const pkg of manifest.packages) {
     const { version: candidate, integrity: expected } = pkg.production;
     const metadata = await lookup(pkg.name);
@@ -909,6 +973,7 @@ export async function resolveCandidate({
       findings.push(`${pkg.name}@${candidate} is already published with different contents; bump the version and stage again`);
     else if (!existing && latest && !semver.gt(candidate, latest))
       findings.push(`${pkg.name}@${candidate} is not newer than latest ${latest}; bump the version and stage again`);
+    published &&= Boolean(existing) && Boolean(latest) && !semver.gt(candidate, latest);
   }
   const latest = (await lookup(names.primary))["dist-tags"].latest;
   findings.push(...(await crateVersionFindings(manifest, output, releasedCrates({ repository, latest, run }))));
@@ -923,7 +988,25 @@ export async function resolveCandidate({
     latest && latest !== primary.production.version
       ? changesSince(run, repository, `${names.productionTagPrefix}${latest}`, manifest.sourceSha)
       : undefined;
-  return { manifest, changes };
+  return { manifest, changes, pending: !(published && productionReleaseExists(run, manifest)) };
+}
+
+/**
+ * Whether the production release of these candidates exists. An earlier build
+ * may have made it: identical packages keep the tag of the commit that first
+ * released them. Crates are released by the tag itself, so theirs must be this
+ * build's.
+ */
+function productionReleaseExists(run, manifest) {
+  const commit = tagCommit(run, manifest.repository, manifest.productionTag);
+  if (commit === undefined || (manifest.crates.length && commit !== manifest.sourceSha)) return false;
+  try {
+    const release = run("gh", ["release", "view", manifest.productionTag, "--repo", manifest.repository, "--json", "assets,isPrerelease"]);
+    return JSON.parse(release).isPrerelease === false;
+  } catch (error) {
+    if (notFound(error, /release not found/i)) return false;
+    throw error;
+  }
 }
 
 async function summarize(markdown) {
@@ -947,7 +1030,9 @@ async function main() {
       "crate-directory": { type: "string" },
       crates: { type: "string" },
       directory: { type: "string" },
+      "approved-by": { type: "string", default: "" },
       environment: { type: "string" },
+      "image-tag": { type: "string", default: "" },
       output: { type: "string" },
       package: { type: "string", default: "" },
       production: { type: "string" },
@@ -1036,25 +1121,43 @@ async function main() {
       return;
     }
     case "resolve": {
-      const { manifest, changes } = await resolveCandidate({
+      const { manifest, changes, pending } = await resolveCandidate({
         repository,
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
         version: values.version,
+        imageTag: values["image-tag"],
+        approvedBy: values["approved-by"],
         environment: values.environment,
         signerWorkflow: values["signer-workflow"],
         output: resolve(values.output),
       });
+      if (!manifest) {
+        await summarize("### Nothing to release\n\nPackages are staged from `main`; a hotfix image releases none.");
+        await outputs({ pending, version: "" });
+        return;
+      }
       await summarize(
-        [
-          `### Promote \`${manifest.stagingTag}\` to production`,
-          "",
-          releaseNotes(manifest, "production", changes),
-          "Approve the deployment to publish these exact files under `latest`.",
-        ].join("\n")
+        pending
+          ? [
+              `### Promote \`${manifest.stagingTag}\` to production`,
+              "",
+              releaseNotes(manifest, "production", changes),
+              values["approved-by"]
+                ? `Dispatched by \`${values["approved-by"]}\`, whose dispatch is the approval: these exact files are published under \`latest\`.`
+                : "Approve the deployment to publish these exact files under `latest`.",
+            ].join("\n")
+          : [
+              `### \`${manifest.stagingTag}\` is already released`,
+              "",
+              ...packageTable(manifest, ["production"]),
+              "",
+              `Every candidate is published with these contents as \`${manifest.productionTag}\`. Nothing to publish.`,
+            ].join("\n")
       );
       await outputs({
+        pending,
         version: manifest.packages.find(({ name }) => name === manifest.package).production.version,
       });
       return;

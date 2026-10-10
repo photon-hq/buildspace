@@ -206,7 +206,7 @@ test("waiting for CI polls until success and times out otherwise", async () => {
 });
 
 /** A fake GitHub and registry that records every command. */
-function world({ published = {}, tags = {}, releases = {}, latest = {}, staging = {}, environment = ["octocat"], attested = true, contents = {} } = {}) {
+function world({ published = {}, tags = {}, releases = {}, latest = {}, staging = {}, environment = ["octocat"], attested = true, contents = {}, history = [], runs = [] } = {}) {
   const calls = [];
   const state = { published, tags, releases };
   const http404 = (message = "gh: Not Found (HTTP 404)") => Object.assign(new Error(message), { stderr: message });
@@ -220,7 +220,11 @@ function world({ published = {}, tags = {}, releases = {}, latest = {}, staging 
       return "";
     }
     if (command === "npm" && first === "view") return JSON.stringify(state.published[second]);
-    if (command === "npm" && first === "dist-tag") return "";
+    if (command === "npm" && first === "dist-tag") {
+      const channel = { latest, staging }[args[3]];
+      if (second === "add" && channel) channel[args[2].slice(0, args[2].lastIndexOf("@"))] = args[2].slice(args[2].lastIndexOf("@") + 1);
+      return "";
+    }
     if (command === "gh" && first === "api") {
       const path = args.find((arg) => arg.startsWith("repos/"));
       if (path.endsWith("/environments/production")) {
@@ -242,6 +246,22 @@ function world({ published = {}, tags = {}, releases = {}, latest = {}, staging 
         state.tags[ref] = args.find((arg) => arg.startsWith("sha=")).slice(4);
         return "";
       }
+      const prefix = /\/git\/matching-refs\/tags\/([^?]*)\?/.exec(path)?.[1];
+      if (prefix !== undefined)
+        return JSON.stringify(
+          Object.entries(state.tags)
+            .filter(([name]) => name.startsWith(prefix))
+            .map(([name, sha]) => ({ ref: `refs/tags/${name}`, object: { type: "commit", sha } }))
+        );
+      // `history` lists main's commits, oldest first.
+      const compared = /\/compare\/([a-f0-9]{40})\.\.\.([a-f0-9]{40})$/.exec(path);
+      if (compared) {
+        const [base, head] = [history.indexOf(compared[1]), history.indexOf(compared[2])];
+        const status = base < 0 || head < 0 ? "diverged" : base < head ? "ahead" : base > head ? "behind" : "identical";
+        return JSON.stringify({ status });
+      }
+      if (/\/actions\/runs\/\d+$/.test(path)) return JSON.stringify({ workflow_id: 7 });
+      if (/\/actions\/workflows\/7\/runs\?/.test(path)) return JSON.stringify({ workflow_runs: runs });
       if (/\/compare\/a{40}\.\.\.main$/.test(path)) return JSON.stringify({ status: "ahead" });
       if (/\/compare\/(?:[a-z0-9._-]+-)?v[^.]+.*\.\.\.a{40}$/.test(path))
         return JSON.stringify({ total_commits: 2, commits: [{ commit: { message: "feat: one\n\nbody" } }, { commit: { message: "fix: two" } }] });
@@ -534,6 +554,78 @@ test("promotion under a production tag prefix leaves the repository's vX.Y.Z tag
   assert.equal(fake.state.releases["v1.2.0"], undefined);
   // The prefix is re-derived from the run's inputs, not taken from the manifest.
   await assert.rejects(resolveWith(fake), /release tags/);
+});
+
+const [OLDER, BETWEEN, FREIGHT, NEWER] = ["b", "c", "d", "e"].map((letter) => letter.repeat(40));
+const HISTORY = [OLDER, SHA, BETWEEN, FREIGHT, NEWER];
+const stageRun = (id, sha, conclusion = "success") => ({
+  id,
+  head_sha: sha,
+  status: conclusion ? "completed" : "in_progress",
+  conclusion,
+  html_url: `https://github.com/${REPOSITORY}/actions/runs/${id}`,
+});
+
+test("an image tag promotes the build its main commit carries", async () => {
+  const { manifest, fake } = await stagedWorld({
+    // A later commit has its own build, which this image does not contain.
+    world: { history: HISTORY, runs: [stageRun(950, NEWER), stageRun(900, SHA)], tags: { "adapter-staging-1.2.0-staging.950.1": NEWER } },
+  });
+  const { manifest: resolved, pending } = await resolveWith(fake, { imageTag: `main-${FREIGHT}` });
+  assert.deepEqual(resolved, manifest);
+  assert.equal(pending, true);
+  assert.deepEqual((await resolveWith(fake, { imageTag: `main-${SHA}` })).manifest, manifest);
+});
+
+test("an image tag is refused when its commit carries no certain build", async (t) => {
+  await t.test("a later stage run published nothing", async () => {
+    for (const [conclusion, shown] of [["failure", "failure"], [null, "in_progress"]]) {
+      const { fake } = await stagedWorld({ world: { history: HISTORY, runs: [stageRun(930, BETWEEN, conclusion), stageRun(900, SHA)] } });
+      await assert.rejects(
+        resolveWith(fake, { imageTag: `main-${FREIGHT}` }),
+        new RegExp(`runs/930 staged ${BETWEEN} after adapter-staging-1\\.2\\.0-staging\\.900\\.1 and published no build \\(${shown}\\)`)
+      );
+    }
+  });
+  await t.test("staged only after the commit", async () => {
+    const { fake } = await stagedWorld({ world: { history: HISTORY } });
+    await assert.rejects(resolveWith(fake, { imageTag: `main-${OLDER}` }), /has no staging build at or before b{40}/);
+  });
+  await t.test("not an immutable tag, or a version as well", async () => {
+    const { fake } = await stagedWorld();
+    await assert.rejects(resolveWith(fake, { imageTag: "main-abcd" }), /Invalid immutable image tag/);
+    await assert.rejects(resolveWith(fake, { imageTag: `main-${SHA}`, version: `1.2.0${SUFFIX}` }), /not both/);
+  });
+});
+
+test("a hotfix image releases no packages", async () => {
+  const { fake } = await stagedWorld({ world: { environment: [] } });
+  assert.deepEqual(await resolveWith(fake, { imageTag: `hotfix-${SHA}-${FREIGHT}` }), { pending: false });
+  assert.equal(fake.calls.length, 0);
+});
+
+test("a build that is already released has nothing pending", async () => {
+  const { fake } = await stagedWorld();
+  assert.equal((await resolveWith(fake)).pending, true);
+  await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
+  assert.equal((await resolveWith(fake)).pending, false);
+  // Identical packages keep the tag of the commit that first released them.
+  fake.state.tags["v1.2.0"] = OLDER;
+  assert.equal((await resolveWith(fake)).pending, false);
+  // An interrupted release still has work left.
+  delete fake.state.releases["v1.2.0"];
+  assert.equal((await resolveWith(fake)).pending, true);
+});
+
+test("the trusted actor's dispatch stands in for the environment's reviewers", async () => {
+  const { manifest, fake } = await stagedWorld({ world: { environment: [] } });
+  await assert.rejects(resolveWith(fake), /must exist and require a reviewer/);
+  const { manifest: resolved, pending } = await resolveWith(fake, { approvedBy: "release-controller[bot]" });
+  assert.deepEqual(resolved, manifest);
+  assert.equal(pending, true);
+  // Every other check still applies.
+  const { fake: unattested } = await stagedWorld({ world: { attested: false } });
+  await assert.rejects(resolveWith(unattested, { approvedBy: "release-controller[bot]" }), /no attestations|verification failed/);
 });
 
 test("crates stay under vX.Y.Z tags", async () => {

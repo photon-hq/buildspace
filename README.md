@@ -423,7 +423,30 @@ source commit, and moves `latest`.
   environment to `main`. Promotion requires `main`, verifies each candidate's
   checksum and its attestation (signer `photon-hq/buildspace/.github/workflows/package-stage.yml`,
   the caller repository, `refs/heads/main` and the source commit), and refuses
-  unless the `production` environment exists with required reviewers.
+  unless the `production` environment exists with required reviewers or the
+  run is the caller's `trusted-actor` dispatching (below).
+- **Promoting the build of a service image.** A repository that also ships an
+  image passes `image-tag` (`main-<sha>`) in place of `staging-version`.
+  Promotion then takes the newest build staged at that commit or an ancestor of
+  it, which is the build the image was made with when only commits that change
+  the packages are staged. It refuses when a stage run for a commit in between
+  published nothing, so a failed or unfinished build is never skipped over. A
+  `hotfix-<baseline>-<sha>` tag releases nothing: packages are staged from
+  `main`.
+- **Nothing to publish.** When every candidate is already published with the
+  same contents and its production release exists, the run ends after the
+  read-only job, without the environment. Identical packages keep the tag of
+  the commit that first released them, so a later build with unchanged packages
+  promotes cleanly.
+- **A release controller as the approver.** `trusted-actor` names an actor whose
+  own `workflow_dispatch` is the approval, for example the GitHub App a release
+  controller dispatches with after a person promoted in it. GitHub states who
+  dispatched a run and who started each attempt, so no input can claim either,
+  and the actor must be both. Such a run skips the reviewer requirement and
+  publishes without the environment; every other check still applies. A run
+  anyone else dispatches, and any re-run by or of another actor's run, waits
+  for the environment's reviewers as before. Set it only where that actor's dispatches are already
+  gated by people, and keep its token scoped to the repository.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already
   published with other contents, and one whose `@photon-hq/*` `dependencies` or
   `optionalDependencies` are not exact stable published versions (or packages

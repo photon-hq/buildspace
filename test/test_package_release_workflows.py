@@ -13,6 +13,9 @@ import yaml
 STAGE = yaml.load(Path('.github/workflows/package-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/package-promote.yml').read_text(), Loader=yaml.BaseLoader)
 CALLER_SCRIPTS = re.compile(r'inputs\.(pack|verify|install)\b|cargo ')
+# GitHub states who dispatched the run and who started this attempt; no input
+# can claim either, and a re-run by or of someone else's run is not trusted.
+TRUSTED_DISPATCH = "github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.actor == inputs.trusted-actor && github.triggering_actor == inputs.trusted-actor"
 
 
 def step(job, name):
@@ -70,12 +73,30 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(any(level == 'write' for level in resolve['permissions'].values()))
         publish = PROMOTE['jobs']['publish']
         self.assertEqual(publish['needs'], 'resolve')
-        self.assertEqual(publish['environment'], '${{ inputs.environment }}')
+        self.assertEqual(publish['if'], "needs.resolve.outputs.pending == 'true'")
+        self.assertEqual(publish['environment'], "${{ !(%s) && inputs.environment || '' }}" % TRUSTED_DISPATCH)
         self.assertEqual(PROMOTE['on']['workflow_call']['inputs']['environment']['default'], 'production')
         self.assertIn('--channel production', step(publish, 'Publish the candidates under latest')['run'])
         signer = step(resolve, 'Resolve and verify the candidates')['env']['SIGNER_WORKFLOW']
         self.assertEqual(signer, '${{ job.workflow_repository }}/.github/workflows/package-stage.yml')
         self.assertNotEqual(STAGE['jobs']['publish']['concurrency']['group'], publish['concurrency']['group'])
+
+
+    def test_only_the_trusted_actors_own_dispatch_publishes_without_the_environment(self):
+        inputs = PROMOTE['on']['workflow_call']['inputs']
+        self.assertEqual(inputs['trusted-actor']['default'], '')
+        resolve = step(PROMOTE['jobs']['resolve'], 'Resolve and verify the candidates')
+        self.assertEqual(resolve['env']['APPROVED_BY'], "${{ %s && github.triggering_actor || '' }}" % TRUSTED_DISPATCH)
+        self.assertIn('--approved-by "$APPROVED_BY"', resolve['run'])
+        # Its declaration and the two expressions above: nothing else decides on it.
+        self.assertEqual(yaml.dump(PROMOTE).count('trusted-actor'), 7)
+
+    def test_an_image_tag_selects_the_build_and_a_released_build_stores_nothing(self):
+        resolve = PROMOTE['jobs']['resolve']
+        self.assertIn('--image-tag "$IMAGE_TAG"', step(resolve, 'Resolve and verify the candidates')['run'])
+        upload = next(s for s in resolve['steps'] if 'upload-artifact' in s.get('uses', ''))
+        self.assertEqual(upload['if'], "steps.resolve.outputs.pending == 'true'")
+        self.assertEqual(PROMOTE['on']['workflow_call']['outputs']['pending']['value'], '${{ jobs.resolve.outputs.pending }}')
 
 
 class PackStepTests(unittest.TestCase):
