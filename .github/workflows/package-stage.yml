@@ -37,6 +37,10 @@ on:
         description: Production release tag prefix, v or <name>-v; set it where vX.Y.Z tags already name something else
         default: ''
         type: string
+      artifact-name:
+        description: Name of the artifact that carries the build to the publish job; give each call its own when one run stages more than one build
+        default: package-release
+        type: string
       node-version:
         default: '24'
         type: string
@@ -175,7 +179,7 @@ jobs:
             --output "$RUNNER_TEMP/package-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: package-release
+          name: ${{ inputs.artifact-name }}
           path: ${{ runner.temp }}/package-release/
           if-no-files-found: error
           retention-days: 7
@@ -218,7 +222,7 @@ jobs:
           scope: '@${{ github.repository_owner }}'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: package-release
+          name: ${{ inputs.artifact-name }}
           path: ${{ runner.temp }}/package-release
       # Promotion verifies this attestation before publishing a candidate.
       - name: Attest every packed file
