@@ -36,6 +36,18 @@ class WorkflowTests(unittest.TestCase):
             if name != 'build':
                 self.assertIsNone(CALLER_SCRIPTS.search(yaml.dump(job)), name)
 
+    def test_the_install_token_reaches_only_the_install_script(self):
+        self.assertEqual(STAGE['on']['workflow_call']['secrets']['INSTALL_TOKEN']['required'], 'false')
+        holders = [
+            (name, s.get('name'))
+            for name, job in STAGE['jobs'].items()
+            for s in job['steps']
+            if 'secrets.INSTALL_TOKEN' in yaml.dump(s)
+        ]
+        self.assertEqual(holders, [('build', 'Install')])
+        self.assertNotIn('secrets.INSTALL_TOKEN', yaml.dump({k: v for k, v in STAGE['jobs']['build'].items() if k != 'steps'}))
+        self.assertNotIn('INSTALL_TOKEN', yaml.dump(PROMOTE))
+
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
         self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")

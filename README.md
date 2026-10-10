@@ -399,6 +399,11 @@ source commit, and moves `latest`.
   test what it packed. It must leave tracked files unchanged; the job fails
   otherwise. `verify` runs once before both packs. Both run with
   `NODE_AUTH_TOKEN` able to read packages.
+- **Another private registry.** When the lockfile also resolves packages from a
+  registry other than GitHub Packages, pass a read-only token for it as the
+  `INSTALL_TOKEN` secret and use it in `install`, for example
+  `install: pnpm install --frozen-lockfile --config.//registry.example/:_authToken="$INSTALL_TOKEN"`.
+  Only the install script sees it; `verify` and `pack` do not.
 - **Several packages** from one repository are staged and promoted together.
   They are published in dependency order, and the build is named after
   `package` (default `@<owner>/<repository>`), which must be one of them.
