@@ -408,6 +408,11 @@ source commit, and moves `latest`.
   They are published in dependency order, and the build is named after
   `package` (default `@<owner>/<repository>`), which must be one of them.
   `tag-prefix` overrides the staging tag prefix.
+- **Packages of one repository released separately** each get their own call
+  to the stage workflow, in one run, with their own `package`, `tag-prefix`,
+  `production-tag-prefix` and `artifact-name`, and their own promote workflow.
+  The calls share the run's staging suffix, so a later one (`needs:` the
+  earlier) can depend on the staging version the earlier one publishes.
 - **A repository whose `vX.Y.Z` tags already name something else**, such as a
   service that has its own releases, sets `production-tag-prefix` to `<name>-v`
   in both workflows. Its packages are then released as `<name>-vX.Y.Z`, and

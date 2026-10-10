@@ -51,6 +51,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('secrets.INSTALL_TOKEN', yaml.dump({k: v for k, v in STAGE['jobs']['build'].items() if k != 'steps'}))
         self.assertNotIn('INSTALL_TOKEN', yaml.dump(PROMOTE))
 
+    def test_the_publish_job_receives_the_build_under_the_callers_artifact_name(self):
+        self.assertEqual(STAGE['on']['workflow_call']['inputs']['artifact-name']['default'], 'package-release')
+        named = [
+            (name, s['uses'].split('@')[0].split('/')[-1])
+            for name, job in STAGE['jobs'].items()
+            for s in job['steps']
+            if s.get('with', {}).get('name') == '${{ inputs.artifact-name }}'
+        ]
+        self.assertEqual(named, [('build', 'upload-artifact'), ('publish', 'download-artifact')])
+
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
         self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
