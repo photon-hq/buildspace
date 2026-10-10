@@ -1,5 +1,5 @@
 name: Check production dependencies
-description: Check committed pnpm workspace pins against Photon's production package policy
+description: Check committed pnpm and Cargo workspace pins against Photon's production package policy
 inputs:
   image-tag:
     description: Immutable main-<sha> or hotfix-<baseline>-<sha> tag from Kargo
@@ -10,6 +10,9 @@ inputs:
   github-token:
     description: Token with contents read and packages read in the calling repository
     required: true
+  crates-token:
+    description: Token with contents read in the repositories that release the source's internal crates; defaults to github-token
+    default: ''
 runs:
   using: composite
   steps:
@@ -33,6 +36,7 @@ runs:
         IMAGE_TAG: ${{ inputs.image-tag }}
         SOURCE_REF: ${{ inputs.source-ref }}
         NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+        CRATES_TOKEN: ${{ inputs.crates-token || inputs.github-token }}
       run: |
         set -euo pipefail
         if [[ -n "$IMAGE_TAG" ]]; then
