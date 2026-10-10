@@ -7,6 +7,10 @@ on:
         description: Staging version of the build to promote; defaults to the package's current staging tag
         default: ''
         type: string
+      image-tag:
+        description: Immutable main-<sha> or hotfix-<baseline>-<sha> image tag, in place of staging-version; promotes the build that main commit carries
+        default: ''
+        type: string
       package:
         description: Package whose version names the build; defaults to @<owner>/<repository>
         default: ''
@@ -23,6 +27,10 @@ on:
         description: Environment whose required reviewers approve the promotion
         default: production
         type: string
+      trusted-actor:
+        description: Actor whose workflow_dispatch is itself the approval, such as the GitHub App a release controller dispatches with; its runs publish without the environment
+        default: ''
+        type: string
       downstream:
         description: Space-separated repositories of the same owner to notify after publishing
         default: ''
@@ -35,6 +43,9 @@ on:
     outputs:
       version:
         value: ${{ jobs.resolve.outputs.version }}
+      pending:
+        description: Whether anything was left to publish; false for a build already released
+        value: ${{ jobs.resolve.outputs.pending }}
 
 permissions:
   contents: read
@@ -53,6 +64,7 @@ jobs:
       attestations: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      pending: ${{ steps.resolve.outputs.pending }}
     env:
       GH_TOKEN: ${{ github.token }}
       NODE_AUTH_TOKEN: ${{ github.token }}
@@ -73,18 +85,23 @@ jobs:
         id: resolve
         env:
           STAGING_VERSION: ${{ inputs.staging-version }}
+          IMAGE_TAG: ${{ inputs.image-tag }}
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           ENVIRONMENT: ${{ inputs.environment }}
+          APPROVED_BY: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.triggering_actor == inputs.trusted-actor && github.triggering_actor || '' }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/package-stage.yml
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" resolve \
-            --version "$STAGING_VERSION" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --version "$STAGING_VERSION" --image-tag "$IMAGE_TAG" \
+            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
             --production-tag-prefix "$PRODUCTION_TAG_PREFIX" \
-            --environment "$ENVIRONMENT" --signer-workflow "$SIGNER_WORKFLOW" \
+            --environment "$ENVIRONMENT" --approved-by "$APPROVED_BY" \
+            --signer-workflow "$SIGNER_WORKFLOW" \
             --output "$RUNNER_TEMP/package-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.resolve.outputs.pending == 'true'
         with:
           name: package-promotion
           path: ${{ runner.temp }}/package-release/
@@ -92,11 +109,14 @@ jobs:
           retention-days: 7
 
   # Waits for the environment's reviewers, then publishes the verified files.
+  # A build that is already released needs neither, and the trusted actor's
+  # dispatch is the approval: an empty environment is no environment.
   publish:
     needs: resolve
+    if: needs.resolve.outputs.pending == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    environment: ${{ inputs.environment }}
+    environment: ${{ !(github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.triggering_actor == inputs.trusted-actor) && inputs.environment || '' }}
     permissions:
       contents: write
       packages: write
