@@ -51,6 +51,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('secrets.INSTALL_TOKEN', yaml.dump({k: v for k, v in STAGE['jobs']['build'].items() if k != 'steps'}))
         self.assertNotIn('INSTALL_TOKEN', yaml.dump(PROMOTE))
 
+    def test_promotion_carries_its_candidates_under_the_callers_artifact_name(self):
+        self.assertEqual(PROMOTE['on']['workflow_call']['inputs']['artifact-name']['default'], 'package-promotion')
+        named = [
+            (name, s['uses'].split('@')[0].split('/')[-1])
+            for name, job in PROMOTE['jobs'].items()
+            for s in job['steps']
+            if s.get('with', {}).get('name') == '${{ inputs.artifact-name }}'
+        ]
+        self.assertEqual(named, [('resolve', 'upload-artifact'), ('publish', 'download-artifact')])
+
     def test_the_publish_job_receives_the_build_under_the_callers_artifact_name(self):
         self.assertEqual(STAGE['on']['workflow_call']['inputs']['artifact-name']['default'], 'package-release')
         named = [

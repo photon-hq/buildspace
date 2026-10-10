@@ -27,6 +27,10 @@ on:
         description: Environment whose required reviewers approve the promotion
         default: production
         type: string
+      artifact-name:
+        description: Name of the artifact that carries the candidates to the publish job; give each call its own when one run promotes more than one build
+        default: package-promotion
+        type: string
       trusted-actor:
         description: Actor whose workflow_dispatch is itself the approval, such as the GitHub App a release controller dispatches with; its runs publish without the environment
         default: ''
@@ -103,7 +107,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.resolve.outputs.pending == 'true'
         with:
-          name: package-promotion
+          name: ${{ inputs.artifact-name }}
           path: ${{ runner.temp }}/package-release/
           if-no-files-found: error
           retention-days: 7
@@ -147,7 +151,7 @@ jobs:
           scope: '@${{ github.repository_owner }}'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: package-promotion
+          name: ${{ inputs.artifact-name }}
           path: ${{ runner.temp }}/package-release
       - name: Publish the candidates under latest
         env:
