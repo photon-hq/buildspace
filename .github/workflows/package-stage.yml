@@ -33,6 +33,10 @@ on:
         description: Staging release tag prefix; defaults to <repository>-staging-
         default: ''
         type: string
+      production-tag-prefix:
+        description: Production release tag prefix, v or <name>-v; set it where vX.Y.Z tags already name something else
+        default: ''
+        type: string
       node-version:
         default: '24'
         type: string
@@ -155,6 +159,7 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
+          PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           CRATES: ${{ inputs.crates }}
           STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
         run: |
@@ -162,6 +167,7 @@ jobs:
             --staging "$RUNNER_TEMP/pack/staging" --production "$RUNNER_TEMP/pack/production" \
             --crates="$CRATES" --crate-directory "$RUNNER_TEMP/pack/crates" \
             --suffix="$STAGING_SUFFIX" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" \
             --output "$RUNNER_TEMP/package-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -224,10 +230,12 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
+          PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           CRATES: ${{ inputs.crates }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/package-release" \
-            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" --crates="$CRATES"
+            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --crates="$CRATES"
 
   notify-downstream:
     needs: publish

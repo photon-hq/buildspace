@@ -403,6 +403,13 @@ source commit, and moves `latest`.
   They are published in dependency order, and the build is named after
   `package` (default `@<owner>/<repository>`), which must be one of them.
   `tag-prefix` overrides the staging tag prefix.
+- **A repository whose `vX.Y.Z` tags already name something else**, such as a
+  service that has its own releases, sets `production-tag-prefix` to `<name>-v`
+  in both workflows. Its packages are then released as `<name>-vX.Y.Z`, and
+  promotion neither needs nor touches the `vX.Y.Z` tags. Use the same value in
+  the stage and the promote caller: a build staged under one prefix is refused
+  under another. Crates always use `vX.Y.Z`, so a build with `crates` cannot
+  set a prefix.
 - **Trust boundaries.** Only the build job runs caller code, and it can read but
   not write. A separate job attests the files and publishes them, after
   rebuilding every manifest claim (source commit, run, scope, versions, tags,

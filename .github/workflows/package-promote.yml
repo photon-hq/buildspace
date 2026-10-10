@@ -15,6 +15,10 @@ on:
         description: Staging release tag prefix; defaults to <repository>-staging-
         default: ''
         type: string
+      production-tag-prefix:
+        description: Production release tag prefix, v or <name>-v; set it where vX.Y.Z tags already name something else
+        default: ''
+        type: string
       environment:
         description: Environment whose required reviewers approve the promotion
         default: production
@@ -71,11 +75,13 @@ jobs:
           STAGING_VERSION: ${{ inputs.staging-version }}
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
+          PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           ENVIRONMENT: ${{ inputs.environment }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/package-stage.yml
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" resolve \
             --version "$STAGING_VERSION" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" \
             --environment "$ENVIRONMENT" --signer-workflow "$SIGNER_WORKFLOW" \
             --output "$RUNNER_TEMP/package-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -126,9 +132,11 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
+          PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" publish --channel production --directory "$RUNNER_TEMP/package-release" \
-            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX"
+            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX"
 
   notify-downstream:
     needs: publish
