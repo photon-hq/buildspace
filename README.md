@@ -441,10 +441,11 @@ source commit, and moves `latest`.
 - **A release controller as the approver.** `trusted-actor` names an actor whose
   own `workflow_dispatch` is the approval, for example the GitHub App a release
   controller dispatches with after a person promoted in it. GitHub states who
-  triggered a run, so no input can claim it. Such a run skips the reviewer
-  requirement and publishes without the environment; every other check still
-  applies. A run anyone else dispatches or re-runs waits for the environment's
-  reviewers as before. Set it only where that actor's dispatches are already
+  dispatched a run and who started each attempt, so no input can claim either,
+  and the actor must be both. Such a run skips the reviewer requirement and
+  publishes without the environment; every other check still applies. A run
+  anyone else dispatches, and any re-run by or of another actor's run, waits
+  for the environment's reviewers as before. Set it only where that actor's dispatches are already
   gated by people, and keep its token scoped to the repository.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already
   published with other contents, and one whose `@photon-hq/*` `dependencies` or

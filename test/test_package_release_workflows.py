@@ -13,8 +13,9 @@ import yaml
 STAGE = yaml.load(Path('.github/workflows/package-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/package-promote.yml').read_text(), Loader=yaml.BaseLoader)
 CALLER_SCRIPTS = re.compile(r'inputs\.(pack|verify|install)\b|cargo ')
-# GitHub states who dispatched the run; no input can claim it.
-TRUSTED_DISPATCH = "github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.triggering_actor == inputs.trusted-actor"
+# GitHub states who dispatched the run and who started this attempt; no input
+# can claim either, and a re-run by or of someone else's run is not trusted.
+TRUSTED_DISPATCH = "github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.actor == inputs.trusted-actor && github.triggering_actor == inputs.trusted-actor"
 
 
 def step(job, name):
@@ -88,7 +89,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(resolve['env']['APPROVED_BY'], "${{ %s && github.triggering_actor || '' }}" % TRUSTED_DISPATCH)
         self.assertIn('--approved-by "$APPROVED_BY"', resolve['run'])
         # Its declaration and the two expressions above: nothing else decides on it.
-        self.assertEqual(yaml.dump(PROMOTE).count('trusted-actor'), 5)
+        self.assertEqual(yaml.dump(PROMOTE).count('trusted-actor'), 7)
 
     def test_an_image_tag_selects_the_build_and_a_released_build_stores_nothing(self):
         resolve = PROMOTE['jobs']['resolve']

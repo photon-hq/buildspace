@@ -90,7 +90,7 @@ jobs:
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           ENVIRONMENT: ${{ inputs.environment }}
-          APPROVED_BY: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.triggering_actor == inputs.trusted-actor && github.triggering_actor || '' }}
+          APPROVED_BY: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.actor == inputs.trusted-actor && github.triggering_actor == inputs.trusted-actor && github.triggering_actor || '' }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/package-stage.yml
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" resolve \
@@ -110,13 +110,14 @@ jobs:
 
   # Waits for the environment's reviewers, then publishes the verified files.
   # A build that is already released needs neither, and the trusted actor's
-  # dispatch is the approval: an empty environment is no environment.
+  # dispatch is the approval: an empty environment is no environment. It must
+  # have both dispatched the run and started this attempt.
   publish:
     needs: resolve
     if: needs.resolve.outputs.pending == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    environment: ${{ !(github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.triggering_actor == inputs.trusted-actor) && inputs.environment || '' }}
+    environment: ${{ !(github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.actor == inputs.trusted-actor && github.triggering_actor == inputs.trusted-actor) && inputs.environment || '' }}
     permissions:
       contents: write
       packages: write
