@@ -56,6 +56,9 @@ on:
         required: false
       APP_PRIVATE_KEY:
         required: false
+      INSTALL_TOKEN:
+        description: Read-only token for a registry the install script needs besides GitHub Packages; only that script sees it, as $INSTALL_TOKEN
+        required: false
     outputs:
       staging-version:
         value: ${{ jobs.build.outputs.staging-version }}
@@ -115,6 +118,7 @@ jobs:
       - name: Install
         env:
           INSTALL: ${{ inputs.install }}
+          INSTALL_TOKEN: ${{ secrets.INSTALL_TOKEN }}
         run: bash -euo pipefail -c "$INSTALL"
       - name: Verify
         if: inputs.verify != ''
