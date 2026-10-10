@@ -461,17 +461,37 @@ Local validation: `node --test test/package-release.test.mjs` (after
 
 - Shared by Kargo source-repository preflights and manual checks.
 - Pass `image-tag` (`main-<sha>` or `hotfix-<baseline>-<sha>`) or `source-ref`.
-- Reads that commit's pnpm workspace manifests and lockfile; never changes pins
-  or installs service dependencies. Only the checker's locked public dependencies
-  are installed, with lifecycle scripts disabled.
-- All direct/transitive `@photon-hq/*` registry packages must use exact stable,
-  published, non-deprecated versions. Dev, optional and peer dependencies are
-  included. Valid local `workspace:` links are source in the same commit;
-  their package dependencies are still audited.
+- Audits what that commit has at its root: a pnpm workspace
+  (`pnpm-workspace.yaml`), a Cargo workspace (`Cargo.toml` with its committed
+  `Cargo.lock`), or both. A commit with neither fails.
+- Reads the manifests and lockfiles from Git; never changes pins, installs
+  service dependencies, or runs Cargo. Only the checker's locked public
+  dependencies are installed, with lifecycle scripts disabled.
+- **npm:** all direct/transitive `@photon-hq/*` registry packages must use exact
+  stable, published, non-deprecated versions. Dev, optional and peer
+  dependencies are included. Valid local `workspace:` links are source in the
+  same commit; their package dependencies are still audited.
+- **Cargo:** internal crates are the ones fetched from the owner's GitHub
+  repositories, and their release is a `vX.Y.Z` tag (see
+  [Package Stage and Promote](#package-stage-and-promote)). Every such crate in
+  `Cargo.lock`, transitive ones included, must resolve from a `vX.Y.Z` tag at an
+  exact stable version; a `rev`, a branch or a staging tag fails. The tag must
+  be a published release, not a draft or prerelease, and must still point at
+  the commit `Cargo.lock` resolved. Each workspace package's own declarations
+  (normal, dev, build and target dependencies, inherited ones included) must
+  pin that tag with an exact `=X.Y.Z` version, the line the release notes
+  print. Path dependencies are source in the same commit; their dependencies
+  are still audited.
 - Uses the caller's token with `contents: read` and `packages: read`. The calling
   repository needs read access to its internal packages. No Buf or AWS token.
-- Reports the package/version/results table in the Actions summary and fails on
-  blockers or unknown registry results. Kargo runs it once in production-ready.
+- Verifying a crate's release reads its repository, which the job token cannot
+  do for another private repository. Pass `crates-token`, a token with
+  `contents: read` in the repositories the internal crates come from. Without
+  it those crates are reported as Unknown and the check fails. A source with no
+  internal crates needs no such token.
+- Reports the package/version/results tables in the Actions summary and fails on
+  blockers or unknown registry or release results. Kargo runs it once in
+  production-ready.
 
 ```yaml
 steps:
@@ -479,6 +499,27 @@ steps:
     with:
       image-tag: ${{ inputs.image-tag }}
       github-token: ${{ github.token }}
+```
+
+For a source whose internal crates live in other private repositories, mint a
+token limited to reading them:
+
+```yaml
+steps:
+  - uses: actions/create-github-app-token@<reviewed-commit-sha>
+    id: crates
+    with:
+      app-id: ${{ secrets.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      owner: ${{ github.repository_owner }}
+      repositories: |
+        error
+      permission-contents: read
+  - uses: photon-hq/buildspace/.github/blocks/check-production-dependencies@<reviewed-commit-sha>
+    with:
+      image-tag: ${{ inputs.image-tag }}
+      github-token: ${{ github.token }}
+      crates-token: ${{ steps.crates.outputs.token }}
 ```
 
 Pin the action to a reviewed commit. For manual checks, replace `image-tag` with

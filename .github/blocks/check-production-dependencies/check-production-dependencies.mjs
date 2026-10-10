@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
-import { appendFile, glob, readFile, writeFile } from "node:fs/promises";
+import { access, appendFile, glob, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, matchesGlob, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import semver from "semver";
+import { parse as parseToml } from "smol-toml";
 import { parse } from "yaml";
+import { auditCrates, fetchCrateRelease } from "./internal-crates.mjs";
 import { fetchPackageMetadata, INTERNAL_PREFIX } from "./internal-packages.mjs";
 
 const exec = promisify(execFile);
@@ -44,6 +46,29 @@ export async function readProductionInputs(root, ref) {
   const read = ref
     ? (path) => git("show", `${source}:${path}`)
     : (path) => readFile(join(root, path), "utf8");
+  const tree = ref
+    ? (await git("ls-tree", "-rz", "--name-only", source)).split("\0")
+    : null;
+  const exists = (path) =>
+    tree
+      ? tree.includes(path)
+      : access(join(root, path)).then(
+          () => true,
+          () => false
+        );
+  const inputs = { source };
+  if (await exists("pnpm-workspace.yaml"))
+    Object.assign(inputs, await readPnpmInputs(root, read, tree));
+  if ((await exists("Cargo.toml")) || (await exists("Cargo.lock")))
+    inputs.cargo = await readCargoInputs(root, read, tree);
+  if (!inputs.workspace && !inputs.cargo)
+    throw new Error(
+      `${source} has neither a pnpm workspace nor a Cargo workspace to check`
+    );
+  return inputs;
+}
+
+async function readPnpmInputs(root, read, tree) {
   const workspace = parse(await read("pnpm-workspace.yaml"));
   const patterns = workspace.packages ?? [];
   const included = (path) =>
@@ -55,12 +80,10 @@ export async function readProductionInputs(root, ref) {
         pattern.startsWith("!") && matchesGlob(path, pattern.slice(1))
     );
   let paths;
-  if (ref) {
-    paths = (await git("ls-tree", "-rz", "--name-only", source))
-      .split("\0")
-      .filter(
-        (path) => path.endsWith("/package.json") && included(dirname(path))
-      );
+  if (tree) {
+    paths = tree.filter(
+      (path) => path.endsWith("/package.json") && included(dirname(path))
+    );
   } else {
     paths = [];
     for (const pattern of patterns.filter((entry) => !entry.startsWith("!"))) {
@@ -81,11 +104,43 @@ export async function readProductionInputs(root, ref) {
     )
   );
   return {
-    source,
     workspace,
     manifests,
     lockfile: parse(await read("pnpm-lock.yaml")),
   };
+}
+
+// The root Cargo.lock names the workspace's own packages; their manifests are
+// found by package name, so every Cargo.toml of the commit is read.
+async function readCargoInputs(root, read, tree) {
+  const required = async (path) => {
+    try {
+      return parseToml(await read(path));
+    } catch (error) {
+      throw new Error(
+        `A Cargo workspace needs a committed root ${path}: ${error.message}`
+      );
+    }
+  };
+  const manifests = { ".": await required("Cargo.toml") };
+  const lockfile = await required("Cargo.lock");
+  const paths = tree
+    ? tree.filter((path) => path.endsWith("/Cargo.toml"))
+    : await Array.fromAsync(
+        glob("**/Cargo.toml", {
+          cwd: root,
+          exclude: ["**/node_modules/**", "**/.git/**", "**/target/**"],
+        })
+      );
+  for (const path of paths.filter((entry) => entry !== "Cargo.toml")) {
+    try {
+      manifests[dirname(path)] = parseToml(await read(path));
+    } catch {
+      // Not a manifest Cargo could have built; a package Cargo.lock names
+      // still needs a readable one.
+    }
+  }
+  return { lockfile, manifests };
 }
 
 /** Audit the declared pins and the entire resolved internal dependency graph. */
@@ -255,11 +310,33 @@ export function inspectProductionDependencies({
   return { errors: [...errors].sort(), versions };
 }
 
-/** Return a full report even when some pins or registry lookups fail. */
+/**
+ * Return a full report even when some pins or lookups fail. Each ecosystem the
+ * source has is audited: its pnpm workspace, its Cargo workspace, or both.
+ */
 export async function auditProductionDependencies(
   inputs,
-  loadMetadata = fetchPackageMetadata
+  loadMetadata = fetchPackageMetadata,
+  loadRelease = fetchCrateRelease
 ) {
+  const errors = [];
+  const report = { source: inputs.source };
+  if (inputs.workspace) {
+    const audit = await auditPackages(inputs, loadMetadata);
+    report.packages = audit.packages;
+    errors.push(...audit.errors);
+  }
+  if (inputs.cargo) {
+    const audit = await auditCrates(inputs.cargo, loadRelease);
+    report.crates = audit.crates;
+    errors.push(...audit.errors);
+  }
+  if (!inputs.workspace && !inputs.cargo)
+    errors.push("No pnpm workspace or Cargo workspace to check");
+  return { ...report, errors: errors.sort() };
+}
+
+async function auditPackages(inputs, loadMetadata) {
   const { errors, versions } = inspectProductionDependencies(inputs);
   const packages = [...versions]
     .flatMap(([name, pins]) =>
@@ -305,19 +382,24 @@ export async function auditProductionDependencies(
       }
     })
   );
-  return { source: inputs.source, packages, errors: errors.sort() };
+  return { packages, errors };
 }
 
 export async function checkProductionDependencies(
   inputs,
-  loadMetadata = fetchPackageMetadata
+  loadMetadata = fetchPackageMetadata,
+  loadRelease = fetchCrateRelease
 ) {
-  const report = await auditProductionDependencies(inputs, loadMetadata);
+  const report = await auditProductionDependencies(
+    inputs,
+    loadMetadata,
+    loadRelease
+  );
   if (report.errors.length)
     throw new Error(
       `Production dependency check failed:\n${report.errors.map((error) => `- ${error}`).join("\n")}\nPublish and review compatible stable pins and their lockfile before releasing.`
     );
-  return report.packages
+  return [...(report.packages ?? []), ...(report.crates ?? [])]
     .map(({ name, version }) => `${name}@${version}`)
     .sort();
 }
@@ -330,11 +412,42 @@ const markdown = (value) =>
     (character) => `&#${character.charCodeAt(0)};`
   );
 
-export function renderProductionReport({ source, packages, errors }) {
-  const rows = packages.map(
-    ({ name, version, production, reason }) =>
-      `| ${markdown(name)} | ${markdown(version)} | ${production === true ? "✅ Yes" : production === false ? "❌ No" : "❓ Unknown"} | ${markdown(reason)} |`
-  );
+const verdict = (production) =>
+  production === true
+    ? "✅ Yes"
+    : production === false
+      ? "❌ No"
+      : "❓ Unknown";
+
+export function renderProductionReport({ source, packages, crates, errors }) {
+  // A source that could not be read has no inventory; say so in the npm table.
+  const tables = [];
+  if (packages || !crates)
+    tables.push(
+      "| Internal package | Version | Prod? | Reason |",
+      "| --- | --- | --- | --- |",
+      ...(packages ?? []).map(
+        ({ name, version, production, reason }) =>
+          `| ${markdown(name)} | ${markdown(version)} | ${verdict(production)} | ${markdown(reason)} |`
+      ),
+      "",
+      ...(packages?.length ? [] : ["No package inventory is available.", ""]),
+      "Prod means the exact version is stable, published, and not deprecated. Includes direct and transitive `@photon-hq/*` dependencies. Unknown means registry status could not be verified.",
+      ""
+    );
+  if (crates)
+    tables.push(
+      "| Internal crate | Version | Source | Prod? | Reason |",
+      "| --- | --- | --- | --- | --- |",
+      ...crates.map(
+        ({ name, version, repository, reference, production, reason }) =>
+          `| ${markdown(name)} | ${markdown(version)} | ${markdown(`${repository} ${reference}`)} | ${verdict(production)} | ${markdown(reason)} |`
+      ),
+      "",
+      ...(crates.length ? [] : ["Cargo.lock resolves no internal crates.", ""]),
+      "Prod means Cargo.lock resolves the crate at an exact stable version from a `vX.Y.Z` release tag of its repository, and that tag is a published release at the resolved commit. Includes direct and transitive crates fetched from the owner's GitHub repositories. Unknown means the release could not be verified.",
+      ""
+    );
   return [
     "## Production dependencies",
     "",
@@ -344,13 +457,7 @@ export function renderProductionReport({ source, packages, errors }) {
       ? "**Production dependency check failed.**"
       : "**Production dependency check passed.**",
     "",
-    "| Internal package | Version | Prod? | Reason |",
-    "| --- | --- | --- | --- |",
-    ...rows,
-    "",
-    ...(packages.length ? [] : ["No package inventory is available.", ""]),
-    "Prod means the exact version is stable, published, and not deprecated. Includes direct and transitive `@photon-hq/*` dependencies. Unknown means registry status could not be verified.",
-    "",
+    ...tables,
     ...(errors.length
       ? [
           "### Findings",
