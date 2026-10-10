@@ -24,6 +24,7 @@ const SUFFIX = /^-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
 const CRATE_NAME = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const PRODUCTION_TAG_PREFIX = /^(?:[a-z0-9][a-z0-9._-]*-)?v$/;
 const EXACT_STABLE = /^=\s*(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const MANIFEST = "release-manifest.json";
 const CHANNEL_TAG = { staging: "staging", production: "latest" };
@@ -171,12 +172,20 @@ export function publishOrder(manifests) {
   return order;
 }
 
-export function releaseNames(repository, packageInput = "", tagPrefix = "") {
+/**
+ * A repository whose `vX.Y.Z` tags already name something else, such as the
+ * releases of a service, gives its packages a production tag prefix of their
+ * own: `<name>-v`.
+ */
+export function releaseNames(repository, packageInput = "", tagPrefix = "", productionTagPrefix = "") {
   const [owner, repo] = repository.split("/");
+  if (productionTagPrefix && !PRODUCTION_TAG_PREFIX.test(productionTagPrefix))
+    throw new Error(`Invalid production tag prefix ${productionTagPrefix}: use v or <name>-v`);
   return {
     scope: `@${owner}/`,
     primary: packageInput || `@${owner}/${repo}`,
     tagPrefix: tagPrefix || `${repo}-staging-`,
+    productionTagPrefix: productionTagPrefix || "v",
   };
 }
 
@@ -230,12 +239,16 @@ export async function collect({
   repository,
   packageInput,
   tagPrefix,
+  productionTagPrefix,
   output,
   runUrl,
 }) {
   if (!SUFFIX.test(suffix)) throw new Error(`Invalid staging suffix: ${suffix}`);
   if (!SHA.test(sourceSha)) throw new Error("An exact source commit is required");
-  const names = releaseNames(repository, packageInput, tagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
+  // Cargo pins an internal crate by the vX.Y.Z tag of its release.
+  if (crates.length && names.productionTagPrefix !== "v")
+    throw new Error("Crates are released under vX.Y.Z tags; a build with crates cannot use another production tag prefix");
   const staging = await readPacked(stagingDirectory, names.scope);
   const production = await readPacked(productionDirectory, names.scope);
   const packaged = await readCrates(crateDirectory, crates, sourceSha);
@@ -290,7 +303,7 @@ export async function collect({
     suffix,
     package: names.primary,
     stagingTag: `${names.tagPrefix}${primary.staging.version}`,
-    productionTag: `v${primary.production.version}`,
+    productionTag: `${names.productionTagPrefix}${primary.production.version}`,
     packages,
     crates: crateEntries,
   };
@@ -325,9 +338,9 @@ async function verifyFiles(directory, manifest, channels) {
 export async function verifyManifest(
   directory,
   manifest,
-  { repository, sourceSha, runId, packageInput, tagPrefix, channels, crates }
+  { repository, sourceSha, runId, packageInput, tagPrefix, productionTagPrefix, channels, crates }
 ) {
-  const names = releaseNames(repository, packageInput, tagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
   const fail = (reason) => {
     throw new Error(`The release manifest does not describe this build: ${reason}`);
   };
@@ -376,9 +389,10 @@ export async function verifyManifest(
   if (!primary) fail(`${names.primary} is missing`);
   if (
     manifest.stagingTag !== `${names.tagPrefix}${primary.staging.version}` ||
-    manifest.productionTag !== `v${primary.production.version}`
+    manifest.productionTag !== `${names.productionTagPrefix}${primary.production.version}`
   )
     fail("release tags");
+  if (manifest.crates.length && names.productionTagPrefix !== "v") fail("crates under a production tag prefix");
   if (JSON.stringify(publishOrder(packed)) !== JSON.stringify(manifest.packages.map(({ name }) => name)))
     fail("publish order");
 }
@@ -582,6 +596,7 @@ export async function publish({
   sourceSha,
   packageInput,
   tagPrefix,
+  productionTagPrefix,
   crates,
   runId,
   runAttempt,
@@ -590,6 +605,7 @@ export async function publish({
   log = console.log,
 }) {
   const manifest = await readManifest(directory);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
   const uploaded = channel === "staging" ? ["staging", "production"] : ["production"];
   await verifyManifest(directory, manifest, {
     repository,
@@ -597,6 +613,7 @@ export async function publish({
     runId: channel === "staging" ? runId : undefined,
     packageInput,
     tagPrefix,
+    productionTagPrefix,
     channels: uploaded,
     crates,
   });
@@ -626,7 +643,7 @@ export async function publish({
   if (channel === "production") {
     const latest = (await registry(manifest.package))["dist-tags"].latest;
     if (latest && latest !== released)
-      changes = changesSince(run, manifest.repository, `v${latest}`, manifest.sourceSha);
+      changes = changesSince(run, manifest.repository, `${names.productionTagPrefix}${latest}`, manifest.sourceSha);
   }
   ensureTag(run, manifest, tag);
   await ensureRelease(run, {
@@ -819,6 +836,7 @@ export async function resolveCandidate({
   repository,
   packageInput,
   tagPrefix,
+  productionTagPrefix,
   version: requested,
   environment,
   signerWorkflow,
@@ -826,7 +844,7 @@ export async function resolveCandidate({
   run = exec,
   registry = registryMetadata,
 }) {
-  const names = releaseNames(repository, packageInput, tagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
   const environmentRules = (() => {
     try {
       return JSON.parse(run("gh", ["api", `repos/${repository}/environments/${environment}`])).protection_rules ?? [];
@@ -861,7 +879,7 @@ export async function resolveCandidate({
   const files = [...manifest.packages.map((pkg) => pkg.production.file), ...manifest.crates.map(({ file }) => file)];
   for (const file of files)
     run("gh", ["release", "download", tag, "--repo", repository, "--pattern", file, "--dir", output, "--clobber"]);
-  await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, channels: ["production"] });
+  await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, productionTagPrefix, channels: ["production"] });
   for (const file of files)
     run("gh", [
       "attestation",
@@ -903,7 +921,7 @@ export async function resolveCandidate({
     throw new Error(`${tag} cannot be promoted:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
   const changes =
     latest && latest !== primary.production.version
-      ? changesSince(run, repository, `v${latest}`, manifest.sourceSha)
+      ? changesSince(run, repository, `${names.productionTagPrefix}${latest}`, manifest.sourceSha)
       : undefined;
   return { manifest, changes };
 }
@@ -937,6 +955,7 @@ async function main() {
       staging: { type: "string" },
       suffix: { type: "string" },
       "tag-prefix": { type: "string", default: "" },
+      "production-tag-prefix": { type: "string", default: "" },
       "timeout-minutes": { type: "string", default: "20" },
       version: { type: "string", default: "" },
       workflow: { type: "string" },
@@ -967,6 +986,7 @@ async function main() {
         repository,
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
+        productionTagPrefix: values["production-tag-prefix"],
         output: resolve(values.output),
         runUrl,
       });
@@ -1007,6 +1027,7 @@ async function main() {
         sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
+        productionTagPrefix: values["production-tag-prefix"],
         crates,
         runId: env.GITHUB_RUN_ID,
         runAttempt: env.GITHUB_RUN_ATTEMPT,
@@ -1019,6 +1040,7 @@ async function main() {
         repository,
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
+        productionTagPrefix: values["production-tag-prefix"],
         version: values.version,
         environment: values.environment,
         signerWorkflow: values["signer-workflow"],

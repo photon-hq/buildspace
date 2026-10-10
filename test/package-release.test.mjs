@@ -102,6 +102,15 @@ test("collect honours an explicit package and tag prefix", async () => {
   assert.equal(manifest.productionTag, "v0.3.0");
 });
 
+test("collect names the production tag after a prefix where vX.Y.Z is taken", async () => {
+  packBoth();
+  const manifest = await collectBoth({ packageInput: "@photon-hq/adapter-core", tagPrefix: "core-staging-", productionTagPrefix: "core-v" });
+  assert.equal(manifest.stagingTag, `core-staging-0.3.0${SUFFIX}`);
+  assert.equal(manifest.productionTag, "core-v0.3.0");
+  for (const productionTagPrefix of ["core-", "Core-v", "-v", "core v", "refs/tags/v"])
+    await assert.rejects(collectBoth({ productionTagPrefix }), /Invalid production tag prefix/);
+});
+
 test("collect refuses packs that do not describe one build", async (t) => {
   const cases = {
     "staging version without the run suffix": () => packBoth({ suffix: "-staging.899.1" }),
@@ -234,7 +243,7 @@ function world({ published = {}, tags = {}, releases = {}, latest = {}, staging 
         return "";
       }
       if (/\/compare\/a{40}\.\.\.main$/.test(path)) return JSON.stringify({ status: "ahead" });
-      if (/\/compare\/v[^.]+.*\.\.\.a{40}$/.test(path))
+      if (/\/compare\/(?:[a-z0-9._-]+-)?v[^.]+.*\.\.\.a{40}$/.test(path))
         return JSON.stringify({ total_commits: 2, commits: [{ commit: { message: "feat: one\n\nbody" } }, { commit: { message: "fix: two" } }] });
     }
     if (command === "gh" && first === "release") {
@@ -448,9 +457,9 @@ async function stagedWorld(options = {}) {
   packBoth(options.pack);
   for (const spec of options.crates ?? []) crate(join(root, "crates"), spec);
   const crates = (options.crates ?? []).map(({ name = "adapter" }) => name);
-  const manifest = await collectBoth({ crates, crateDirectory: join(root, "crates") });
+  const manifest = await collectBoth({ crates, crateDirectory: join(root, "crates"), ...options.names });
   const fake = world({ ...options.world, staging: { "@photon-hq/adapter": `1.2.0${SUFFIX}` } });
-  await publishWith(fake, { crates });
+  await publishWith(fake, { crates, ...options.names });
   fake.calls.length = 0;
   return { manifest, fake };
 }
@@ -500,6 +509,40 @@ test("promotion lists the changes since the current production release", async (
   })(fake.registry);
   const { changes } = await resolveWith(fake, { version: `1.2.0${SUFFIX}` });
   assert.deepEqual(changes, { previousTag: "v1.1.0", total: 2, subjects: ["fix: two", "feat: one"] });
+});
+
+test("promotion under a production tag prefix leaves the repository's vX.Y.Z tags alone", async () => {
+  const names = { productionTagPrefix: "adapter-v" };
+  // v1.2.0 and v1.1.0 already name the repository's own releases, on other commits.
+  const { manifest, fake } = await stagedWorld({
+    names,
+    world: { tags: { "v1.2.0": "b".repeat(40), "v1.1.0": "b".repeat(40), "adapter-v1.1.0": "c".repeat(40) } },
+  });
+  assert.equal(manifest.productionTag, "adapter-v1.2.0");
+  fake.registry = ((registry) => async (name) => {
+    const metadata = await registry(name);
+    if (name === "@photon-hq/adapter") metadata["dist-tags"].latest = "1.1.0";
+    return metadata;
+  })(fake.registry);
+  const { changes } = await resolveWith(fake, names);
+  assert.equal(changes.previousTag, "adapter-v1.1.0");
+
+  await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901", ...names });
+  assert.equal(fake.state.tags["adapter-v1.2.0"], SHA);
+  assert.equal(fake.state.tags["v1.2.0"], "b".repeat(40));
+  assert.equal(fake.state.releases["adapter-v1.2.0"].prerelease, false);
+  assert.equal(fake.state.releases["v1.2.0"], undefined);
+  // The prefix is re-derived from the run's inputs, not taken from the manifest.
+  await assert.rejects(resolveWith(fake), /release tags/);
+});
+
+test("crates stay under vX.Y.Z tags", async () => {
+  packBoth();
+  crate(join(root, "crates"));
+  await assert.rejects(
+    collectBoth({ crates: ["adapter"], crateDirectory: join(root, "crates"), productionTagPrefix: "adapter-v" }),
+    /cannot use another production tag prefix/
+  );
 });
 
 test("promotion refuses unsafe candidates before anything is published", async (t) => {
