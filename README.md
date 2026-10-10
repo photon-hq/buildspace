@@ -411,6 +411,8 @@ source commit, and moves `latest`.
 - **Packages of one repository released separately** each get their own call
   to the stage workflow, in one run, with their own `package`, `tag-prefix`,
   `production-tag-prefix` and `artifact-name`, and their own promote workflow.
+  A workflow that promotes several of them in one run, in dependency order,
+  gives each promote call its own `artifact-name` as well.
   The calls share the run's staging suffix, so a later one (`needs:` the
   earlier) can depend on the staging version the earlier one publishes.
 - **A repository whose `vX.Y.Z` tags already name something else**, such as a
