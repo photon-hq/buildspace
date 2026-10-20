@@ -292,7 +292,10 @@ export function inspectProductionDependencies({
   for (const section of ["packages", "snapshots"]) {
     for (const [key, entry] of Object.entries(lockfile[section] ?? {})) {
       // Include peer contexts, including internal peers of third-party packages.
+      // A peer resolved to a workspace package is that source package, like a
+      // workspace: dependency; lockfile links are relative to the root.
       for (const match of key.matchAll(/(@photon-hq\/[^@()/\s]+)@([^()]+)/g)) {
+        if (localLink(match[1], match[2], ".")) continue;
         add(match[1], match[2]);
         if (!lockfile.packages?.[`${match[1]}@${match[2]}`])
           errors.add(
@@ -302,7 +305,7 @@ export function inspectProductionDependencies({
       if (section === "snapshots") {
         for (const field of ["dependencies", "optionalDependencies"]) {
           for (const [name, value] of Object.entries(entry[field] ?? {}))
-            resolved(name, value);
+            if (!localLink(name, value, ".")) resolved(name, value);
         }
       }
     }
