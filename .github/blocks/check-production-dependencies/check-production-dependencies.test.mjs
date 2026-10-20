@@ -453,6 +453,31 @@ test("workspace source packages are not registry releases, but their internal de
   await assert.rejects(checkProductionDependencies(inputs, metadata), /2.0.0-staging.1/);
 });
 
+test("a published package's peer resolved to a workspace package is that source package", async () => {
+  const inputs = fixture();
+  const kit = "@photon-hq/kit";
+  inputs.workspace.packages.push("packages/*");
+  inputs.manifests["packages/kit"] = { name: kit, version: "0.1.2" };
+  inputs.lockfile.importers["packages/kit"] = {};
+  // The registry package peers on the kit; pnpm links that peer to the workspace.
+  inputs.lockfile.snapshots[`${name}@1.0.0`].dependencies[kit] = "link:packages/kit";
+  inputs.lockfile.snapshots[`${name}@1.0.0(${kit}@link:packages/kit)`] = {
+    dependencies: { [kit]: "link:packages/kit" },
+  };
+  const report = await auditProductionDependencies(inputs, metadata);
+  assert.deepEqual(report.errors, []);
+  assert.ok(!report.packages.some((row) => row.name === kit));
+  // Only a link to the package of that name inside the workspace is local.
+  for (const target of ["link:../outside", "link:packages/missing", "link:packages/wrong"]) {
+    const linked = fixture();
+    linked.workspace.packages.push("packages/*");
+    linked.manifests["packages/kit"] = { name: kit, version: "0.1.2" };
+    linked.manifests["packages/wrong"] = { name: "@photon-hq/different-package" };
+    linked.lockfile.snapshots[`${name}@1.0.0`].dependencies[kit] = target;
+    await assert.rejects(checkProductionDependencies(linked, metadata), /exact stable production version/);
+  }
+});
+
 test("workspace links must resolve to the declared package inside the reviewed workspace", async () => {
   for (const target of ["link:../../../outside", "link:../../packages/missing", "link:../../packages/wrong"]) {
     const inputs = fixture();
