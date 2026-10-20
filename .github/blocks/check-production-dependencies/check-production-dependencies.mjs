@@ -27,6 +27,17 @@ const exactStable = (version) => {
       version
   );
 };
+// Carets, tildes and X-ranges end below X.Y.Z-0, which admits no prerelease.
+const stableRange = (range) =>
+  typeof range === "string" &&
+  semver.validRange(range) !== null &&
+  new semver.Range(range).set
+    .flat()
+    .every(
+      ({ operator, semver: bound }) =>
+        !bound.prerelease?.length ||
+        (operator === "<" && bound.prerelease.join(".") === "0")
+    );
 
 // Read a ref directly from Git: never check out or rewrite the caller's files.
 export async function readProductionInputs(root, ref) {
@@ -256,6 +267,15 @@ export function inspectProductionDependencies({
           entry?.specifier === value &&
           localLink(name, entry.version, path)
         ) continue;
+        // A peer range is what consumers may install. This workspace builds
+        // with the version it locked, which the importer audit below pins.
+        if (field === "peerDependencies" && stableRange(value)) {
+          if (!entry || !semver.satisfies(baseVersion(entry.version), value))
+            errors.add(
+              `${path}: ${name} lockfile importer ${entry?.version ?? "missing"} does not satisfy the peer range ${value}`
+            );
+          continue;
+        }
         const version = pin(name, value);
         if (
           !entry ||
