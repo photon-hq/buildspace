@@ -511,8 +511,11 @@ Local validation: `node --test test/package-release.test.mjs` (after
   dependencies are installed, with lifecycle scripts disabled.
 - **npm:** all direct/transitive `@photon-hq/*` registry packages must use exact
   stable, published, non-deprecated versions. Dev, optional and peer
-  dependencies are included. Valid local `workspace:` links are source in the
-  same commit; their package dependencies are still audited.
+  dependencies are included. A workspace package's `peerDependencies` may
+  instead be a range without a prerelease bound, such as `>=0.25.0`, which the
+  version its lockfile installs must satisfy; that version is audited like any
+  other pin. Valid local `workspace:` links are source in the same commit;
+  their package dependencies are still audited.
 - **Cargo:** internal crates are the ones fetched from the owner's GitHub
   repositories, and their release is a `vX.Y.Z` tag (see
   [Package Stage and Promote](#package-stage-and-promote)). Every such crate in

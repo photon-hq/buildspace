@@ -155,6 +155,42 @@ test("dev, optional, and workspace peer declarations must match their locked sta
   }
 });
 
+test("a workspace peer may be a stable range that its locked version satisfies", async () => {
+  for (const range of ["1.0.0", ">=1.0.0", "^1.0.0", ">=1.0.0 <2", "1.x || 2.x"]) {
+    const inputs = fixture();
+    inputs.manifests["apps/example"].peerDependencies = { [name]: range };
+    const report = await auditProductionDependencies(inputs, metadata);
+    assert.deepEqual(report.errors, []);
+    assert.deepEqual(
+      report.packages.filter((row) => row.name === name).map((row) => row.version),
+      ["1.0.0"]
+    );
+  }
+  for (const range of [">=2.0.0", "<1.0.0"]) {
+    const inputs = fixture();
+    inputs.manifests["apps/example"].peerDependencies = { [name]: range };
+    await assert.rejects(
+      checkProductionDependencies(inputs, metadata),
+      /lockfile importer 1.0.0 does not satisfy the peer range/
+    );
+  }
+  const unlocked = fixture();
+  unlocked.manifests["apps/example"].peerDependencies = { [indirect]: ">=1.0.0" };
+  await assert.rejects(
+    checkProductionDependencies(unlocked, metadata),
+    /lockfile importer missing does not satisfy the peer range/
+  );
+  // A range that admits a prerelease is not a production range.
+  for (const range of [">=1.0.0-staging.1", "^1.0.0-rc.1", "latest"]) {
+    const inputs = fixture();
+    inputs.manifests["apps/example"].peerDependencies = { [name]: range };
+    await assert.rejects(
+      checkProductionDependencies(inputs, metadata),
+      /exact stable production version/
+    );
+  }
+});
+
 test("rejects stale catalogs/importers and missing lockfile records", async () => {
   for (const change of [
     (i) => {
