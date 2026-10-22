@@ -182,8 +182,10 @@ export function inspectProductionDependencies(inputs) {
   const result = inspectPnpmGraph(inputs);
   // Audit every document's graph: toolchain transitive pins must not hide an
   // internal prerelease simply because they are not application importers.
-  for (const lockfile of inputs.toolchainLockfiles ?? []) {
-    const audit = inspectPnpmGraph({ workspace: {}, manifests: {}, lockfile, toolchain: true });
+  const toolchains = inputs.toolchainLockfiles?.length ? inputs.toolchainLockfiles :
+    inputs.workspace.configDependencies ? [{ lockfileVersion: "9.0", importers: {}, packages: {}, snapshots: {} }] : [];
+  for (const lockfile of toolchains) {
+    const audit = inspectPnpmGraph({ workspace: inputs.workspace, manifests: {}, lockfile, toolchain: true });
     result.errors.push(...audit.errors);
     for (const [name, versions] of audit.versions) {
       if (!result.versions.has(name)) result.versions.set(name, new Set());
@@ -287,6 +289,16 @@ function inspectPnpmGraph({
           `${name}: lockfile catalog ${catalogName} does not match the declared pin`
         );
       }
+    }
+  }
+  if (toolchain) {
+    for (const [name, value] of Object.entries(workspace.configDependencies ?? {})) {
+      rejectAlias(name, value);
+      if (!internal(name)) continue;
+      const version = pin(name, value);
+      const entry = lockfile.importers?.["."]?.configDependencies?.[name];
+      if (!entry || entry.specifier !== value || baseVersion(entry.version) !== version)
+        errors.add(`${name}: toolchain config dependency does not match its workspace declaration`);
     }
   }
   for (const [path, manifest] of Object.entries(manifests)) {

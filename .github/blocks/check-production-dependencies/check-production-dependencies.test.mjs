@@ -324,6 +324,29 @@ test("pnpm 12 reads the application importer after the toolchain document and au
   await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /indirect@2.0.0-staging.1/);
 });
 
+test("toolchain config dependencies must match stable workspace declarations, including a missing boot document", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "production-pnpm-config-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inputs = fixture();
+  inputs.workspace.configDependencies = { [indirect]: "1.0.0" };
+  await writeInputs(root, inputs);
+  const tools = toolchainFixture();
+  tools.importers["."].configDependencies[indirect] = { specifier: "1.0.0", version: "1.0.0" };
+  tools.packages[`${indirect}@1.0.0`] = {};
+  tools.snapshots[`${indirect}@1.0.0`] = {};
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await checkProductionDependencies(await readProductionInputs(root), metadata);
+  tools.importers["."].configDependencies = {};
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /does not match its workspace declaration/);
+  await writeLockfiles(root, [inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /does not match its workspace declaration/);
+  inputs.workspace.configDependencies[indirect] = "2.0.0-staging.1";
+  await writeInputs(root, inputs);
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /indirect@2.0.0-staging.1/);
+});
+
 test("pnpm lockfile documents fail closed on malformed, incomplete, or unrecognized layouts", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "production-pnpm-layout-"));
   t.after(() => rm(root, { recursive: true, force: true }));
