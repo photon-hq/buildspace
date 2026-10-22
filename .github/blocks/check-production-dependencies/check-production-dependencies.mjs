@@ -183,7 +183,7 @@ export function inspectProductionDependencies(inputs) {
   // Audit every document's graph: toolchain transitive pins must not hide an
   // internal prerelease simply because they are not application importers.
   for (const lockfile of inputs.toolchainLockfiles ?? []) {
-    const audit = inspectPnpmGraph({ workspace: {}, manifests: {}, lockfile });
+    const audit = inspectPnpmGraph({ workspace: {}, manifests: {}, lockfile, toolchain: true });
     result.errors.push(...audit.errors);
     for (const [name, versions] of audit.versions) {
       if (!result.versions.has(name)) result.versions.set(name, new Set());
@@ -198,6 +198,7 @@ function inspectPnpmGraph({
   workspace,
   manifests,
   lockfile,
+  toolchain = false,
 }) {
   const errors = new Set();
   const versions = new Map();
@@ -334,11 +335,13 @@ function inspectPnpmGraph({
     }
   }
   for (const [path, importer] of Object.entries(lockfile.importers ?? {})) {
-    for (const field of FIELDS) {
+    const fields = toolchain ? ["configDependencies", "packageManagerDependencies"] : FIELDS;
+    for (const field of fields) {
       for (const [name, entry] of Object.entries(importer[field] ?? {})) {
+        if (toolchain && internal(name)) pin(name, entry.specifier);
         if (!localLink(name, entry.version, path)) resolved(name, entry.version);
         if (
-          internal(name) &&
+          !toolchain && internal(name) &&
           !FIELDS.some((key) => manifests[path]?.[key]?.[name])
         ) {
           errors.add(

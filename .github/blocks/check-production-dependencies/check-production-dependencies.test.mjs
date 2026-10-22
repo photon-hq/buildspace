@@ -309,6 +309,13 @@ test("pnpm 12 reads the application importer after the toolchain document and au
   // Selecting only the first document would miss this application prerelease.
   await writeLockfiles(root, [tools, fixture("1.0.0-staging.1").lockfile]);
   await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /example@1.0.0-staging.1/);
+  // Toolchain importer entries cannot hide pins by omitting their graph records.
+  for (const field of ["configDependencies", "packageManagerDependencies"]) {
+    const missing = toolchainFixture();
+    missing.importers["."][field][indirect] = { specifier: "1.0.0", version: "1.0.0" };
+    await writeLockfiles(root, [missing, inputs.lockfile]);
+    await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /missing lockfile package or snapshot/);
+  }
   // Selecting only the last document would miss toolchain transitives.
   tools.packages[`${indirect}@2.0.0-staging.1`] = {};
   tools.snapshots[`${indirect}@2.0.0-staging.1`] = {};
