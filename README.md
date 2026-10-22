@@ -509,6 +509,9 @@ Local validation: `node --test test/package-release.test.mjs` (after
 - Reads the manifests and lockfiles from Git; never changes pins, installs
   service dependencies, or runs Cargo. Only the checker's locked public
   dependencies are installed, with lifecycle scripts disabled.
+- Supports single-document pnpm v9 lockfiles and pnpm 12 multi-document
+  lockfiles (toolchain graph followed by the application graph). Both graphs
+  are audited; malformed or unrecognized document layouts fail.
 - **npm:** all direct/transitive `@photon-hq/*` registry packages must use exact
   stable, published, non-deprecated versions. Dev, optional and peer
   dependencies are included. A workspace package's `peerDependencies` may

@@ -281,12 +281,105 @@ async function writeInputs(root, inputs) {
     await writeFile(join(root, path, "package.json"), JSON.stringify(manifest));
 }
 
+function toolchainFixture() {
+  return {
+    lockfileVersion: "9.0",
+    importers: { ".": { configDependencies: {}, packageManagerDependencies: {
+      pnpm: { specifier: "12.11.2", version: "12.11.2" },
+    } } },
+    packages: { "pnpm@12.11.2": {} },
+    snapshots: { "pnpm@12.11.2": {} },
+  };
+}
+
+async function writeLockfiles(root, documents) {
+  await writeFile(join(root, "pnpm-lock.yaml"), documents.map(
+    (document) => `---\n${stringify(document)}`
+  ).join("\n"));
+}
+
+test("pnpm 12 reads the application importer after the toolchain document and audits both graphs", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "production-pnpm12-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inputs = fixture();
+  await writeInputs(root, inputs);
+  const tools = toolchainFixture();
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await checkProductionDependencies(await readProductionInputs(root), metadata);
+  // Selecting only the first document would miss this application prerelease.
+  await writeLockfiles(root, [tools, fixture("1.0.0-staging.1").lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /example@1.0.0-staging.1/);
+  // Toolchain importer entries cannot hide pins by omitting their graph records.
+  for (const field of ["configDependencies", "packageManagerDependencies"]) {
+    const missing = toolchainFixture();
+    missing.importers["."][field][indirect] = { specifier: "1.0.0", version: "1.0.0" };
+    await writeLockfiles(root, [missing, inputs.lockfile]);
+    await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /missing lockfile package or snapshot/);
+  }
+  // Selecting only the last document would miss toolchain transitives.
+  tools.packages[`${indirect}@2.0.0-staging.1`] = {};
+  tools.snapshots[`${indirect}@2.0.0-staging.1`] = {};
+  tools.snapshots["pnpm@12.11.2"].dependencies = { [indirect]: "2.0.0-staging.1" };
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /indirect@2.0.0-staging.1/);
+});
+
+test("toolchain config dependencies must match stable workspace declarations, including a missing boot document", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "production-pnpm-config-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inputs = fixture();
+  inputs.workspace.configDependencies = { [indirect]: "1.0.0" };
+  await writeInputs(root, inputs);
+  const tools = toolchainFixture();
+  tools.importers["."].configDependencies[indirect] = { specifier: "1.0.0", version: "1.0.0" };
+  tools.packages[`${indirect}@1.0.0`] = {};
+  tools.snapshots[`${indirect}@1.0.0`] = {};
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await checkProductionDependencies(await readProductionInputs(root), metadata);
+  tools.importers["."].configDependencies = {};
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /does not match its workspace declaration/);
+  await writeLockfiles(root, [inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /does not match its workspace declaration/);
+  inputs.workspace.configDependencies[indirect] = "2.0.0-staging.1";
+  await writeInputs(root, inputs);
+  await writeLockfiles(root, [tools, inputs.lockfile]);
+  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /indirect@2.0.0-staging.1/);
+});
+
+test("pnpm lockfile documents fail closed on malformed, incomplete, or unrecognized layouts", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "production-pnpm-layout-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const inputs = fixture();
+  await writeInputs(root, inputs);
+  for (const documents of [
+    [], [null], ["unexpected"],
+    [inputs.lockfile, inputs.lockfile],
+    [toolchainFixture(), toolchainFixture()],
+    [toolchainFixture(), { ...inputs.lockfile, importers: {} }],
+    [toolchainFixture(), inputs.lockfile, inputs.lockfile],
+    [toolchainFixture(), null],
+  ]) {
+    await writeLockfiles(root, documents);
+    await assert.rejects(readProductionInputs(root), /Expected one pnpm lockfile|only toolchain importers|must contain application importers/);
+  }
+  for (const section of ["importers", "packages", "snapshots"]) {
+    const tools = toolchainFixture();
+    delete tools[section];
+    await writeLockfiles(root, [tools, inputs.lockfile]);
+    await assert.rejects(async () => checkProductionDependencies(await readProductionInputs(root), metadata), /only toolchain importers|complete pnpm v9/);
+  }
+  await writeFile(join(root, "pnpm-lock.yaml"), `---\ninvalid: [\n---\n${stringify(inputs.lockfile)}`);
+  await assert.rejects(readProductionInputs(root));
+});
+
 test("ref checks the immutable release target, never later main or dirty files, without changing the checkout", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "production-check-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const git = async (...args) =>
     (await exec("git", args, { cwd: root })).stdout;
   await writeInputs(root, fixture("1.0.0-staging.1"));
+  await writeLockfiles(root, [toolchainFixture(), fixture("1.0.0-staging.1").lockfile]);
   await git("init", "-q");
   await git("add", ".");
   await git(
