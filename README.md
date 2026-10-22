@@ -1288,6 +1288,8 @@ Uses AI to read the project's `README.md` alongside the PR's changed files and d
 
 Generates a semantic version number and AI-written release notes by analyzing commit history since the last release. Combines `determine-publish-version` with release note generation in one step.
 
+Both AI steps use Codex's `read-only` safety strategy and receive the supplied API key explicitly. They return text without editing the checkout or changing the runner's sudo access.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
