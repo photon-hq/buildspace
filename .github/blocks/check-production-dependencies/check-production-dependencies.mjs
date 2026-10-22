@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import semver from "semver";
 import { parse as parseToml } from "smol-toml";
-import { parse } from "yaml";
+import { parse, parseAllDocuments } from "yaml";
 import { auditCrates, fetchCrateRelease } from "./internal-crates.mjs";
 import { fetchPackageMetadata, INTERNAL_PREFIX } from "./internal-packages.mjs";
 
@@ -114,10 +114,33 @@ async function readPnpmInputs(root, read, tree) {
       ])
     )
   );
+  const documents = parseAllDocuments(await read("pnpm-lock.yaml"));
+  for (const document of documents) {
+    if (document.errors.length) throw document.errors[0];
+  }
+  const lockfiles = documents.map((document) => document.toJS());
+  if (lockfiles.length < 1 || lockfiles.length > 2 ||
+      lockfiles.some((lockfile) => !lockfile || typeof lockfile !== "object" || Array.isArray(lockfile)))
+    throw new Error("Expected one pnpm lockfile or a toolchain document followed by the application lockfile");
+  if (lockfiles.length === 2) {
+    // pnpm 12 prepends its package-manager/config dependency graph. Do not
+    // silently select a document from an arbitrary multi-document YAML file.
+    const importers = lockfiles[0].importers;
+    const importer = importers?.["."];
+    const application = lockfiles[1].importers?.["."];
+    if (application && Object.keys(application).some(
+      (field) => ["configDependencies", "packageManagerDependencies"].includes(field)))
+      throw new Error("The second pnpm lockfile document must contain application importers");
+    if (!importer || Object.keys(importers).length !== 1 ||
+        !Object.keys(importer).length || Object.keys(importer).some(
+          (field) => !["configDependencies", "packageManagerDependencies"].includes(field)))
+      throw new Error("The first pnpm lockfile document must contain only toolchain importers");
+  }
   return {
     workspace,
     manifests,
-    lockfile: parse(await read("pnpm-lock.yaml")),
+    lockfile: lockfiles.at(-1),
+    toolchainLockfiles: lockfiles.slice(0, -1),
   };
 }
 
@@ -155,7 +178,23 @@ async function readCargoInputs(root, read, tree) {
 }
 
 /** Audit the declared pins and the entire resolved internal dependency graph. */
-export function inspectProductionDependencies({
+export function inspectProductionDependencies(inputs) {
+  const result = inspectPnpmGraph(inputs);
+  // Audit every document's graph: toolchain transitive pins must not hide an
+  // internal prerelease simply because they are not application importers.
+  for (const lockfile of inputs.toolchainLockfiles ?? []) {
+    const audit = inspectPnpmGraph({ workspace: {}, manifests: {}, lockfile });
+    result.errors.push(...audit.errors);
+    for (const [name, versions] of audit.versions) {
+      if (!result.versions.has(name)) result.versions.set(name, new Set());
+      for (const version of versions) result.versions.get(name).add(version);
+    }
+  }
+  result.errors = [...new Set(result.errors)].sort();
+  return result;
+}
+
+function inspectPnpmGraph({
   workspace,
   manifests,
   lockfile,
