@@ -60,6 +60,7 @@ runs:
       id: ai-notes
       uses: openai/codex-action@v1
       with:
+        codex-home: ${{ runner.temp }}/codex-release-notes
         openai-api-key: ${{ inputs.openai-api-key }}
         model: gpt-5.5
         safety-strategy: read-only
