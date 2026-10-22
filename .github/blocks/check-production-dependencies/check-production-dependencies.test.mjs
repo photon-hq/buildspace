@@ -333,6 +333,7 @@ test("pnpm lockfile documents fail closed on malformed, incomplete, or unrecogni
     [], [null], ["unexpected"],
     [inputs.lockfile, inputs.lockfile],
     [toolchainFixture(), toolchainFixture()],
+    [toolchainFixture(), { ...inputs.lockfile, importers: {} }],
     [toolchainFixture(), inputs.lockfile, inputs.lockfile],
     [toolchainFixture(), null],
   ]) {

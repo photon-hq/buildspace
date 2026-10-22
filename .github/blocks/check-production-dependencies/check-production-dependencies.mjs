@@ -128,7 +128,7 @@ async function readPnpmInputs(root, read, tree) {
     const importers = lockfiles[0].importers;
     const importer = importers?.["."];
     const application = lockfiles[1].importers?.["."];
-    if (application && Object.keys(application).some(
+    if (!application || Object.keys(application).some(
       (field) => ["configDependencies", "packageManagerDependencies"].includes(field)))
       throw new Error("The second pnpm lockfile document must contain application importers");
     if (!importer || Object.keys(importers).length !== 1 ||
