@@ -23,6 +23,10 @@ on:
         description: Production release tag prefix, v or <name>-v; set it where vX.Y.Z tags already name something else
         default: ''
         type: string
+      registry:
+        description: Registry the build was staged for, https://npm.pkg.github.com or https://registry.npmjs.org
+        default: https://npm.pkg.github.com
+        type: string
       environment:
         description: Environment whose required reviewers approve the promotion
         default: production
@@ -51,9 +55,9 @@ on:
         description: Whether anything was left to publish; false for a build already released
         value: ${{ jobs.resolve.outputs.pending }}
 
-permissions:
-  contents: read
-
+# Every job declares its permissions but publish, which takes the caller's: a
+# package on npmjs needs id-token: write there, and requesting it here would
+# fail every caller that publishes to GitHub Packages without granting it.
 jobs:
   # Read-only: finds the candidates, proves where they came from, and shows the
   # reviewer what an approval will publish.
@@ -93,6 +97,7 @@ jobs:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
+          REGISTRY: ${{ inputs.registry }}
           ENVIRONMENT: ${{ inputs.environment }}
           APPROVED_BY: ${{ github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.actor == inputs.trusted-actor && github.triggering_actor == inputs.trusted-actor && github.triggering_actor || '' }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/package-stage.yml
@@ -100,7 +105,7 @@ jobs:
           node "$RELEASE_TOOLS/package-release.mjs" resolve \
             --version "$STAGING_VERSION" --image-tag "$IMAGE_TAG" \
             --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
-            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" \
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" \
             --environment "$ENVIRONMENT" --approved-by "$APPROVED_BY" \
             --signer-workflow "$SIGNER_WORKFLOW" \
             --output "$RUNNER_TEMP/package-release"
@@ -120,11 +125,8 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.pending == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     environment: ${{ !(github.event_name == 'workflow_dispatch' && inputs.trusted-actor != '' && github.actor == inputs.trusted-actor && github.triggering_actor == inputs.trusted-actor) && inputs.environment || '' }}
-    permissions:
-      contents: write
-      packages: write
     concurrency:
       group: package-production-${{ github.repository }}
       cancel-in-progress: false
@@ -147,8 +149,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          registry-url: https://npm.pkg.github.com
-          scope: '@${{ github.repository_owner }}'
+          # npm sends a scoped package to its scope's registry whatever --registry says,
+          # so the owner's scope maps to GitHub Packages only when publishing there.
+          registry-url: ${{ inputs.registry != 'https://registry.npmjs.org' && 'https://npm.pkg.github.com' || '' }}
+          scope: ${{ inputs.registry != 'https://registry.npmjs.org' && format('@{0}', github.repository_owner) || '' }}
+      # Trusted publishing manages dist-tags from npm 11.21.0.
+      - name: Install the npm that publishes through trusted publishing
+        if: inputs.registry == 'https://registry.npmjs.org'
+        run: npm install --global npm@11.21.1 --ignore-scripts --no-audit --no-fund
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ inputs.artifact-name }}
@@ -158,10 +166,11 @@ jobs:
           PACKAGE: ${{ inputs.package }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
+          REGISTRY: ${{ inputs.registry }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" publish --channel production --directory "$RUNNER_TEMP/package-release" \
             --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
-            --production-tag-prefix "$PRODUCTION_TAG_PREFIX"
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY"
 
   notify-downstream:
     needs: publish

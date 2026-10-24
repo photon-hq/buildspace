@@ -111,6 +111,48 @@ class WorkflowTests(unittest.TestCase):
         # Its declaration and the two expressions above: nothing else decides on it.
         self.assertEqual(yaml.dump(PROMOTE).count('trusted-actor'), 7)
 
+    def test_every_release_script_uses_the_registry_the_caller_names(self):
+        for workflow in (STAGE, PROMOTE):
+            self.assertEqual(workflow['on']['workflow_call']['inputs']['registry']['default'], 'https://npm.pkg.github.com')
+        scripts = [
+            (STAGE['jobs']['build'], 'Collect'),
+            (STAGE['jobs']['publish'], 'Publish the staging build and attach its candidates'),
+            (PROMOTE['jobs']['resolve'], 'Resolve and verify the candidates'),
+            (PROMOTE['jobs']['publish'], 'Publish the candidates under latest'),
+        ]
+        for job, name in scripts:
+            self.assertEqual(step(job, name)['env']['REGISTRY'], '${{ inputs.registry }}', name)
+            self.assertIn('--registry "$REGISTRY"', step(job, name)['run'], name)
+
+    def test_npmjs_is_reached_through_trusted_publishing(self):
+        for workflow, publish_step in ((STAGE, 'Publish the staging build and attach its candidates'), (PROMOTE, 'Publish the candidates under latest')):
+            publish = workflow['jobs']['publish']
+            install = step(publish, 'Install the npm that publishes through trusted publishing')
+            self.assertEqual(install['if'], "inputs.registry == 'https://registry.npmjs.org'")
+            version = re.search(r'npm@(\d+)\.(\d+)\.(\d+) ', install['run'])
+            self.assertGreaterEqual(tuple(map(int, version.groups())), (11, 21, 0))
+            names = [s.get('name') for s in publish['steps']]
+            self.assertLess(names.index(install['name']), names.index(publish_step))
+            node = next(s for s in publish['steps'] if s.get('uses', '').startswith('actions/setup-node@'))
+            self.assertEqual(node['with']['registry-url'], "${{ inputs.registry != 'https://registry.npmjs.org' && 'https://npm.pkg.github.com' || '' }}")
+            self.assertEqual(node['with']['scope'], "${{ inputs.registry != 'https://registry.npmjs.org' && format('@{0}', github.repository_owner) || '' }}")
+        self.assertEqual(STAGE['jobs']['publish']['permissions']['id-token'], 'write')
+        # The caller grants id-token: write to the promotion that needs it.
+        self.assertNotIn('permissions', PROMOTE)
+        self.assertNotIn('permissions', PROMOTE['jobs']['publish'])
+        for name, job in PROMOTE['jobs'].items():
+            if name != 'publish':
+                self.assertIn('permissions', job, name)
+
+    def test_a_bun_repository_builds_with_bun_in_place_of_pnpm(self):
+        self.assertEqual(STAGE['on']['workflow_call']['inputs']['bun-version']['default'], '')
+        steps = STAGE['jobs']['build']['steps']
+        pnpm = next(s for s in steps if s.get('uses', '').startswith('pnpm/action-setup@'))
+        bun = next(s for s in steps if s.get('uses', '').startswith('oven-sh/setup-bun@'))
+        self.assertEqual(pnpm['if'], "inputs.bun-version == ''")
+        self.assertEqual(bun['if'], "inputs.bun-version != ''")
+        self.assertEqual(bun['with'], {'bun-version': '${{ inputs.bun-version }}', 'no-cache': 'true'})
+
     def test_an_image_tag_selects_the_build_and_a_released_build_stores_nothing(self):
         resolve = PROMOTE['jobs']['resolve']
         self.assertIn('--image-tag "$IMAGE_TAG"', step(resolve, 'Resolve and verify the candidates')['run'])

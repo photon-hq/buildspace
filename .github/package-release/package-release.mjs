@@ -18,7 +18,9 @@ import { gunzipSync } from "node:zlib";
 import semver from "semver";
 import { parse as parseToml } from "smol-toml";
 
-const REGISTRY = "https://npm.pkg.github.com";
+const GITHUB_PACKAGES = "https://npm.pkg.github.com";
+const NPMJS = "https://registry.npmjs.org";
+const SCOPED_NAME = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUFFIX = /^-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
@@ -52,21 +54,26 @@ export function exec(command, args) {
 const notFound = (error, pattern = /HTTP 404/) =>
   pattern.test(String(error?.stderr ?? ""));
 
-export async function registryMetadata(
-  name,
-  token = process.env.NODE_AUTH_TOKEN
-) {
-  if (!token) throw new Error("NODE_AUTH_TOKEN is required to read GitHub Packages");
-  const response = await fetch(`${REGISTRY}/${encodeURIComponent(name)}`, {
-    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-    redirect: "error",
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (response.status === 404) return { versions: {}, "dist-tags": {} };
-  if (!response.ok)
-    throw new Error(`${name}: registry returned HTTP ${response.status}`);
-  const body = await response.json();
-  return { versions: body.versions ?? {}, "dist-tags": body["dist-tags"] ?? {} };
+/**
+ * A registry's reader of package metadata. npmjs is public: it is read without
+ * credentials, and with `write=true`, as npm reads before a write, so its CDN
+ * cannot answer with a packument or a 404 cached minutes ago.
+ */
+export function registryMetadata(registryUrl = GITHUB_PACKAGES, token = process.env.NODE_AUTH_TOKEN) {
+  const npmjs = registryUrl === NPMJS;
+  return async (name) => {
+    if (!npmjs && !token) throw new Error("NODE_AUTH_TOKEN is required to read GitHub Packages");
+    const response = await fetch(`${registryUrl}/${encodeURIComponent(name)}${npmjs ? "?write=true" : ""}`, {
+      headers: npmjs ? { accept: "application/json" } : { authorization: `Bearer ${token}`, accept: "application/json" },
+      redirect: "error",
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.status === 404) return { versions: {}, "dist-tags": {} };
+    if (!response.ok)
+      throw new Error(`${name}: registry returned HTTP ${response.status}`);
+    const body = await response.json();
+    return { versions: body.versions ?? {}, "dist-tags": body["dist-tags"] ?? {} };
+  };
 }
 
 function cached(registry) {
@@ -176,14 +183,20 @@ export function publishOrder(manifests) {
 /**
  * A repository whose `vX.Y.Z` tags already name something else, such as the
  * releases of a service, gives its packages a production tag prefix of their
- * own: `<name>-v`.
+ * own: `<name>-v`. GitHub Packages holds the owner's scope; a public package
+ * on npmjs names its own.
  */
-export function releaseNames(repository, packageInput = "", tagPrefix = "", productionTagPrefix = "") {
+export function releaseNames(repository, packageInput = "", tagPrefix = "", productionTagPrefix = "", registryUrl = GITHUB_PACKAGES) {
   const [owner, repo] = repository.split("/");
   if (productionTagPrefix && !PRODUCTION_TAG_PREFIX.test(productionTagPrefix))
     throw new Error(`Invalid production tag prefix ${productionTagPrefix}: use v or <name>-v`);
+  if (![GITHUB_PACKAGES, NPMJS].includes(registryUrl))
+    throw new Error(`Unsupported registry ${registryUrl}: use ${GITHUB_PACKAGES} or ${NPMJS}`);
+  if (registryUrl === NPMJS && !SCOPED_NAME.test(packageInput))
+    throw new Error("A package on npmjs is named by the package input, @scope/name");
   return {
-    scope: `@${owner}/`,
+    registryUrl,
+    scope: registryUrl === NPMJS ? `${packageInput.split("/")[0]}/` : `@${owner}/`,
     primary: packageInput || `@${owner}/${repo}`,
     tagPrefix: tagPrefix || `${repo}-staging-`,
     productionTagPrefix: productionTagPrefix || "v",
@@ -241,12 +254,13 @@ export async function collect({
   packageInput,
   tagPrefix,
   productionTagPrefix,
+  registryUrl,
   output,
   runUrl,
 }) {
   if (!SUFFIX.test(suffix)) throw new Error(`Invalid staging suffix: ${suffix}`);
   if (!SHA.test(sourceSha)) throw new Error("An exact source commit is required");
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
   // Cargo pins an internal crate by the vX.Y.Z tag of its release.
   if (crates.length && names.productionTagPrefix !== "v")
     throw new Error("Crates are released under vX.Y.Z tags; a build with crates cannot use another production tag prefix");
@@ -303,6 +317,7 @@ export async function collect({
     runUrl,
     suffix,
     package: names.primary,
+    registry: names.registryUrl,
     stagingTag: `${names.tagPrefix}${primary.staging.version}`,
     productionTag: `${names.productionTagPrefix}${primary.production.version}`,
     packages,
@@ -339,9 +354,9 @@ async function verifyFiles(directory, manifest, channels) {
 export async function verifyManifest(
   directory,
   manifest,
-  { repository, sourceSha, runId, packageInput, tagPrefix, productionTagPrefix, channels, crates }
+  { repository, sourceSha, runId, packageInput, tagPrefix, productionTagPrefix, registryUrl, channels, crates }
 ) {
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
   const fail = (reason) => {
     throw new Error(`The release manifest does not describe this build: ${reason}`);
   };
@@ -351,6 +366,7 @@ export async function verifyManifest(
   if (!SUFFIX.test(manifest.suffix) || (runId && !manifest.suffix.startsWith(`-staging.${runId}.`)))
     fail(`suffix ${manifest.suffix}`);
   if (manifest.package !== names.primary) fail(`package ${manifest.package}`);
+  if ((manifest.registry ?? GITHUB_PACKAGES) !== names.registryUrl) fail(`registry ${manifest.registry ?? GITHUB_PACKAGES}`);
   const seen = new Set();
   for (const pkg of manifest.packages) {
     if (typeof pkg.name !== "string" || !pkg.name.startsWith(names.scope) || seen.has(pkg.name))
@@ -585,10 +601,27 @@ async function ensureRelease(run, { directory, manifest, channel, tag, title, fi
 }
 
 /**
+ * The integrity a version was published with, once the registry serves it.
+ * npmjs scans a new version for a few minutes before it appears.
+ */
+export async function publishedIntegrity({ registry, name, version, timeoutMs, now, sleep }) {
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    const integrity = (await registry(name)).versions[version]?.dist?.integrity;
+    if (integrity) return integrity;
+    const remaining = deadline - now();
+    if (remaining <= 0)
+      throw new Error(`${name}@${version} was published but the registry did not serve it within ${timeoutMs / 60_000} minutes; retry the job once it does`);
+    await sleep(Math.min(15_000, remaining));
+  }
+}
+
+/**
  * Publish one channel of a verified build. Every step can be retried: a version
  * already published with the same contents, an existing tag on the same commit
  * and an existing release are accepted; anything else stops before changing it.
  * Crates have no registry: the release tag is what Cargo resolves them from.
+ * npmjs is reached through trusted publishing, with provenance.
  */
 export async function publish({
   directory,
@@ -598,15 +631,21 @@ export async function publish({
   packageInput,
   tagPrefix,
   productionTagPrefix,
+  registryUrl,
   crates,
   runId,
   runAttempt,
   run = exec,
-  registry = registryMetadata,
+  registry,
   log = console.log,
+  availabilityTimeoutMs = 30 * 60_000,
+  now = Date.now,
+  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
 }) {
   const manifest = await readManifest(directory);
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
+  registry ??= registryMetadata(names.registryUrl);
+  const target = `--registry=${names.registryUrl}`;
   const uploaded = channel === "staging" ? ["staging", "production"] : ["production"];
   await verifyManifest(directory, manifest, {
     repository,
@@ -615,6 +654,7 @@ export async function publish({
     packageInput,
     tagPrefix,
     productionTagPrefix,
+    registryUrl,
     channels: uploaded,
     crates,
   });
@@ -630,11 +670,17 @@ export async function publish({
       log(`${pkg.name}@${version} is already published with these contents`);
       continue;
     }
-    run("npm", ["publish", join(directory, file), "--tag", parking, "--ignore-scripts", `--registry=${REGISTRY}`]);
+    run("npm", [
+      "publish",
+      join(directory, file),
+      "--tag",
+      parking,
+      "--ignore-scripts",
+      ...(names.registryUrl === NPMJS ? ["--access", "public", "--provenance"] : []),
+      target,
+    ]);
     parked.push(pkg.name);
-    const published = JSON.parse(
-      run("npm", ["view", `${pkg.name}@${version}`, "dist.integrity", "--json", `--registry=${REGISTRY}`])
-    );
+    const published = await publishedIntegrity({ registry, name: pkg.name, version, timeoutMs: availabilityTimeoutMs, now, sleep });
     if (published !== expected)
       throw new Error(`${pkg.name}@${version} was published with different contents; investigate before retrying`);
   }
@@ -665,11 +711,11 @@ export async function publish({
     const { version } = pkg[channel];
     const current = (await registry(pkg.name))["dist-tags"][channelTag];
     if (!current || semver.gt(version, current))
-      run("npm", ["dist-tag", "add", `${pkg.name}@${version}`, channelTag, `--registry=${REGISTRY}`]);
+      run("npm", ["dist-tag", "add", `${pkg.name}@${version}`, channelTag, target]);
     else log(`Kept ${pkg.name}@${channelTag} on ${current}, which is not older than ${version}`);
   }
   for (const name of parked)
-    run("npm", ["dist-tag", "rm", name, parking, `--registry=${REGISTRY}`]);
+    run("npm", ["dist-tag", "rm", name, parking, target]);
   return { manifest, tag };
 }
 
@@ -890,6 +936,7 @@ export async function resolveCandidate({
   packageInput,
   tagPrefix,
   productionTagPrefix,
+  registryUrl,
   version: requested,
   imageTag = "",
   approvedBy = "",
@@ -897,9 +944,9 @@ export async function resolveCandidate({
   signerWorkflow,
   output,
   run = exec,
-  registry = registryMetadata,
+  registry,
 }) {
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix);
+  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
   const sourceSha = IMAGE_TAG.exec(imageTag)?.[1];
   if (imageTag && requested) throw new Error("Supply a staging version or an image tag, not both");
   if (imageTag && !sourceSha) throw new Error("Invalid immutable image tag");
@@ -914,7 +961,7 @@ export async function resolveCandidate({
   })();
   if (!approvedBy && !environmentRules.some((rule) => rule.type === "required_reviewers" && rule.reviewers?.length))
     throw new Error(`The ${environment} environment must exist and require a reviewer before anything is promoted`);
-  const lookup = cached(registry);
+  const lookup = cached(registry ?? registryMetadata(names.registryUrl));
   const version =
     requested ||
     (sourceSha
@@ -942,7 +989,7 @@ export async function resolveCandidate({
   const files = [...manifest.packages.map((pkg) => pkg.production.file), ...manifest.crates.map(({ file }) => file)];
   for (const file of files)
     run("gh", ["release", "download", tag, "--repo", repository, "--pattern", file, "--dir", output, "--clobber"]);
-  await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, productionTagPrefix, channels: ["production"] });
+  await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, productionTagPrefix, registryUrl, channels: ["production"] });
   for (const file of files)
     run("gh", [
       "attestation",
@@ -1041,6 +1088,7 @@ async function main() {
       suffix: { type: "string" },
       "tag-prefix": { type: "string", default: "" },
       "production-tag-prefix": { type: "string", default: "" },
+      registry: { type: "string", default: GITHUB_PACKAGES },
       "timeout-minutes": { type: "string", default: "20" },
       version: { type: "string", default: "" },
       workflow: { type: "string" },
@@ -1072,11 +1120,12 @@ async function main() {
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
+        registryUrl: values.registry,
         output: resolve(values.output),
         runUrl,
       });
       const warnings = [];
-      const lookup = cached(registryMetadata);
+      const lookup = cached(registryMetadata(manifest.registry));
       for (const pkg of manifest.packages) {
         const { version, integrity: packed } = pkg.production;
         const metadata = await lookup(pkg.name);
@@ -1113,6 +1162,7 @@ async function main() {
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
+        registryUrl: values.registry,
         crates,
         runId: env.GITHUB_RUN_ID,
         runAttempt: env.GITHUB_RUN_ATTEMPT,
@@ -1126,6 +1176,7 @@ async function main() {
         packageInput: values.package,
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
+        registryUrl: values.registry,
         version: values.version,
         imageTag: values["image-tag"],
         approvedBy: values["approved-by"],
