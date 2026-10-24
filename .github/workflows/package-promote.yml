@@ -149,8 +149,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-          registry-url: https://npm.pkg.github.com
-          scope: '@${{ github.repository_owner }}'
+          # npm sends a scoped package to its scope's registry whatever --registry says,
+          # so the owner's scope maps to GitHub Packages only when publishing there.
+          registry-url: ${{ inputs.registry != 'https://registry.npmjs.org' && 'https://npm.pkg.github.com' || '' }}
+          scope: ${{ inputs.registry != 'https://registry.npmjs.org' && format('@{0}', github.repository_owner) || '' }}
       # Trusted publishing manages dist-tags from npm 11.21.0.
       - name: Install the npm that publishes through trusted publishing
         if: inputs.registry == 'https://registry.npmjs.org'

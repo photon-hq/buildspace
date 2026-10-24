@@ -133,6 +133,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertGreaterEqual(tuple(map(int, version.groups())), (11, 21, 0))
             names = [s.get('name') for s in publish['steps']]
             self.assertLess(names.index(install['name']), names.index(publish_step))
+            node = next(s for s in publish['steps'] if s.get('uses', '').startswith('actions/setup-node@'))
+            self.assertEqual(node['with']['registry-url'], "${{ inputs.registry != 'https://registry.npmjs.org' && 'https://npm.pkg.github.com' || '' }}")
+            self.assertEqual(node['with']['scope'], "${{ inputs.registry != 'https://registry.npmjs.org' && format('@{0}', github.repository_owner) || '' }}")
         self.assertEqual(STAGE['jobs']['publish']['permissions']['id-token'], 'write')
         # The caller grants id-token: write to the promotion that needs it.
         self.assertNotIn('permissions', PROMOTE)
