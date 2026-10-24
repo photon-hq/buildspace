@@ -66,6 +66,7 @@ BuildSpace gives you two layers of CI/CD automation:
 |---|---|---|
 | Container image for Kargo promotion | [`publish-image`](#immutable-image-publisher) | Push to main or a protected hotfix branch, after CI |
 | Internal npm package on GitHub Packages, with any internal Rust crates built beside it | [`package-stage` + `package-promote`](#package-stage-and-promote) | Push to main; promotion by dispatch and approval |
+| Public npm package on npmjs, staged and promoted the same way | [`package-stage` + `package-promote`](#package-stage-and-promote) with `registry: https://registry.npmjs.org` | Push to main; promotion by dispatch and approval |
 | Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
@@ -320,7 +321,7 @@ Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 
 ### Package Stage and Promote
 
 `.github/workflows/package-stage.yml` and `.github/workflows/package-promote.yml` publish
-internal `@photon-hq/*` packages to GitHub Packages the way `publish-image` and
+internal `@photon-hq/*` packages to GitHub Packages, or public packages to npmjs, the way `publish-image` and
 Kargo ship images: every main commit is built and tested once, and production
 receives exactly the files that staging tested. Internal Rust crates built from
 the same commit are staged and promoted with them.
@@ -376,6 +377,7 @@ jobs:
       packages: write
       actions: read
       attestations: read
+      # id-token: write  # required when registry: https://registry.npmjs.org
     with:
       staging-version: ${{ inputs.staging-version }}
 ```
@@ -454,6 +456,22 @@ source commit, and moves `latest`.
   anyone else dispatches, and any re-run by or of another actor's run, waits
   for the environment's reviewers as before. Set it only where that actor's dispatches are already
   gated by people, and keep its token scoped to the repository.
+- **A public package on npmjs** sets `registry: https://registry.npmjs.org` and
+  `package`, its scoped name such as `@photon-ai/otel`, in both callers, and grants
+  `id-token: write` to both calls. The staging build and the promoted candidates
+  are published through npm trusted publishing, with provenance and no token,
+  by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
+  the package a trusted publisher for each caller workflow file, for example
+  `publish.yml` with environment `staging` and `promote.yml` with environment
+  `production`, and allow both `npm publish` and `npm dist-tag` on each. Leave the
+  environment off the promote publisher if a `trusted-actor` promotes, since its
+  runs have none. npm scans a new version for a few minutes before it serves it,
+  so each publish waits up to 30 minutes for the version to appear before it
+  checks its integrity and moves a tag. The dependency rules below apply to the
+  package's own scope, and a build staged for one registry is refused under the
+  other.
+- **A Bun repository** sets `bun-version` in the stage caller, which sets up Bun
+  in place of pnpm, and its own `install`, such as `bun install --frozen-lockfile`.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already
   published with other contents, and one whose `@photon-hq/*` `dependencies` or
   `optionalDependencies` are not exact stable published versions (or packages
