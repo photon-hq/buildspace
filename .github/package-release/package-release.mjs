@@ -162,7 +162,7 @@ function crateProblem(crate, sourceSha) {
 }
 
 /** Why a bump cannot name a build's version, if it cannot. */
-function bumpProblem(bump) {
+export function bumpProblem(bump) {
   if (!STABLE.test(bump?.version ?? "")) return `version ${bump?.version}`;
   if (bump.from !== null && typeof bump.from !== "string") return `from ${bump.from}`;
   if (!LEVELS.includes(bump.level)) return `level ${bump.level}`;
@@ -573,7 +573,7 @@ export function releaseNotes(manifest, channel, changes) {
   return `${lines.join("\n")}\n`;
 }
 
-function ensureTag(run, manifest, tag) {
+export function ensureTag(run, manifest, tag) {
   const commit = tagCommit(run, manifest.repository, tag);
   if (commit === undefined)
     run("gh", [
@@ -590,7 +590,7 @@ function ensureTag(run, manifest, tag) {
     throw new Error(`Tag ${tag} already names ${commit}, not ${manifest.sourceSha}`);
 }
 
-async function ensureRelease(run, { directory, manifest, channel, tag, title, files, notes }) {
+export async function ensureRelease(run, { directory, manifest, channel, tag, title, files, notes }) {
   let existing;
   try {
     existing = JSON.parse(
@@ -964,6 +964,23 @@ export function stagedBuild({ repository, names, sourceSha, run = exec }) {
 }
 
 /**
+ * Promotion waits for people: the environment must exist and require a
+ * reviewer, unless a trusted actor's own dispatch is the approval.
+ */
+export function requireReviewers({ repository, environment, approvedBy = "", run = exec }) {
+  if (approvedBy) return;
+  let rules;
+  try {
+    rules = JSON.parse(run("gh", ["api", `repos/${repository}/environments/${environment}`])).protection_rules ?? [];
+  } catch (error) {
+    if (!notFound(error)) throw error;
+    rules = [];
+  }
+  if (!rules.some((rule) => rule.type === "required_reviewers" && rule.reviewers?.length))
+    throw new Error(`The ${environment} environment must exist and require a reviewer before anything is promoted`);
+}
+
+/**
  * Find the candidates to promote and prove where they came from. `pending` is
  * false when there is nothing left to publish: a hotfix image, whose packages
  * are not staged, or a build whose candidates are all released already.
@@ -988,16 +1005,7 @@ export async function resolveCandidate({
   if (imageTag && requested) throw new Error("Supply a staging version or an image tag, not both");
   if (imageTag && !sourceSha) throw new Error("Invalid immutable image tag");
   if (sourceSha && !imageTag.startsWith("main-")) return { pending: false };
-  const environmentRules = (() => {
-    try {
-      return JSON.parse(run("gh", ["api", `repos/${repository}/environments/${environment}`])).protection_rules ?? [];
-    } catch (error) {
-      if (notFound(error)) return [];
-      throw error;
-    }
-  })();
-  if (!approvedBy && !environmentRules.some((rule) => rule.type === "required_reviewers" && rule.reviewers?.length))
-    throw new Error(`The ${environment} environment must exist and require a reviewer before anything is promoted`);
+  requireReviewers({ repository, environment, approvedBy, run });
   const lookup = cached(registry ?? registryMetadata(names.registryUrl));
   const version =
     requested ||
