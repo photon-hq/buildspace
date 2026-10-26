@@ -51,6 +51,8 @@ class WorkflowTests(unittest.TestCase):
                     continue
                 for marker in CALLER_CODE:
                     self.assertNotIn(marker, yaml.dump(job), f'{name}: {marker}')
+        token = step(build, 'Mint a token for private dependencies')
+        self.assertEqual({k: v for k, v in token['with'].items() if k.startswith('permission-')}, {'permission-contents': 'read'})
         holders = [s.get('name') for s in build['steps'] if 'secrets.SECRET_ENV_VARS' in yaml.dump(s)]
         self.assertEqual(holders, ['Build the staging package and its production candidate'])
 

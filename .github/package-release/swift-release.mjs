@@ -141,6 +141,12 @@ export async function publish({ directory, channel, repository, sourceSha, packa
   const channels = channel === "staging" ? ["staging", "production"] : ["production"];
   await verifyManifest(directory, manifest, { repository, sourceSha, runId: channel === "staging" ? runId : undefined, packageName, library, channels, bump });
   const tag = channel === "staging" ? manifest.stagingTag : manifest.productionTag;
+  // Approval can come long after resolution; a newer release in between makes this build stale.
+  if (channel === "production") {
+    const latest = latestReleaseTag(releaseTags(run, repository), "v")?.slice(1);
+    if (behind(manifest.bump.version, latest))
+      throw new Error(`${manifest.stagingTag} cannot be released: ${manifest.bump.version} is not newer than the latest release ${latest}; stage a newer build`);
+  }
   let files = [];
   if (manifest.pkg && channel === "staging") files = [manifest.pkg.staging.file, manifest.pkg.production.file];
   if (manifest.pkg && channel === "production") {
@@ -160,15 +166,13 @@ export async function publish({ directory, channel, repository, sourceSha, packa
   return { manifest, tag };
 }
 
-/** Tags under `v`, read from GitHub. */
+/** Tags under `v`, read from GitHub; matching-refs returns every match in one response. */
 function releaseTags(run, repository) {
-  const tags = [];
-  for (let page = 1; ; page++) {
-    const refs = JSON.parse(run("gh", ["api", `repos/${repository}/git/matching-refs/tags/v?per_page=100&page=${page}`]));
-    tags.push(...refs.map(({ ref }) => ref.slice("refs/tags/".length)));
-    if (refs.length < 100) return tags;
-  }
+  return JSON.parse(run("gh", ["api", `repos/${repository}/git/matching-refs/tags/v`])).map(({ ref }) => ref.slice("refs/tags/".length));
 }
+
+/** Whether a version can no longer follow the latest release; a version equal to it is left to the caller. */
+const behind = (version, latest) => Boolean(latest) && latest !== version && !semver.gt(version, latest);
 
 /**
  * Find the build to promote and prove where it came from: staged by the stage
@@ -226,7 +230,7 @@ export async function resolveCandidate({ repository, packageName, library = fals
       throw new Error(`${tag} cannot be promoted: ${manifest.productionTag} is already released from another commit; stage a newer build`);
     return { manifest, pending: !productionReleaseExists(run, manifest) };
   }
-  if (latest && !semver.gt(candidate, latest))
+  if (behind(candidate, latest))
     throw new Error(`${tag} cannot be promoted: ${candidate} is not newer than the latest release ${latest}; stage a newer build`);
   return { manifest, pending: true };
 }

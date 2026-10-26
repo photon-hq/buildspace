@@ -156,6 +156,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          permission-contents: read
       # Both builds share one checkout and build directory. BetterEnv declares
       # .env as a build input, so the second build recompiles what reads it.
       - name: Build the staging package and its production candidate

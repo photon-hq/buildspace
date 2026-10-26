@@ -58,7 +58,7 @@ function world({ tags = {}, releases = {}, environment = ["octocat"], attested =
         if (!environment) throw fail("gh: Not Found (HTTP 404)");
         return JSON.stringify({ protection_rules: environment.length ? [{ type: "required_reviewers", reviewers: environment }] : [] });
       }
-      if (/\/git\/matching-refs\/tags\/v\?/.test(path))
+      if (/\/git\/matching-refs\/tags\/v$/.test(path))
         return JSON.stringify(Object.entries(state.tags).filter(([name]) => name.startsWith("v")).map(([name, sha]) => ({ ref: `refs/tags/${name}`, object: { type: "commit", sha } })));
       const tag = /\/git\/ref\/tags\/(.+)$/.exec(path)?.[1];
       if (tag) {
@@ -226,6 +226,18 @@ test("promotion releases the newest staging build's own candidate after proving 
   assert.ok(release.notes.startsWith(`Promoted from [\`v1.27.0${SUFFIX}\`]`));
   assert.equal(commands(fake.calls, "release").find((call) => call[2] === "create").includes("--prerelease"), false);
   assert.equal((await resolveWith(fake)).pending, false);
+});
+
+test("a release newer than the build since it was resolved stops the release before it is tagged", async () => {
+  const { fake } = await staged();
+  assert.equal((await resolveWith(fake)).pending, true);
+  fake.state.tags["v1.28.0"] = OTHER;
+  await assert.rejects(
+    publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined }),
+    new RegExp(`v1\.27\.0${SUFFIX.replaceAll(".", "\.")} cannot be released: 1\.27\.0 is not newer than the latest release 1\.28\.0`)
+  );
+  assert.equal(fake.state.tags["v1.27.0"], undefined);
+  assert.equal(fake.state.releases["v1.27.0"], undefined);
 });
 
 test("promotion takes an explicit staging version", async () => {
