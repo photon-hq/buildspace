@@ -26,6 +26,7 @@ BuildSpace gives you two layers of CI/CD automation:
   - [TypeScript Service Release](#typescript-service-release)
   - [TypeScript Monorepo Release](#typescript-monorepo-release)
   - [Go Binary Release](#go-binary-release)
+  - [Swift Stage and Promote](#swift-stage-and-promote)
   - [Swift Release](#swift-release)
   - [Package Release](#package-release)
   - [Package PR Build](#package-pr-build)
@@ -71,6 +72,8 @@ BuildSpace gives you two layers of CI/CD automation:
 | Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
 | TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
 | Go binary | [`go-binary-release`](#go-binary-release) | PR label `release` |
+| Swift macOS `.pkg`, staged on staging Macs and promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) | Push to main; promotion by dispatch and approval |
+| SwiftPM library, released by tags | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `library: true` | Push to main; promotion by dispatch and approval |
 | Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` or `prerelease` |
 | macOS `.pkg` without binary (payload/scripts only) | [`pkg-release`](#package-release) | PR label `release` |
 | macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
@@ -880,11 +883,140 @@ jobs:
 
 ---
 
+### Swift Stage and Promote
+
+`.github/workflows/swift-stage.yml` and `.github/workflows/swift-promote.yml` release
+Swift macOS `.pkg` packages, and SwiftPM libraries, the way
+[Package Stage and Promote](#package-stage-and-promote) releases npm packages:
+every main commit is built once, staging Macs run it, and production receives
+the exact package staging ran. Versions follow the same rule (see **Versions**
+there) under `vX.Y.Z` tags.
+
+Each main push, after `ci-workflow` passes on that commit:
+
+1. A read-only job computes `X.Y.Z` from the pull requests merged since the
+   latest `vX.Y.Z`.
+2. A macOS job builds the package twice from one checkout and build directory:
+   the staging build at `X.Y.Z-staging.<run id>.<attempt>` and the production
+   candidate at `X.Y.Z`. Each compiles with a `.env` of `VERSION`,
+   `BUILD_ENVIRONMENT=production`, `RELEASE_CHANNEL` (`staging` or
+   `production`) and `SECRET_ENV_VARS`, and `pkgbuild` packages it at its
+   version.
+3. A separate job attests both packages and publishes the GitHub prerelease
+   `vX.Y.Z-staging.<run id>.<attempt>`. It holds the staging `<package-name>.pkg`,
+   the candidate as `<package-name>-X.Y.Z.pkg.candidate` and
+   `release-manifest.json`. GitGate and the Astrolabe self-updater install the
+   first `.pkg` of the newest release on the prerelease channel, so staging Macs
+   pick up every main commit, and the candidate's name keeps them off it.
+
+Promotion, dispatched from `main`, proves where the candidate came from and
+waits for the `production` environment's reviewers. After approval it tags
+`vX.Y.Z` on the source commit, publishes the release with the candidate as
+`<package-name>.pkg`, and uploads that package to Jamf Pro when `jamf-url` is
+set. Nothing is rebuilt.
+
+```yaml
+# .github/workflows/release.yml
+name: Stage
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+jobs:
+  stage:
+    uses: photon-hq/buildspace/.github/workflows/swift-stage.yml@<reviewed-commit-sha>
+    permissions:
+      contents: write
+      actions: read
+      attestations: write
+      id-token: write
+      pull-requests: read
+    with:
+      package-name: macrocosm-astrolabe
+      identifier: codes.photon.macrocosm-astrolabe
+      ci-workflow: ci.yml # optional: a push workflow that must pass first
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
+```
+
+```yaml
+# .github/workflows/promote.yml
+name: Promote to production
+on:
+  workflow_dispatch:
+    inputs:
+      staging-version:
+        description: Staging build to promote; blank promotes the newest
+        default: ''
+jobs:
+  promote:
+    uses: photon-hq/buildspace/.github/workflows/swift-promote.yml@<reviewed-commit-sha>
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    with:
+      package-name: macrocosm-astrolabe
+      staging-version: ${{ inputs.staging-version }}
+      jamf-url: ${{ vars.JAMF_URL }} # optional
+    secrets:
+      JAMF_CLIENT_ID: ${{ secrets.JAMF_CLIENT_ID }}
+      JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}
+```
+
+- **Inputs.** `package-name`, `identifier`, `scripts-path`, `payload-path`,
+  `resource-bundles`, `entitlements` and `private-deps` (with the `APP_ID` and
+  `APP_PRIVATE_KEY` secrets) work as in [Swift Release](#swift-release).
+  `paths`, `ci-workflow`, `ci-wait-minutes`, `environment` (default `staging`)
+  and `dry-run` work as in `package-stage`. The promote call names the same
+  `package-name` and `library`.
+- **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
+  `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
+  manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves
+  only stable versions for a requirement such as `from: "1.2.0"`, so a staging
+  tag reaches only a consumer that pins it exactly.
+- **The version in the binary.** The staging build reports
+  `X.Y.Z-staging.<run id>.<attempt>` as `VERSION` and the candidate `X.Y.Z`.
+  Both keep `BUILD_ENVIRONMENT=production`, as release builds always have, so
+  staging Macs' telemetry keeps its environment; `RELEASE_CHANNEL` tells the
+  two builds apart.
+- **Staging Macs after a promotion.** GitGate's prerelease channel installs the
+  most recently published release, and a promotion publishes `vX.Y.Z`. A
+  staging Mac running a later staging build of a GitGate package returns to
+  `vX.Y.Z` until the next main push stages again. The Astrolabe self-updater
+  compares versions and refuses that downgrade.
+- **Promotion refuses** a build whose tag no longer names its commit, whose
+  commit is not on `main`, whose candidate fails its checksum or its
+  attestation (signer `photon-hq/buildspace/.github/workflows/swift-stage.yml`,
+  the caller repository, `refs/heads/main` and the source commit), or whose
+  version is not newer than the latest `vX.Y.Z`, and it refuses unless the
+  `production` environment requires a reviewer. A build already released as
+  `vX.Y.Z` from the same commit has nothing to publish.
+- **Trust boundaries.** Only the build job runs caller code, and it can read but
+  not write. `SECRET_ENV_VARS` and the dependency token reach only its build
+  step. The staging publish job rebuilds every manifest claim from the files,
+  its own run and the version job's output.
+- **Moving from `swift-release`.** The `release` and `prerelease` labels and
+  `OPENAI_API_KEY` are no longer used. The first staged version follows the
+  latest stable `vX.Y.Z`; `-rc.N` tags are ignored, and a repository without a
+  stable tag starts at `0.1.0` unless the moving pull request carries
+  `Release-As`.
+
+Local validation: `node --test test/swift-release.test.mjs` and
+`python3 -m unittest discover -s test -p 'test_swift*'`.
+
+---
+
 ### Swift Release
 
 **File:** `.github/workflows/swift-release.yml`
 
-Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a `.pkg`, creates a GitHub Release, and optionally uploads stable releases to Jamf Pro. A `prerelease` label or input creates an `-rc.N` GitHub pre-release and skips Jamf upload.
+The label-driven pipeline that Swift Stage and Promote replaces. Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a `.pkg`, creates a GitHub Release, and optionally uploads stable releases to Jamf Pro. A `prerelease` label or input creates an `-rc.N` GitHub pre-release and skips Jamf upload.
 
 #### Inputs
 
