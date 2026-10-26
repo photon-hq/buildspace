@@ -17,6 +17,7 @@ import { parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import semver from "semver";
 import { parse as parseToml } from "smol-toml";
+import { bumpNotes, releaseBump, releaseChanges } from "./release-version.mjs";
 
 const GITHUB_PACKAGES = "https://npm.pkg.github.com";
 const NPMJS = "https://registry.npmjs.org";
@@ -33,6 +34,7 @@ const MANIFEST = "release-manifest.json";
 const CHANNEL_TAG = { staging: "staging", production: "latest" };
 const DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 const CRATE_DEPENDENCY_TABLES = ["dependencies", "build-dependencies", "build_dependencies"];
+const LEVELS = ["none", "patch", "minor", "major"];
 
 export const sha256 = (buffer) =>
   createHash("sha256").update(buffer).digest("hex");
@@ -159,6 +161,14 @@ function crateProblem(crate, sourceSha) {
     return `${crate.name} was packaged from ${crate.sourceSha ?? "an unknown commit"}${crate.dirty ? " with uncommitted changes" : ""}, not ${sourceSha}`;
 }
 
+/** Why a bump cannot name a build's version, if it cannot. */
+function bumpProblem(bump) {
+  if (!STABLE.test(bump?.version ?? "")) return `version ${bump?.version}`;
+  if (bump.from !== null && typeof bump.from !== "string") return `from ${bump.from}`;
+  if (!LEVELS.includes(bump.level)) return `level ${bump.level}`;
+  if (!Number.isInteger(bump.total) || !Array.isArray(bump.changes) || !Array.isArray(bump.warnings)) return "changes";
+}
+
 /** A package's internal dependencies are published before it. */
 export function publishOrder(manifests) {
   const order = [];
@@ -241,7 +251,7 @@ async function readCrates(directory, expected, sourceSha) {
 /**
  * Validate the two packs of one source commit, and the crates packaged from it,
  * and lay them out with a manifest that promotion can verify: the staging build
- * and its stable candidates.
+ * and its stable candidates, every package at the version `bump` computed.
  */
 export async function collect({
   stagingDirectory,
@@ -249,6 +259,7 @@ export async function collect({
   crateDirectory,
   crates = [],
   suffix,
+  bump,
   sourceSha,
   repository,
   packageInput,
@@ -260,6 +271,8 @@ export async function collect({
 }) {
   if (!SUFFIX.test(suffix)) throw new Error(`Invalid staging suffix: ${suffix}`);
   if (!SHA.test(sourceSha)) throw new Error("An exact source commit is required");
+  const problem = bumpProblem(bump);
+  if (problem) throw new Error(`Invalid release version: ${problem}`);
   const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
   // Cargo pins an internal crate by the vX.Y.Z tag of its release.
   if (crates.length && names.productionTagPrefix !== "v")
@@ -279,6 +292,8 @@ export async function collect({
     const build = staging.get(name).manifest.version;
     if (!STABLE.test(candidate))
       throw new Error(`${name}@${candidate}: a production candidate must be X.Y.Z`);
+    if (candidate !== bump.version)
+      throw new Error(`${name}@${candidate}: every package of the build is packed at its release version ${bump.version}, RELEASE_VERSION`);
     if (build !== `${candidate}${suffix}`)
       throw new Error(`${name}: staging packed ${build}, expected ${candidate}${suffix}`);
   }
@@ -311,7 +326,7 @@ export async function collect({
   }
   const primary = packages.find(({ name }) => name === names.primary);
   const manifest = {
-    formatVersion: 2,
+    formatVersion: 3,
     repository,
     sourceSha,
     runUrl,
@@ -322,16 +337,21 @@ export async function collect({
     productionTag: `${names.productionTagPrefix}${primary.production.version}`,
     packages,
     crates: crateEntries,
+    bump,
   };
   await writeFile(join(output, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
 
-/** Format 1 predates crates; it is read as a build without any. */
+/**
+ * Format 1 predates crates; it is read as a build without any. Format 3 records
+ * the bump that computed the build's version; earlier builds took theirs from
+ * package.json.
+ */
 export async function readManifest(directory) {
   const manifest = JSON.parse(await readFile(join(directory, MANIFEST), "utf8"));
   if (manifest.formatVersion === 1) manifest.crates = [];
-  if (![1, 2].includes(manifest.formatVersion) || !Array.isArray(manifest.packages) || !Array.isArray(manifest.crates))
+  if (![1, 2, 3].includes(manifest.formatVersion) || !Array.isArray(manifest.packages) || !Array.isArray(manifest.crates))
     throw new Error("Unsupported release manifest");
   return manifest;
 }
@@ -354,7 +374,7 @@ async function verifyFiles(directory, manifest, channels) {
 export async function verifyManifest(
   directory,
   manifest,
-  { repository, sourceSha, runId, packageInput, tagPrefix, productionTagPrefix, registryUrl, channels, crates }
+  { repository, sourceSha, runId, packageInput, tagPrefix, productionTagPrefix, registryUrl, channels, crates, bump }
 ) {
   const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
   const fail = (reason) => {
@@ -367,12 +387,18 @@ export async function verifyManifest(
     fail(`suffix ${manifest.suffix}`);
   if (manifest.package !== names.primary) fail(`package ${manifest.package}`);
   if ((manifest.registry ?? GITHUB_PACKAGES) !== names.registryUrl) fail(`registry ${manifest.registry ?? GITHUB_PACKAGES}`);
+  if (manifest.formatVersion === 3 && bumpProblem(manifest.bump)) fail(`bump ${bumpProblem(manifest.bump)}`);
+  if (bump && JSON.stringify(manifest.bump) !== JSON.stringify(bump)) fail("bump, which is not the version this run computed");
   const seen = new Set();
   for (const pkg of manifest.packages) {
     if (typeof pkg.name !== "string" || !pkg.name.startsWith(names.scope) || seen.has(pkg.name))
       fail(`package ${pkg.name}`);
     seen.add(pkg.name);
-    if (!STABLE.test(pkg.production.version) || pkg.staging.version !== `${pkg.production.version}${manifest.suffix}`)
+    if (
+      !STABLE.test(pkg.production.version) ||
+      pkg.staging.version !== `${pkg.production.version}${manifest.suffix}` ||
+      (manifest.bump && pkg.production.version !== manifest.bump.version)
+    )
       fail(`${pkg.name} versions`);
     for (const channel of channels)
       if (pkg[channel].file !== fileName(pkg.name, pkg[channel].version)) fail(`file ${pkg[channel].file}`);
@@ -533,7 +559,8 @@ export function releaseNotes(manifest, channel, changes) {
           ...packageTable(manifest, ["production"]),
           ...crateTable(manifest, manifest.productionTag),
         ];
-  if (changes) {
+  if (manifest.bump) lines.push("", ...bumpNotes(manifest.bump, manifest.repository));
+  else if (changes) {
     lines.push(
       "",
       `### Changes since [\`${changes.previousTag}\`](${server}/${manifest.repository}/compare/${changes.previousTag}...${manifest.sourceSha})`,
@@ -635,6 +662,7 @@ export async function publish({
   crates,
   runId,
   runAttempt,
+  bump,
   run = exec,
   registry,
   log = console.log,
@@ -657,6 +685,7 @@ export async function publish({
     registryUrl,
     channels: uploaded,
     crates,
+    bump,
   });
   const parking = `candidate-${runId}-${runAttempt}`;
   if (!/^candidate-\d+-\d+$/.test(parking)) throw new Error("Invalid run coordinates");
@@ -687,7 +716,7 @@ export async function publish({
   const released = manifest.packages.find(({ name }) => name === manifest.package)[channel].version;
   const tag = channel === "staging" ? manifest.stagingTag : manifest.productionTag;
   let changes;
-  if (channel === "production") {
+  if (channel === "production" && !manifest.bump) {
     const latest = (await registry(manifest.package))["dist-tags"].latest;
     if (latest && latest !== released)
       changes = changesSince(run, manifest.repository, `${names.productionTagPrefix}${latest}`, manifest.sourceSha);
@@ -790,17 +819,25 @@ export function releasedCrates({ repository, latest, run = exec }) {
   };
 }
 
-/** A crate keeps its version only while its contents are unchanged, and otherwise moves forward. */
+/**
+ * A crate keeps its version only while its contents are unchanged, and
+ * otherwise moves forward by at least the level of the build's bump. Cargo
+ * reads a crate's version from its source at the release tag, so the version
+ * is the one in Cargo.toml; the bump only says how far it must move.
+ */
 export async function crateVersionFindings(manifest, directory, released) {
+  const level = [undefined, "none"].includes(manifest.bump?.level) ? "patch" : manifest.bump.level;
   const findings = [];
   for (const crate of manifest.crates) {
     const previous = await released(crate.name);
-    if (!previous) continue;
-    if (previous.version === crate.version) {
-      if (previous.digest !== readCrate(join(directory, crate.file)).digest)
-        findings.push(`${crate.name} ${crate.version} is already released in ${previous.tag} with other contents; bump its version and stage again`);
-    } else if (!semver.gt(crate.version, previous.version))
-      findings.push(`${crate.name} ${crate.version} is not newer than ${previous.version} in ${previous.tag}; bump its version and stage again`);
+    if (!previous || previous.digest === readCrate(join(directory, crate.file)).digest) continue;
+    const lowest = semver.inc(previous.version, level);
+    if (previous.version === crate.version)
+      findings.push(`${crate.name} ${crate.version} is already released in ${previous.tag} with other contents; set its Cargo.toml version to at least ${lowest} and stage again`);
+    else if (!semver.gt(crate.version, previous.version))
+      findings.push(`${crate.name} ${crate.version} is not newer than ${previous.version} in ${previous.tag}; set its Cargo.toml version to at least ${lowest} and stage again`);
+    else if (semver.lt(crate.version, lowest))
+      findings.push(`${crate.name} ${crate.version} is below ${lowest}, which a ${level} change since ${previous.tag} requires; set its Cargo.toml version to at least ${lowest} and stage again`);
   }
   return findings;
 }
@@ -1010,6 +1047,9 @@ export async function resolveCandidate({
     manifest: readTarballManifest(join(output, pkg.production.file)),
   }));
   const findings = await dependencyFindings(candidates, names.scope, lookup);
+  const restage = manifest.bump
+    ? "stage a newer build, from a change inside the build's paths or a Release-As"
+    : "bump the version and stage again";
   let published = true;
   for (const pkg of manifest.packages) {
     const { version: candidate, integrity: expected } = pkg.production;
@@ -1017,9 +1057,9 @@ export async function resolveCandidate({
     const existing = metadata.versions[candidate];
     const latest = metadata["dist-tags"].latest;
     if (existing && existing.dist?.integrity !== expected)
-      findings.push(`${pkg.name}@${candidate} is already published with different contents; bump the version and stage again`);
+      findings.push(`${pkg.name}@${candidate} is already published with different contents; ${restage}`);
     else if (!existing && latest && !semver.gt(candidate, latest))
-      findings.push(`${pkg.name}@${candidate} is not newer than latest ${latest}; bump the version and stage again`);
+      findings.push(`${pkg.name}@${candidate} is not newer than latest ${latest}; ${restage}`);
     published &&= Boolean(existing) && Boolean(latest) && !semver.gt(candidate, latest);
   }
   const latest = (await lookup(names.primary))["dist-tags"].latest;
@@ -1032,7 +1072,7 @@ export async function resolveCandidate({
   if (findings.length)
     throw new Error(`${tag} cannot be promoted:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
   const changes =
-    latest && latest !== primary.production.version
+    !manifest.bump && latest && latest !== primary.production.version
       ? changesSince(run, repository, `${names.productionTagPrefix}${latest}`, manifest.sourceSha)
       : undefined;
   return { manifest, changes, pending: !(published && productionReleaseExists(run, manifest)) };
@@ -1078,10 +1118,12 @@ async function main() {
       crates: { type: "string" },
       directory: { type: "string" },
       "approved-by": { type: "string", default: "" },
+      bump: { type: "string" },
       environment: { type: "string" },
       "image-tag": { type: "string", default: "" },
       output: { type: "string" },
       package: { type: "string", default: "" },
+      paths: { type: "string", default: "" },
       production: { type: "string" },
       "signer-workflow": { type: "string" },
       staging: { type: "string" },
@@ -1108,6 +1150,15 @@ async function main() {
       });
       console.log(`${values.workflow} passed on ${env.GITHUB_SHA}`);
       return;
+    case "version": {
+      const { productionTagPrefix: prefix } = releaseNames(repository, "", "", values["production-tag-prefix"]);
+      const paths = values.paths.split(/\s+/).filter(Boolean);
+      const bump = releaseBump(releaseChanges({ repository, prefix, paths, head: env.GITHUB_SHA }));
+      for (const warning of bump.warnings) console.log(`::warning::${warning}`);
+      await summarize(bumpNotes(bump, repository).join("\n"));
+      await outputs({ version: bump.version, bump: JSON.stringify(bump) });
+      return;
+    }
     case "collect": {
       const manifest = await collect({
         stagingDirectory: resolve(values.staging),
@@ -1115,6 +1166,7 @@ async function main() {
         crateDirectory: values["crate-directory"] && resolve(values["crate-directory"]),
         crates: crates ?? [],
         suffix: values.suffix,
+        bump: JSON.parse(values.bump ?? "null"),
         sourceSha: env.GITHUB_SHA,
         repository,
         packageInput: values.package,
@@ -1132,7 +1184,7 @@ async function main() {
         const released = metadata.versions[version];
         const latest = metadata["dist-tags"].latest;
         if (released ? released.dist?.integrity !== packed : latest && !semver.gt(version, latest))
-          warnings.push(`${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Bump its version.`);
+          warnings.push(`${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Merge a change inside the build's paths, or a Release-As, and stage again.`);
       }
       const crateHistory = releasedCrates({ repository, latest: (await lookup(manifest.package))["dist-tags"].latest });
       for (const finding of await crateVersionFindings(manifest, resolve(values.output), crateHistory))
@@ -1166,6 +1218,7 @@ async function main() {
         crates,
         runId: env.GITHUB_RUN_ID,
         runAttempt: env.GITHUB_RUN_ATTEMPT,
+        bump: values.bump && JSON.parse(values.bump),
       });
       await summarize(`Published ${values.channel} release [\`${tag}\`](${env.GITHUB_SERVER_URL}/${repository}/releases/tag/${tag}).`);
       return;
@@ -1214,7 +1267,7 @@ async function main() {
       return;
     }
     default:
-      throw new Error("Usage: package-release.mjs wait-ci|collect|publish|resolve [options]");
+      throw new Error("Usage: package-release.mjs wait-ci|version|collect|publish|resolve [options]");
   }
 }
 

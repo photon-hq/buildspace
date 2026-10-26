@@ -74,12 +74,30 @@ class WorkflowTests(unittest.TestCase):
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
         self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
-        self.assertEqual(publish['needs'], 'build')
+        self.assertEqual(publish['needs'], ['version', 'build'])
         names = [s.get('name') for s in publish['steps']]
         self.assertLess(names.index('Attest every packed file'), names.index('Publish the staging build and attach its candidates'))
         self.assertLess(names.index('Attest every packaged crate'), names.index('Publish the staging build and attach its candidates'))
         self.assertEqual(step(publish, 'Attest every packaged crate')['if'], "inputs.crates != ''")
         self.assertEqual(publish['concurrency']['cancel-in-progress'], 'false')
+
+    def test_the_version_is_computed_read_only_and_reaches_the_packs_and_the_publication(self):
+        version = STAGE['jobs']['version']
+        self.assertEqual(version['permissions'], {'contents': 'read', 'pull-requests': 'read'})
+        self.assertEqual(version['if'], STAGE['jobs']['build']['if'])
+        self.assertEqual(STAGE['jobs']['build']['needs'], 'version')
+        checkout = next(s for s in version['steps'] if s.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout['with'], {'ref': '${{ github.sha }}', 'fetch-depth': '0', 'persist-credentials': 'false'})
+        compute = step(version, 'Compute the release version')
+        self.assertEqual(compute['env'], {'PRODUCTION_TAG_PREFIX': '${{ inputs.production-tag-prefix }}', 'PATHS': '${{ inputs.paths }}'})
+        self.assertEqual(version['outputs'], {'version': '${{ steps.version.outputs.version }}', 'bump': '${{ steps.version.outputs.bump }}'})
+        self.assertEqual(STAGE['on']['workflow_call']['inputs']['paths']['default'], '')
+        build = STAGE['jobs']['build']
+        pack = step(build, 'Pack the staging build and its production candidate')
+        self.assertEqual(pack['env']['RELEASE_VERSION'], '${{ needs.version.outputs.version }}')
+        for job, name in ((build, 'Collect'), (STAGE['jobs']['publish'], 'Publish the staging build and attach its candidates')):
+            self.assertEqual(step(job, name)['env']['BUMP'], '${{ needs.version.outputs.bump }}', name)
+            self.assertIn('--bump "$BUMP"', step(job, name)['run'], name)
 
     def test_crates_are_packaged_after_verification_and_before_the_npm_packs(self):
         names = [s.get('name') for s in STAGE['jobs']['build']['steps']]

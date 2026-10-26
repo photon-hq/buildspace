@@ -326,9 +326,11 @@ Kargo ship images: every main commit is built and tested once, and production
 receives exactly the files that staging tested. Internal Rust crates built from
 the same commit are staged and promoted with them.
 
-Each main push packs the caller's packages twice from the same checkout: a
-staging build `X.Y.Z-staging.<run id>.<attempt>`, published under the `staging`
-dist-tag, and the production candidate `X.Y.Z`. Both are attested and attached to
+Each main push computes the build's version `X.Y.Z` from the pull requests merged
+since the latest production release (see **Versions** below), then packs the
+caller's packages twice from the same checkout: a staging build
+`X.Y.Z-staging.<run id>.<attempt>`, published under the `staging` dist-tag, and
+the production candidate `X.Y.Z`. Both are attested and attached to
 a GitHub prerelease, `<repository>-staging-<staging version>`, with a
 `release-manifest.json` holding their checksums and source commit. Promotion
 publishes a build's stored candidates under `latest` after an environment
@@ -349,10 +351,12 @@ jobs:
       actions: read
       attestations: write
       id-token: write
+      pull-requests: read
     with:
       ci-workflow: ci.yml
       verify: pnpm verify
       pack: pnpm release:pack
+      paths: packages/adapter scripts/pack.mjs # optional: what counts toward the version
       crates: photon-adapter # optional: Rust crates released with the packages
       downstream: fusor-v2 base-bffs
     secrets:
@@ -389,15 +393,16 @@ signed by the old stage workflow can't be.
 
 To promote, run the promote workflow from `main` (Actions, or
 `gh workflow run promote.yml -f staging-version=1.4.0-staging.123456789.1`). Its
-first job shows what will be published and the commits since the current
-`latest`, then the run waits for the `production` environment's reviewers. After
-approval it publishes the candidates, creates the `vX.Y.Z` tag and Release on the
+first job shows what will be published, its version and the changes that version
+was computed from, then the run waits for the `production` environment's
+reviewers. After approval it publishes the candidates, creates the `vX.Y.Z` tag and Release on the
 source commit, and moves `latest`.
 
 - **The `pack` script** is the caller's. It runs twice, with `RELEASE_CHANNEL`
-  (`staging` or `production`), `RELEASE_SUFFIX` (`-staging.<run id>.<attempt>`,
-  or empty) and `PACK_DESTINATION`. It must write one `.tgz` per package to
-  `PACK_DESTINATION`, each versioned `<package.json version>$RELEASE_SUFFIX`, and
+  (`staging` or `production`), `RELEASE_VERSION` (the build's `X.Y.Z`),
+  `RELEASE_SUFFIX` (`-staging.<run id>.<attempt>`, or empty) and
+  `PACK_DESTINATION`. It must write one `.tgz` per package to
+  `PACK_DESTINATION`, each versioned `$RELEASE_VERSION$RELEASE_SUFFIX`, and
   test what it packed. It must leave tracked files unchanged; the job fails
   otherwise. `verify` runs once before both packs. Both run with
   `NODE_AUTH_TOKEN` able to read packages.
@@ -406,7 +411,8 @@ source commit, and moves `latest`.
   `INSTALL_TOKEN` secret and use it in `install`, for example
   `install: pnpm install --frozen-lockfile --config.//registry.example/:_authToken="$INSTALL_TOKEN"`.
   Only the install script sees it; `verify` and `pack` do not.
-- **Several packages** from one repository are staged and promoted together.
+- **Several packages** from one repository are staged and promoted together, all
+  at the build's version, so dependencies between them pin `$RELEASE_VERSION`.
   They are published in dependency order, and the build is named after
   `package` (default `@<owner>/<repository>`), which must be one of them.
   `tag-prefix` overrides the staging tag prefix.
@@ -414,7 +420,9 @@ source commit, and moves `latest`.
   to the stage workflow, in one run, with their own `package`, `tag-prefix`,
   `production-tag-prefix` and `artifact-name`, and their own promote workflow.
   A workflow that promotes several of them in one run, in dependency order,
-  gives each promote call its own `artifact-name` as well.
+  gives each promote call its own `artifact-name` as well. Give each its own
+  `paths` too, usually the paths its push trigger filters on, so a change to one
+  package, or to a service beside them, does not version the others.
   The calls share the run's staging suffix, so a later one (`needs:` the
   earlier) can depend on the staging version the earlier one publishes.
 - **A repository whose `vX.Y.Z` tags already name something else**, such as a
@@ -485,18 +493,48 @@ source commit, and moves `latest`.
   (pin the staging tag to try a staging build). After `verify`, the build job runs
   `cargo package --locked --no-verify --exclude-lockfile` for each crate (Cargo
   1.87+, clean checkout); the `.crate` records its source commit and is attested
-  and attached to both releases. Promotion refuses a crate whose version is not
-  newer than in the latest production release, unless its packaged files are
-  unchanged, and one whose normal or build dependencies from the owner's GitHub
-  repositories, inherited ones included, are not pinned to a `vX.Y.Z` tag with an
-  exact `=X.Y.Z` version. An npm package still names each release, and the job
+  and attached to both releases. Cargo reads a crate's version from its source at
+  the tag, so the version stays the one in `Cargo.toml`; the build's bump says
+  how far it must move. Promotion refuses a crate whose packaged files changed
+  since the latest production release unless its version rose by at least the
+  bump's level (a patch when no change counted), for example `0.4.0` after
+  `0.3.2` for a minor bump. It also refuses one whose normal or build
+  dependencies from the owner's GitHub repositories, inherited ones included,
+  are not pinned to a `vX.Y.Z` tag with an exact `=X.Y.Z` version. An npm package still names each release, and the job
   token reads only the calling repository, so a crate whose build fetches another
   private repository cannot be staged yet.
-- **Versions.** Bump a package's `package.json` version, or a crate's
-  `Cargo.toml` version, before promoting changed contents again; the staging run
-  warns when a candidate cannot be promoted. A package released earlier with
-  byte-identical contents (for example an unchanged sibling in a multi-package
-  repository) is left as it is.
+- **Versions.** A separate read-only job computes the build's version before
+  any caller code runs; `package.json` versions are not read. It starts from the highest stable `<production-tag-prefix>X.Y.Z` tag and
+  reads every first-parent commit on `main` since then that touches `paths`
+  (default: the whole repository). Each commit counts once per merged pull
+  request, by the pull request's title and description, whether it was squashed,
+  merged or rebased; a commit pushed without one counts by its own message.
+  - The largest change decides the bump, by
+    [Conventional Commits](https://www.conventionalcommits.org): `type!:` or a
+    `BREAKING CHANGE:` footer is major, `feat` minor, and anything else a patch,
+    including a title that does not parse, which the run warns about. Below
+    1.0 a breaking change releases `1.0.0`.
+  - Merges between promotions do not add up: from `v1.26.0`, a `fix` stages
+    `1.26.1`, a later `feat` `1.27.0`, a later `docs` still `1.27.0`, and
+    promoting that build makes `v1.27.0` the next starting point.
+  - A `Release-As: X.Y.Z` line in a description raises the version to at least
+    `X.Y.Z`, for an intended major or a line's first version; one at or below the
+    latest release is ignored with a warning. A line with no release yet starts at
+    `0.1.0`, and one with no change since its release keeps its version.
+  - The staging release, the version job's summary and the promotion summary
+    list each change with the release it asks for. The version job reads pull
+    requests, so the stage call needs `pull-requests: read`.
+  - A package released earlier with byte-identical contents is left as it is.
+    When a build's contents changed but no change inside `paths` counted, the
+    staging run warns that it cannot be promoted: widen `paths` or merge a
+    `Release-As`.
+- **Moving to computed versions.** Builds staged before it keep the version
+  their `package.json` gave them and still promote. A caller moving its pins
+  grants `pull-requests: read` to the stage call, passes the paths its push
+  trigger filters on as `paths`, and packs at `$RELEASE_VERSION` instead of the
+  `package.json` version. Where `package.json` is ahead of the latest release
+  with an unpromoted bump, the moving pull request's description carries
+  `Release-As: <that version>` so the bump is kept.
 - **Retries.** Every publish step accepts its own earlier work: a version already
   published with the same integrity, a tag on the same commit, an existing
   release missing assets. Anything else stops before writing. Channel tags never
@@ -509,7 +547,7 @@ source commit, and moves `latest`.
 - `downstream` repositories receive an `internal-package-published` dispatch after
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
-Local validation: `node --test test/package-release.test.mjs` (after
+Local validation: `node --test test/package-release.test.mjs test/release-version.test.mjs` (after
 `npm ci --prefix .github/package-release`) and `python3 -m unittest discover -s test`
 (the crate packaging test runs when `cargo` is installed).
 
