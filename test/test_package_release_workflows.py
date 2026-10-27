@@ -167,9 +167,18 @@ class WorkflowTests(unittest.TestCase):
         steps = STAGE['jobs']['build']['steps']
         pnpm = next(s for s in steps if s.get('uses', '').startswith('pnpm/action-setup@'))
         bun = next(s for s in steps if s.get('uses', '').startswith('oven-sh/setup-bun@'))
-        self.assertEqual(pnpm['if'], "inputs.bun-version == ''")
+        self.assertEqual(pnpm['if'], "inputs.setup-pnpm && inputs.bun-version == ''")
         self.assertEqual(bun['if'], "inputs.bun-version != ''")
         self.assertEqual(bun['with'], {'bun-version': '${{ inputs.bun-version }}', 'no-cache': 'true'})
+
+    def test_an_npm_repository_can_skip_pnpm_without_changing_the_default(self):
+        inputs = STAGE['on']['workflow_call']['inputs']
+        self.assertEqual(inputs['setup-pnpm']['type'], 'boolean')
+        self.assertEqual(inputs['setup-pnpm']['default'], 'true')
+        steps = STAGE['jobs']['build']['steps']
+        node = next(s for s in steps if s.get('uses', '').startswith('actions/setup-node@'))
+        self.assertNotIn('if', node)
+        self.assertEqual(step(STAGE['jobs']['build'], 'Install')['env']['INSTALL'], '${{ inputs.install }}')
 
     def test_an_image_tag_selects_the_build_and_a_released_build_stores_nothing(self):
         resolve = PROMOTE['jobs']['resolve']

@@ -414,6 +414,10 @@ source commit, and moves `latest`.
   `INSTALL_TOKEN` secret and use it in `install`, for example
   `install: pnpm install --frozen-lockfile --config.//registry.example/:_authToken="$INSTALL_TOKEN"`.
   Only the install script sees it; `verify` and `pack` do not.
+- **npm-only repositories.** Set `setup-pnpm: false` and `install: npm ci`.
+  Node supplies npm; the workflow skips pnpm's package-manager-field check.
+  Existing callers still set up their pinned pnpm by default, and `bun-version`
+  continues to select Bun in its place.
 - **Several packages** from one repository are staged and promoted together, all
   at the build's version, so dependencies between them pin `$RELEASE_VERSION`.
   They are published in dependency order, and the build is named after
