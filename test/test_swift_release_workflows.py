@@ -1,4 +1,5 @@
 """Check the Swift stage/promote workflows' trust boundaries and build step."""
+import json
 import os
 from pathlib import Path
 import stat
@@ -165,6 +166,48 @@ class BuildStepTests(unittest.TestCase):
         result = self.build()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('changed tracked files', result.stderr)
+
+
+class CollectStepTests(unittest.TestCase):
+    """Runs the collect step's command line against the real release tools."""
+
+    def collect(self, library):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        temp = Path(tmp.name)
+        for channel in ('staging', 'production'):
+            (temp / 'pack' / channel).mkdir(parents=True)
+            (temp / 'pack' / channel / 'macrocosm-astrolabe.pkg').write_text(f'xar {channel}')
+        bump = {'version': '1.27.0', 'from': 'v1.26.0', 'level': 'minor', 'total': 1, 'changes': [{'number': 91, 'title': 'feat: one', 'level': 'minor'}], 'warnings': []}
+        env = {
+            **os.environ,
+            'RUNNER_TEMP': tmp.name,
+            'RELEASE_TOOLS': str(Path('.github/package-release').resolve()),
+            'PACKAGE_NAME': 'macrocosm-astrolabe',
+            'LIBRARY': 'true' if library else 'false',
+            'BUMP': json.dumps(bump),
+            'STAGING_SUFFIX': '-staging.9.1',
+            'GITHUB_SHA': 'a' * 40,
+            'GITHUB_REPOSITORY': 'photon-hq/macrocosm-astrolabe',
+            'GITHUB_SERVER_URL': 'https://github.com',
+            'GITHUB_RUN_ID': '9',
+            'GITHUB_RUN_ATTEMPT': '1',
+            'GITHUB_OUTPUT': str(temp / 'outputs'),
+        }
+        script = step(STAGE['jobs']['build'], 'Collect')['run']
+        result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads((temp / 'swift-release' / 'release-manifest.json').read_text())
+
+    def test_a_package_build_is_collected_under_its_staging_tag(self):
+        manifest = self.collect(library=False)
+        self.assertEqual(manifest['stagingTag'], 'v1.27.0-staging.9.1')
+        self.assertEqual(manifest['pkg']['staging']['version'], '1.27.0-staging.9.1')
+
+    def test_a_library_build_is_collected_under_its_staging_tag(self):
+        manifest = self.collect(library=True)
+        self.assertEqual(manifest['stagingTag'], 'v1.27.0-staging.9.1')
+        self.assertIsNone(manifest['pkg'])
 
 
 if __name__ == '__main__':

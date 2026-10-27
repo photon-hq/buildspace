@@ -211,7 +211,7 @@ jobs:
           STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
         run: |
           node "$RELEASE_TOOLS/swift-release.mjs" collect --package "$PACKAGE_NAME" --library "$LIBRARY" \
-            --bump "$BUMP" --suffix "$STAGING_SUFFIX" --output "$RUNNER_TEMP/swift-release" \
+            --bump "$BUMP" --suffix="$STAGING_SUFFIX" --output "$RUNNER_TEMP/swift-release" \
             --staging "$RUNNER_TEMP/pack/staging/$PACKAGE_NAME.pkg" --production "$RUNNER_TEMP/pack/production/$PACKAGE_NAME.pkg"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
