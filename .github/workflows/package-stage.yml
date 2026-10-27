@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       pack:
-        description: Script that packs the caller's packages into $PACK_DESTINATION at version <package.json version>$RELEASE_SUFFIX
+        description: Script that packs the caller's packages into $PACK_DESTINATION at version $RELEASE_VERSION$RELEASE_SUFFIX
         required: true
         type: string
       verify:
@@ -16,6 +16,10 @@ on:
         type: string
       crates:
         description: Space-separated Rust crates released with the packages; Cargo resolves them from the build's tags
+        default: ''
+        type: string
+      paths:
+        description: Space-separated git pathspecs whose changes count toward the build's version, such as packages/contract scripts/pack.mjs; defaults to the whole repository
         default: ''
         type: string
       ci-workflow:
@@ -81,8 +85,48 @@ permissions:
   contents: read
 
 jobs:
+  # Never runs the caller's code: computes the build's version from the pull
+  # requests merged since the latest production release.
+  version:
+    if: github.ref == 'refs/heads/main' || inputs.dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bump: ${{ steps.version.outputs.bump }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compute the release version
+        id: version
+        env:
+          PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
+          PATHS: ${{ inputs.paths }}
+        run: node "$RELEASE_TOOLS/package-release.mjs" version --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --paths "$PATHS"
+
   # Runs the caller's code. It can read packages but write nothing.
   build:
+    needs: version
     if: github.ref == 'refs/heads/main' || inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -160,6 +204,7 @@ jobs:
       - name: Pack the staging build and its production candidate
         env:
           PACK: ${{ inputs.pack }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
           STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
         run: |
           set -euo pipefail
@@ -184,11 +229,12 @@ jobs:
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           REGISTRY: ${{ inputs.registry }}
           CRATES: ${{ inputs.crates }}
+          BUMP: ${{ needs.version.outputs.bump }}
           STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" collect \
             --staging "$RUNNER_TEMP/pack/staging" --production "$RUNNER_TEMP/pack/production" \
-            --crates="$CRATES" --crate-directory "$RUNNER_TEMP/pack/crates" \
+            --crates="$CRATES" --crate-directory "$RUNNER_TEMP/pack/crates" --bump "$BUMP" \
             --suffix="$STAGING_SUFFIX" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
             --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" \
             --output "$RUNNER_TEMP/package-release"
@@ -201,7 +247,7 @@ jobs:
 
   # Never runs the caller's code: it attests and publishes the build job's files.
   publish:
-    needs: build
+    needs: [version, build]
     if: github.ref == 'refs/heads/main' && !inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -262,10 +308,11 @@ jobs:
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           REGISTRY: ${{ inputs.registry }}
           CRATES: ${{ inputs.crates }}
+          BUMP: ${{ needs.version.outputs.bump }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/package-release" \
             --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
-            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" --crates="$CRATES"
+            --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" --crates="$CRATES" --bump "$BUMP"
 
   notify-downstream:
     needs: publish

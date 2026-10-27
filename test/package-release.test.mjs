@@ -24,6 +24,8 @@ import {
 const SHA = "a".repeat(40);
 const SUFFIX = "-staging.900.1";
 const REPOSITORY = "photon-hq/adapter";
+const bumpTo = (version, from = "v1.1.0") => ({ version, from, level: "minor", total: 1, changes: [{ number: 7, title: "feat: one", level: "minor" }], warnings: [] });
+const BUMP = bumpTo("1.2.0");
 let root;
 
 beforeEach(() => {
@@ -55,7 +57,7 @@ function crate(directory, { name = "adapter", version = "0.4.0", sha = SHA, dirt
   return file;
 }
 
-function packBoth({ adapter = "1.2.0", core = "0.3.0", suffix = SUFFIX, extra = {} } = {}) {
+function packBoth({ adapter = "1.2.0", core = adapter, suffix = SUFFIX, extra = {} } = {}) {
   for (const [channel, end] of [["staging", suffix], ["production", ""]]) {
     pack(join(root, channel), {
       name: "@photon-hq/adapter",
@@ -76,6 +78,7 @@ const collectBoth = (overrides = {}) =>
     repository: REPOSITORY,
     packageInput: "",
     tagPrefix: "",
+    bump: BUMP,
     output: join(root, "release"),
     runUrl: "https://github.com/photon-hq/adapter/actions/runs/900/attempts/1",
     ...overrides,
@@ -87,9 +90,11 @@ test("collect orders dependencies first and names the build after the repository
   assert.deepEqual(manifest.packages.map(({ name }) => name), ["@photon-hq/adapter-core", "@photon-hq/adapter"]);
   assert.equal(manifest.stagingTag, `adapter-staging-1.2.0${SUFFIX}`);
   assert.equal(manifest.productionTag, "v1.2.0");
+  assert.equal(manifest.formatVersion, 3);
+  assert.deepEqual(manifest.bump, BUMP);
   const [core] = manifest.packages;
-  assert.equal(core.staging.version, `0.3.0${SUFFIX}`);
-  assert.equal(core.production.version, "0.3.0");
+  assert.equal(core.staging.version, `1.2.0${SUFFIX}`);
+  assert.equal(core.production.version, "1.2.0");
   const bytes = readFileSync(join(root, "release", core.production.file));
   assert.equal(core.production.sha256, createHash("sha256").update(bytes).digest("hex"));
   assert.match(core.production.integrity, /^sha512-/);
@@ -99,15 +104,15 @@ test("collect orders dependencies first and names the build after the repository
 test("collect honours an explicit package and tag prefix", async () => {
   packBoth();
   const manifest = await collectBoth({ packageInput: "@photon-hq/adapter-core", tagPrefix: "core-staging-" });
-  assert.equal(manifest.stagingTag, `core-staging-0.3.0${SUFFIX}`);
-  assert.equal(manifest.productionTag, "v0.3.0");
+  assert.equal(manifest.stagingTag, `core-staging-1.2.0${SUFFIX}`);
+  assert.equal(manifest.productionTag, "v1.2.0");
 });
 
 test("collect names the production tag after a prefix where vX.Y.Z is taken", async () => {
   packBoth();
   const manifest = await collectBoth({ packageInput: "@photon-hq/adapter-core", tagPrefix: "core-staging-", productionTagPrefix: "core-v" });
-  assert.equal(manifest.stagingTag, `core-staging-0.3.0${SUFFIX}`);
-  assert.equal(manifest.productionTag, "core-v0.3.0");
+  assert.equal(manifest.stagingTag, `core-staging-1.2.0${SUFFIX}`);
+  assert.equal(manifest.productionTag, "core-v1.2.0");
   for (const productionTagPrefix of ["core-", "Core-v", "-v", "core v", "refs/tags/v"])
     await assert.rejects(collectBoth({ productionTagPrefix }), /Invalid production tag prefix/);
 });
@@ -115,6 +120,8 @@ test("collect names the production tag after a prefix where vX.Y.Z is taken", as
 test("collect refuses packs that do not describe one build", async (t) => {
   const cases = {
     "staging version without the run suffix": () => packBoth({ suffix: "-staging.899.1" }),
+    "packed at another version than the release version": () => packBoth({ adapter: "1.3.0" }),
+    "a package at a version of its own": () => packBoth({ core: "0.3.0" }),
     "prerelease production candidate": () => {
       pack(join(root, "staging"), { name: "@photon-hq/adapter", version: `1.0.0-rc.1${SUFFIX}` });
       pack(join(root, "production"), { name: "@photon-hq/adapter", version: "1.0.0-rc.1" });
@@ -144,6 +151,13 @@ test("collect refuses packs that do not describe one build", async (t) => {
       arrange();
       await assert.rejects(collectBoth());
     });
+  await t.test("no release version", async () => {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root);
+    packBoth();
+    await assert.rejects(collectBoth({ bump: null }), /Invalid release version/);
+    await assert.rejects(collectBoth({ bump: { ...BUMP, level: "huge" } }), /Invalid release version: level huge/);
+  });
 });
 
 test("publish order rejects dependency cycles", () => {
@@ -323,6 +337,7 @@ const publishWith = (fake, overrides = {}) =>
     tagPrefix: "",
     runId: "900",
     runAttempt: "1",
+    ...(overrides.channel !== "production" && { bump: BUMP }),
     run: fake.run,
     registry: fake.registry,
     log: () => {},
@@ -336,7 +351,7 @@ test("staging publication parks, verifies, records the release, then moves the c
   const { tag } = await publishWith(fake, { runAttempt: "2" });
   assert.equal(tag, `adapter-staging-1.2.0${SUFFIX}`);
   assert.deepEqual(commands(fake.calls, "npm", "publish").map((call) => call.at(-3)), ["candidate-900-2", "candidate-900-2"]);
-  assert.match(commands(fake.calls, "npm", "publish")[0][2], /adapter-core-0\.3\.0-staging/);
+  assert.match(commands(fake.calls, "npm", "publish")[0][2], /adapter-core-1\.2\.0-staging/);
   assert.equal(fake.state.tags[tag], SHA);
   const release = fake.state.releases[tag];
   assert.equal(release.prerelease, true);
@@ -344,14 +359,16 @@ test("staging publication parks, verifies, records the release, then moves the c
   assert.deepEqual(release.assets.sort(), [
     "photon-hq-adapter-1.2.0-staging.900.1.tgz",
     "photon-hq-adapter-1.2.0.tgz",
-    "photon-hq-adapter-core-0.3.0-staging.900.1.tgz",
-    "photon-hq-adapter-core-0.3.0.tgz",
+    "photon-hq-adapter-core-1.2.0-staging.900.1.tgz",
+    "photon-hq-adapter-core-1.2.0.tgz",
     "release-manifest.json",
   ]);
   assert.match(release.notes, /staging-version: 1\.2\.0-staging\.900\.1/);
+  assert.ok(release.notes.includes("### Version `1.2.0`\n\nA minor release after [`v1.1.0`](https://github.com/photon-hq/adapter/releases/tag/v1.1.0)."));
+  assert.ok(release.notes.includes("- **minor** feat: one ([#7](https://github.com/photon-hq/adapter/pull/7))"));
   const distTags = commands(fake.calls, "npm", "dist-tag");
   assert.deepEqual(distTags.map((call) => call.slice(2, 5)), [
-    ["add", `@photon-hq/adapter-core@0.3.0${SUFFIX}`, "staging"],
+    ["add", `@photon-hq/adapter-core@1.2.0${SUFFIX}`, "staging"],
     ["add", `@photon-hq/adapter@1.2.0${SUFFIX}`, "staging"],
     ["rm", "@photon-hq/adapter-core", "candidate-900-2"],
     ["rm", "@photon-hq/adapter", "candidate-900-2"],
@@ -415,6 +432,8 @@ test("the publishing job trusts no manifest claim the files and run do not suppo
     "another source commit": [(m) => { m.sourceSha = "b".repeat(40); }, /source/],
     "another run's suffix": [(m) => { m.suffix = "-staging.1.1"; for (const pkg of m.packages) pkg.staging.version = `${pkg.production.version}-staging.1.1`; }, /suffix/],
     "unstable candidate": [(m) => { m.packages[0].production.version = "0.3.0-rc.1"; }, /versions/],
+    "another release version": [(m) => { m.bump.version = "1.3.0"; }, /bump, which is not the version this run computed/],
+    "bump dropped": [(m) => { delete m.bump; }, /bump version undefined/],
     "file outside the release": [(m) => { m.packages[0].staging.file = "../escape.tgz"; }, /file/],
     "another package name": [(m) => { m.packages[0].name = "@photon-hq/other"; }, /holds|publish order|file/],
   };
@@ -433,12 +452,12 @@ test("a channel tag never moves to an older version", async () => {
   const fake = world({ staging: { "@photon-hq/adapter": "9.0.0-staging.1.1" } });
   const logs = [];
   await publishWith(fake, { log: (line) => logs.push(line) });
-  assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call[3]), [`@photon-hq/adapter-core@0.3.0${SUFFIX}`]);
+  assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call[3]), [`@photon-hq/adapter-core@1.2.0${SUFFIX}`]);
   assert.ok(logs.some((line) => line.includes("Kept @photon-hq/adapter@staging on 9.0.0-staging.1.1")));
 });
 
 const NPMJS = "https://registry.npmjs.org";
-const PUBLIC = { packageInput: "@photon-ai/otel", registryUrl: NPMJS };
+const PUBLIC = { packageInput: "@photon-ai/otel", registryUrl: NPMJS, bump: bumpTo("3.9.0", "v3.8.2") };
 const PUBLIC_STAGING = `3.9.0${SUFFIX}`;
 
 function packPublic() {
@@ -527,7 +546,7 @@ test("a public build is promoted on npmjs, and only there", async () => {
   fake.calls.length = 0;
   const { manifest: resolved, changes } = await resolveWith(fake, { ...PUBLIC, version: PUBLIC_STAGING });
   assert.deepEqual(resolved, manifest);
-  assert.equal(changes.previousTag, "v3.8.2");
+  assert.equal(changes, undefined);
   await assert.rejects(resolveWith(fake, { packageInput: "@photon-ai/otel", version: PUBLIC_STAGING }), /registry https:\/\/registry\.npmjs\.org/);
 
   await publishWith(fake, { ...PUBLIC, directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
@@ -538,6 +557,7 @@ test("a public build is promoted on npmjs, and only there", async () => {
   ]);
   assert.equal(fake.state.tags["v3.9.0"], SHA);
   assert.equal(fake.state.releases["v3.9.0"].prerelease, false);
+  assert.ok(fake.state.releases["v3.9.0"].notes.includes("A minor release after [`v3.8.2`](https://github.com/photon-hq/adapter/releases/tag/v3.8.2)."));
 });
 
 test("a build staged before registries were recorded is promoted to GitHub Packages", async () => {
@@ -627,15 +647,34 @@ test("promotion resolves the current staging build and verifies each candidate's
   assert.equal(fake.state.tags["v1.2.0"], SHA);
   const release = fake.state.releases["v1.2.0"];
   assert.equal(release.prerelease, false);
-  assert.deepEqual(release.assets.sort(), ["photon-hq-adapter-1.2.0.tgz", "photon-hq-adapter-core-0.3.0.tgz", "release-manifest.json"]);
+  assert.deepEqual(release.assets.sort(), ["photon-hq-adapter-1.2.0.tgz", "photon-hq-adapter-core-1.2.0.tgz", "release-manifest.json"]);
   assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call.slice(3, 5)), [
-    ["@photon-hq/adapter-core@0.3.0", "latest"],
+    ["@photon-hq/adapter-core@1.2.0", "latest"],
     ["@photon-hq/adapter@1.2.0", "latest"],
   ]);
 });
 
+/** Rewrites the staged manifest as the stage workflow wrote it before it computed versions. */
+function asLegacy() {
+  const path = join(root, "release/release-manifest.json");
+  const { bump: _, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
+  writeFileSync(path, JSON.stringify({ ...manifest, formatVersion: 2 }));
+}
+
+test("promotion shows the version a build's changes computed", async () => {
+  const { fake } = await stagedWorld({ world: { tags: { "v1.1.0": "c".repeat(40) } } });
+  const { manifest, changes } = await resolveWith(fake);
+  assert.equal(changes, undefined);
+  assert.deepEqual(manifest.bump, BUMP);
+  await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
+  assert.equal(commands(fake.calls, "gh", "api").some((call) => call.some((arg) => arg.includes("/compare/v1.1.0"))), false);
+  assert.ok(fake.state.releases["v1.2.0"].notes.includes("- **minor** feat: one ([#7](https://github.com/photon-hq/adapter/pull/7))"));
+});
+
 test("promotion lists the changes since the current production release", async () => {
   const { fake } = await stagedWorld({ world: { tags: { "v1.1.0": "c".repeat(40) } } });
+  // A build staged before versions were computed lists the commits instead.
+  asLegacy();
   fake.registry = ((registry) => async (name) => {
     const metadata = await registry(name);
     if (name === "@photon-hq/adapter") metadata["dist-tags"].latest = "1.1.0";
@@ -653,6 +692,7 @@ test("promotion under a production tag prefix leaves the repository's vX.Y.Z tag
     world: { tags: { "v1.2.0": "b".repeat(40), "v1.1.0": "b".repeat(40), "adapter-v1.1.0": "c".repeat(40) } },
   });
   assert.equal(manifest.productionTag, "adapter-v1.2.0");
+  asLegacy();
   fake.registry = ((registry) => async (name) => {
     const metadata = await registry(name);
     if (name === "@photon-hq/adapter") metadata["dist-tags"].latest = "1.1.0";
@@ -769,8 +809,8 @@ test("promotion refuses unsafe candidates before anything is published", async (
     await assert.rejects(resolveWith(fake), /verification failed/);
   });
   await t.test("not newer than latest", async () => {
-    const { fake } = await stagedWorld({ world: { latest: { "@photon-hq/adapter-core": "0.3.0" } } });
-    await assert.rejects(resolveWith(fake), /not newer than latest 0\.3\.0/);
+    const { fake } = await stagedWorld({ world: { latest: { "@photon-hq/adapter-core": "1.2.0" } } });
+    await assert.rejects(resolveWith(fake), /not newer than latest 1\.2\.0; stage a newer build/);
   });
   await t.test("depends on a staging build", async () => {
     const { fake } = await stagedWorld({ pack: { extra: { peerDependencies: { "@photon-hq/contracts": "0.25.0-staging.39.1" } } } });
@@ -814,7 +854,7 @@ test("collect lays out the crates packaged from the source commit", async () => 
   crate(join(root, "crates"), { name: "adapter-macros", version: "0.2.0" });
   crate(join(root, "crates"));
   const manifest = await collectBoth({ crates: ["adapter", "adapter-macros"], crateDirectory: join(root, "crates") });
-  assert.equal(manifest.formatVersion, 2);
+  assert.equal(manifest.formatVersion, 3);
   assert.deepEqual(manifest.crates.map(({ name, version, file }) => [name, version, file]), [
     ["adapter", "0.4.0", "adapter-0.4.0.crate"],
     ["adapter-macros", "0.2.0", "adapter-macros-0.2.0.crate"],
@@ -852,7 +892,7 @@ test("a manifest from before crates reads as a build without any", async () => {
   const directory = mkdtempSync(join(root, "v1-"));
   writeFileSync(join(directory, "release-manifest.json"), JSON.stringify({ formatVersion: 1, packages: [] }));
   assert.deepEqual((await readManifest(directory)).crates, []);
-  writeFileSync(join(directory, "release-manifest.json"), JSON.stringify({ formatVersion: 3, packages: [], crates: [] }));
+  writeFileSync(join(directory, "release-manifest.json"), JSON.stringify({ formatVersion: 4, packages: [], crates: [] }));
   await assert.rejects(readManifest(directory), /Unsupported/);
 });
 
@@ -920,7 +960,7 @@ test("promotion verifies each crate and releases it under the production tag", a
   const { manifest: resolved } = await resolveWith(fake);
   assert.deepEqual(resolved.crates, manifest.crates);
   const attested = commands(fake.calls, "gh", "attestation").map((call) => call[3].split("/").at(-1));
-  assert.deepEqual(attested.sort(), ["adapter-0.4.0.crate", "photon-hq-adapter-1.2.0.tgz", "photon-hq-adapter-core-0.3.0.tgz"]);
+  assert.deepEqual(attested.sort(), ["adapter-0.4.0.crate", "photon-hq-adapter-1.2.0.tgz", "photon-hq-adapter-core-1.2.0.tgz"]);
 
   await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
   const release = fake.state.releases["v1.2.0"];
@@ -943,6 +983,18 @@ test("promotion keeps an unchanged crate's version and refuses reusing or loweri
     const { fake } = await stagedWorld({ crates: [{}] });
     releasedBefore(fake, [{ version: "0.5.0" }]);
     await assert.rejects(resolveWith(fake), /adapter 0\.4\.0 is not newer than 0\.5\.0 in v1\.1\.0/);
+  });
+  await t.test("moved less than the build's level", async () => {
+    const names = { bump: { ...BUMP, level: "major" } };
+    const { fake } = await stagedWorld({ crates: [{}], names });
+    releasedBefore(fake, [{ version: "0.3.0" }]);
+    await assert.rejects(resolveWith(fake), /adapter 0\.4\.0 is below 1\.0\.0, which a major change since v1\.1\.0 requires; set its Cargo\.toml version to at least 1\.0\.0/);
+  });
+  await t.test("a build staged before versions were computed needs any newer version", async () => {
+    const { fake } = await stagedWorld({ crates: [{}], names: { bump: { ...BUMP, level: "major" } } });
+    asLegacy();
+    releasedBefore(fake, [{ version: "0.3.9" }]);
+    await resolveWith(fake);
   });
   await t.test("tampered release", async () => {
     const { fake } = await stagedWorld({ crates: [{}] });

@@ -1,0 +1,151 @@
+name: Promote Swift package
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: The package-name the build was staged with
+        required: true
+        type: string
+      library:
+        description: The build is a SwiftPM library, released by its tag alone
+        default: false
+        type: boolean
+      staging-version:
+        description: Staging version of the build to promote, such as 1.4.0-staging.123456789.1; defaults to the newest staging build
+        default: ''
+        type: string
+      environment:
+        description: Environment whose required reviewers approve the promotion
+        default: production
+        type: string
+      jamf-url:
+        description: Jamf Pro instance to upload the promoted package to; leave empty to skip Jamf
+        default: ''
+        type: string
+      jamf-package-name:
+        description: Package record to update in Jamf Pro; defaults to the file stem, <package-name>
+        default: ''
+        type: string
+      jamf-package-priority:
+        description: Package priority in Jamf Pro; leave empty to keep the current one
+        default: ''
+        type: string
+    secrets:
+      JAMF_CLIENT_ID:
+        required: false
+      JAMF_CLIENT_SECRET:
+        required: false
+    outputs:
+      version:
+        value: ${{ jobs.resolve.outputs.version }}
+      pending:
+        description: Whether anything was left to release; false for a build already released
+        value: ${{ jobs.resolve.outputs.pending }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Read-only: finds the build, proves where it came from, and shows the
+  # reviewer what an approval will release.
+  resolve:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      pending: ${{ steps.resolve.outputs.pending }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - name: Resolve and verify the candidate
+        id: resolve
+        env:
+          STAGING_VERSION: ${{ inputs.staging-version }}
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          LIBRARY: ${{ inputs.library }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/swift-stage.yml
+        run: |
+          node "$RELEASE_TOOLS/swift-release.mjs" resolve --version "$STAGING_VERSION" \
+            --package "$PACKAGE_NAME" --library "$LIBRARY" --environment "$ENVIRONMENT" \
+            --signer-workflow "$SIGNER_WORKFLOW" --output "$RUNNER_TEMP/swift-release"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.resolve.outputs.pending == 'true'
+        with:
+          name: swift-promotion
+          path: ${{ runner.temp }}/swift-release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Waits for the environment's reviewers, then releases the verified build.
+  publish:
+    needs: resolve
+    if: needs.resolve.outputs.pending == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+    concurrency:
+      group: swift-production-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swift-promotion
+          path: ${{ runner.temp }}/swift-release
+      - name: Release the candidate
+        env:
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          LIBRARY: ${{ inputs.library }}
+        run: |
+          node "$RELEASE_TOOLS/swift-release.mjs" publish --channel production --directory "$RUNNER_TEMP/swift-release" \
+            --package "$PACKAGE_NAME" --library "$LIBRARY"
+
+  # The artifact holds one .pkg, the released candidate, which Jamf updates its record with.
+  jamf-upload:
+    needs: [resolve, publish]
+    if: inputs.jamf-url != '' && !inputs.library
+    permissions:
+      contents: read
+    uses: photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@5e46776e677d87ce10daa134ce171484e5952e90
+    with:
+      artifact_name: swift-promotion
+      package_name: ${{ inputs.jamf-package-name }}
+      jamf_url: ${{ inputs.jamf-url }}
+      package_priority: ${{ inputs.jamf-package-priority }}
+    secrets:
+      JAMF_CLIENT_ID: ${{ secrets.JAMF_CLIENT_ID }}
+      JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}

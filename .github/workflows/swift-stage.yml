@@ -1,0 +1,271 @@
+name: Stage Swift package
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: Executable product to build and the name of its .pkg; for a library, the name its releases carry
+        required: true
+        type: string
+      identifier:
+        description: Package identifier for pkgbuild, such as codes.photon.macrocosm-astrolabe; a library has none
+        default: ''
+        type: string
+      library:
+        description: A SwiftPM library, released by its tags alone; nothing is built or packaged
+        default: false
+        type: boolean
+      scripts-path:
+        description: Directory holding the package's preinstall and postinstall scripts
+        default: ''
+        type: string
+      payload-path:
+        description: Directory whose contents mirror the install root, added to the package
+        default: ''
+        type: string
+      resource-bundles:
+        description: Space-separated SwiftPM resource bundles installed beside the binary
+        default: ''
+        type: string
+      entitlements:
+        description: Entitlements plist the binary is ad-hoc signed with
+        default: ''
+        type: string
+      private-deps:
+        description: Mint an APP_ID/APP_PRIVATE_KEY token so SwiftPM can clone the owner's private dependencies
+        default: false
+        type: boolean
+      paths:
+        description: Space-separated git pathspecs whose changes count toward the build's version; defaults to the whole repository
+        default: ''
+        type: string
+      ci-workflow:
+        description: Workflow file (for example ci.yml) whose push run on this exact commit must succeed first
+        default: ''
+        type: string
+      ci-wait-minutes:
+        default: 20
+        type: number
+      environment:
+        default: staging
+        type: string
+      dry-run:
+        description: Build and package only; the only mode allowed outside main
+        default: false
+        type: boolean
+    secrets:
+      SECRET_ENV_VARS:
+        description: Lines added to the .env both builds compile with
+        required: false
+      APP_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
+    outputs:
+      staging-version:
+        value: ${{ jobs.build.outputs.staging-version }}
+      production-version:
+        value: ${{ jobs.build.outputs.production-version }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Never runs the caller's code: computes the build's version from the pull
+  # requests merged since the latest vX.Y.Z release.
+  version:
+    if: github.ref == 'refs/heads/main' || inputs.dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bump: ${{ steps.version.outputs.bump }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Compute the release version
+        id: version
+        env:
+          PATHS: ${{ inputs.paths }}
+        run: node "$RELEASE_TOOLS/package-release.mjs" version --production-tag-prefix v --paths "$PATHS"
+
+  # Runs the caller's code. It can read the repository but write nothing.
+  build:
+    needs: version
+    if: github.ref == 'refs/heads/main' || inputs.dry-run
+    runs-on: ${{ inputs.library && 'ubuntu-24.04' || 'macos-26' }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      staging-version: ${{ steps.collect.outputs.staging-version }}
+      production-version: ${{ steps.collect.outputs.production-version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require CI to pass on this exact commit
+        if: inputs.ci-workflow != '' && !inputs.dry-run
+        env:
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
+        run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
+      - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
+        if: ${{ !inputs.library }}
+      - name: Mint a token for private dependencies
+        id: dependency-token
+        if: inputs.private-deps && !inputs.library
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+      # Both builds share one checkout and build directory. BetterEnv declares
+      # .env as a build input, so the second build recompiles what reads it.
+      - name: Build the staging package and its production candidate
+        if: ${{ !inputs.library }}
+        env:
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          IDENTIFIER: ${{ inputs.identifier }}
+          SCRIPTS_PATH: ${{ inputs.scripts-path }}
+          PAYLOAD_PATH: ${{ inputs.payload-path }}
+          RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
+          ENTITLEMENTS: ${{ inputs.entitlements }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
+          SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
+          DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::Invalid package name: $PACKAGE_NAME" >&2; exit 1; }
+          [[ -n "$IDENTIFIER" ]] || { echo "::error::A package needs an identifier" >&2; exit 1; }
+          test -z "$(git status --porcelain --untracked-files=no)"
+          if [[ -n "$DEPENDENCY_TOKEN" ]]; then
+            git config --global url."https://x-access-token:${DEPENDENCY_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+          for channel in staging production; do
+            version="$RELEASE_VERSION"
+            if [[ "$channel" == staging ]]; then version="$RELEASE_VERSION$STAGING_SUFFIX"; fi
+            printf '%s\n' "VERSION=$version" "BUILD_ENVIRONMENT=production" "RELEASE_CHANNEL=$channel" "$SECRET_ENV_VARS" > .env
+            swift build -c release
+            binary=".build/release/$PACKAGE_NAME"
+            if [[ -n "$ENTITLEMENTS" ]]; then codesign -s - --entitlements "$ENTITLEMENTS" -f "$binary"; fi
+            root="$RUNNER_TEMP/pkgroot/$channel"
+            mkdir -p "$root/usr/local/bin" "$RUNNER_TEMP/pack/$channel"
+            cp "$binary" "$root/usr/local/bin/"
+            if [[ -n "$PAYLOAD_PATH" ]]; then cp -R "$PAYLOAD_PATH/" "$root/"; fi
+            for bundle in $RESOURCE_BUNDLES; do cp -R ".build/release/$bundle" "$root/usr/local/bin/"; done
+            args=(--root "$root" --identifier "$IDENTIFIER" --install-location / --version "$version")
+            if [[ -n "$SCRIPTS_PATH" ]]; then args+=(--scripts "$SCRIPTS_PATH"); fi
+            pkgbuild "${args[@]}" "$RUNNER_TEMP/pack/$channel/$PACKAGE_NAME.pkg"
+          done
+          rm -f .env
+          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            git status --short --untracked-files=no >&2
+            echo "::error::The build changed tracked files" >&2
+            exit 1
+          fi
+      - name: Collect
+        id: collect
+        env:
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          LIBRARY: ${{ inputs.library }}
+          BUMP: ${{ needs.version.outputs.bump }}
+          STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
+        run: |
+          node "$RELEASE_TOOLS/swift-release.mjs" collect --package "$PACKAGE_NAME" --library "$LIBRARY" \
+            --bump "$BUMP" --suffix "$STAGING_SUFFIX" --output "$RUNNER_TEMP/swift-release" \
+            --staging "$RUNNER_TEMP/pack/staging/$PACKAGE_NAME.pkg" --production "$RUNNER_TEMP/pack/production/$PACKAGE_NAME.pkg"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swift-release
+          path: ${{ runner.temp }}/swift-release/
+          if-no-files-found: error
+          retention-days: 7
+
+  # Never runs the caller's code: attests the build job's files and publishes them.
+  publish:
+    needs: [version, build]
+    if: github.ref == 'refs/heads/main' && !inputs.dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    concurrency:
+      group: swift-staging-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: swift-release
+          path: ${{ runner.temp }}/swift-release
+      # Promotion verifies the candidate's attestation before releasing it.
+      - name: Attest the staging package and its production candidate
+        if: ${{ !inputs.library }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/swift-release/*.pkg
+            ${{ runner.temp }}/swift-release/*.pkg.candidate
+      - name: Publish the staging build and attach its candidate
+        env:
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          LIBRARY: ${{ inputs.library }}
+          BUMP: ${{ needs.version.outputs.bump }}
+        run: |
+          node "$RELEASE_TOOLS/swift-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/swift-release" \
+            --package "$PACKAGE_NAME" --library "$LIBRARY" --bump "$BUMP"
