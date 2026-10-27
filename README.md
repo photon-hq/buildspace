@@ -888,8 +888,9 @@ jobs:
 `.github/workflows/swift-stage.yml` and `.github/workflows/swift-promote.yml` release
 Swift macOS `.pkg` packages, and SwiftPM libraries, the way
 [Package Stage and Promote](#package-stage-and-promote) releases npm packages:
-every main commit is built once, staging Macs run it, and production receives
-the exact package staging ran. Versions follow the same rule (see **Versions**
+every main commit is built once, into a staging package that staging Macs run
+and a production candidate from the same checkout, and promotion releases that
+candidate without rebuilding it. Versions follow the same rule (see **Versions**
 there) under `vX.Y.Z` tags.
 
 Each main push, after `ci-workflow` passes on that commit:
@@ -909,11 +910,13 @@ Each main push, after `ci-workflow` passes on that commit:
    first `.pkg` of the newest release on the prerelease channel, so staging Macs
    pick up every main commit, and the candidate's name keeps them off it.
 
-Promotion, dispatched from `main`, proves where the candidate came from and
-waits for the `production` environment's reviewers. After approval it tags
+Promotion, dispatched from `main` (a dispatch from another branch fails), proves
+where the candidate came from and waits for the `production` environment's
+reviewers. After approval it tags
 `vX.Y.Z` on the source commit, publishes the release with the candidate as
 `<package-name>.pkg`, and uploads that package to Jamf Pro when `jamf-url` is
-set. Nothing is rebuilt.
+set, building the uploader from the same pinned `jamf-package-updater` commit.
+Nothing is rebuilt.
 
 ```yaml
 # .github/workflows/release.yml

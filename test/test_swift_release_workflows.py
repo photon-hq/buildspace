@@ -70,7 +70,9 @@ class WorkflowTests(unittest.TestCase):
 
     def test_promotion_resolves_read_only_and_releases_behind_the_environment(self):
         resolve = PROMOTE['jobs']['resolve']
-        self.assertEqual(resolve['if'], "github.ref == 'refs/heads/main'")
+        self.assertNotIn('if', resolve)
+        self.assertEqual(resolve['steps'][0]['name'], 'Require a dispatch from main')
+        self.assertIn('"$GITHUB_REF" != refs/heads/main', resolve['steps'][0]['run'])
         self.assertFalse(any(level == 'write' for level in resolve['permissions'].values()))
         self.assertEqual(step(resolve, 'Resolve and verify the candidate')['env']['SIGNER_WORKFLOW'], '${{ job.workflow_repository }}/.github/workflows/swift-stage.yml')
         upload = next(s for s in resolve['steps'] if 'upload-artifact' in s.get('uses', ''))
@@ -89,6 +91,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(jamf['if'], "inputs.jamf-url != '' && !inputs.library")
         self.assertTrue(jamf['uses'].startswith('photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@'))
         self.assertEqual(jamf['with']['artifact_name'], 'swift-promotion')
+        self.assertEqual(jamf['with']['tool_ref'], jamf['uses'].rsplit('@', 1)[1])
 
 
 def executable(path, body):
