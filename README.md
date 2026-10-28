@@ -1414,6 +1414,13 @@ Individual building blocks that the workflows above are assembled from. Use thes
 
 Decides whether a PR should trigger a release based on its labels. Works on both PR events and push events (looks up the merged PR).
 
+On a push or manual run, it paginates the commit's associated pull requests and
+selects the merged result matching that commit and base branch. API errors and
+ambiguous owning matches fail without emitting labels. Other associations
+supply no labels, leaving explicit manual release overrides to the caller.
+`default-on-push` applies only when GitHub confirms an empty association list,
+never when lookup fails or the owning pull request has no labels.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
