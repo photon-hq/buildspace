@@ -189,7 +189,7 @@ The examples above use `@main`, which picks up every BuildSpace change the momen
 uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@<reviewed-commit-sha>
 ```
 
-Get the current commit with `git ls-remote https://github.com/photon-hq/buildspace refs/heads/main`. Moving the pin is a pull request in your repository, so each BuildSpace change is reviewed there, and a stage workflow's dry run tests it, before it ships. BuildSpace has no releases of its own: merging to `main` is the release. The `v1.x` tags, up to `v1.11.0`, stay for existing references and no longer move.
+Get the current commit with `git ls-remote https://github.com/photon-hq/buildspace refs/heads/main`. Moving the pin is a pull request in your repository, so each BuildSpace change is reviewed there, and a stage workflow's dry run tests it, before it ships. BuildSpace has no releases or tags of its own: merging to `main` is the release. The old `v1.x` tags and releases were deleted, so a reference to one no longer resolves; pin a commit instead.
 
 ---
 
