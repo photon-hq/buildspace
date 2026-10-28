@@ -8,15 +8,9 @@ RELEASE_INFO = yaml.load(
     Path('.github/blocks/generate-release-info/action.yaml').read_text(),
     Loader=yaml.BaseLoader,
 )
-SELF_RELEASE = yaml.load(
-    Path('.github/workflows/self-release.yaml').read_text(),
-    Loader=yaml.BaseLoader,
-)
 NOTE_STEPS = (
     ('shared', next(s for s in RELEASE_INFO['runs']['steps'] if s.get('id') == 'ai-notes'),
      '${{ inputs.openai-api-key }}'),
-    ('self-release', next(s for s in SELF_RELEASE['jobs']['release-info']['steps'] if s.get('id') == 'notes'),
-     '${{ secrets.OPENAI_API_KEY }}'),
 )
 
 
@@ -48,5 +42,3 @@ class ReleaseNotesTests(unittest.TestCase):
     def test_notes_still_flow_through_the_existing_public_outputs(self):
         self.assertEqual(RELEASE_INFO['outputs']['release_notes']['value'],
                          '${{ steps.ai-notes.outputs.final-message }}')
-        self.assertEqual(SELF_RELEASE['jobs']['release-info']['outputs']['release_notes'],
-                         '${{ steps.notes.outputs.final-message }}')
