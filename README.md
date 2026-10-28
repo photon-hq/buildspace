@@ -1402,6 +1402,32 @@ Individual building blocks that the workflows above are assembled from. Use thes
 
 ---
 
+### collect-release-context
+
+**Path:** `.github/blocks/collect-release-context/action.yaml`
+
+Reads release data from an existing full checkout with tags. It requires Bash,
+Git and Python 3, but no credentials, model or publishing access.
+
+Pass the required `release-tag` and optional `release-notes`. The action returns
+`version` (one leading `v` removed), unchanged `release_tag` and `release_notes`,
+`previous_tag` (empty for the first release), `reviewers`, and `changes_diff`.
+It keeps creation-date tag order and filters team entries out of CODEOWNERS.
+The diff ends at the selected tag, even when the checkout's HEAD is newer. Its
+first-release base is Git's empty tree. Missing tags fail. The diff is capped at
+100000 characters, with NUL bytes removed and a notice when truncated.
+
+```yaml
+- uses: actions/checkout@v5
+  with:
+    fetch-depth: 0
+- uses: photon-hq/buildspace/.github/blocks/collect-release-context@main
+  id: context
+  with:
+    release-tag: ${{ github.event.release.tag_name }}
+    release-notes: ${{ github.event.release.body }}
+```
+
 ### check-pr-label
 
 **Path:** `.github/blocks/check-pr-label/action.yaml`
