@@ -1,14 +1,19 @@
 name: "Comment on PR"
-description: "Post or update a comment on a pull request"
+description: "Post, update, or remove a marked comment on a pull request"
 
 inputs:
   message:
     description: "The comment body (markdown supported)"
-    required: true
+    required: false
+    default: ""
   comment-key:
     description: "A unique string used to find and update an existing comment instead of creating a new one"
     required: false
     default: ""
+  state:
+    description: "Use present (default) to create/update, or absent to remove the first comment with a nonempty comment-key"
+    required: false
+    default: "present"
 
 runs:
   using: composite
@@ -18,6 +23,7 @@ runs:
       env:
         COMMENT_MESSAGE: ${{ inputs.message }}
         COMMENT_KEY: ${{ inputs.comment-key }}
+        COMMENT_STATE: ${{ inputs.state }}
       with:
         script: |
           const message = process.env.COMMENT_MESSAGE;
@@ -29,6 +35,16 @@ runs:
             return;
           }
 
+          const state = process.env.COMMENT_STATE || 'present';
+          if (!['present', 'absent'].includes(state)) {
+            throw new Error('Comment state must be present or absent.');
+          }
+          if (state === 'absent' && !commentKey?.trim()) {
+            throw new Error('Removing a comment requires a nonempty comment-key.');
+          }
+          if (commentKey && /[\r\n]|<!--|-->/.test(commentKey)) {
+            throw new Error('Comment keys cannot contain line breaks or HTML comment delimiters.');
+          }
           const { owner, repo } = context.repo;
           const issue_number = pr.number;
 
@@ -36,11 +52,18 @@ runs:
             const marker = `<!-- comment-key: ${commentKey} -->`;
             const body = `${marker}\n${message}`;
 
-            const { data: comments } = await github.rest.issues.listComments({
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100
             });
 
             const existing = comments.find(c => c.body.includes(marker));
+
+            if (state === 'absent') {
+              if (existing) {
+                await github.rest.issues.deleteComment({owner, repo, comment_id: existing.id});
+              }
+              return;
+            }
 
             if (existing) {
               await github.rest.issues.updateComment({

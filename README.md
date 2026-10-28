@@ -1454,6 +1454,11 @@ never when lookup fails or the owning pull request has no labels.
 
 Uses AI to read the project's `README.md` alongside the PR's changed files and determine whether the documentation needs updating. Returns a boolean verdict and a one-sentence explanation. This is the block that powers the [Check README workflow](#check-readme).
 
+The README and skills checks read every changed-file page and compare the result
+with the PR's file count. An incomplete or capped list fails the check. Both
+checks require a complete verdict and a nonempty reason; empty or malformed
+model output fails without emitting a clean result or clearing an existing warning.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
@@ -1929,14 +1934,19 @@ Builds and publishes one owner-scoped npm package to GitHub Packages. It uses an
 
 **Path:** `.github/blocks/comment-on-pr/action.yaml`
 
-Posts or updates a single comment on a pull request. When a `comment-key` is provided, subsequent calls with the same key update the existing comment instead of creating a new one.
+Posts, updates, or removes a marked comment on a pull request. With a
+`comment-key`, it searches every comment page and updates the first matching
+comment. Other markers and later duplicates remain unchanged. Without a pull
+request payload, it skips without making API calls.
+Without a key, the default `present` state creates an unmarked comment.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `message` | string | Yes | — | Comment body (markdown supported) |
+| `message` | string | No | `""` | Comment body for the default `present` state (markdown supported) |
 | `comment-key` | string | No | `""` | Unique key to find and update an existing comment |
+| `state` | string | No | `present` | `present` creates or updates; `absent` removes the first matching comment and requires a nonempty key |
 
 #### Usage
 
