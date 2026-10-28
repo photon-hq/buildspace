@@ -19,6 +19,10 @@ on:
         description: Environment whose required reviewers approve the promotion
         default: production
         type: string
+      private-deps:
+        description: Mint an APP_ID/APP_PRIVATE_KEY token so promotion can read the releases of the owner's private dependencies
+        default: false
+        type: boolean
       jamf-url:
         description: Jamf Pro instance to upload the promoted package to; leave empty to skip Jamf
         default: ''
@@ -32,6 +36,10 @@ on:
         default: ''
         type: string
     secrets:
+      APP_ID:
+        required: false
+      APP_PRIVATE_KEY:
+        required: false
       JAMF_CLIENT_ID:
         required: false
       JAMF_CLIENT_SECRET:
@@ -47,8 +55,9 @@ permissions:
   contents: read
 
 jobs:
-  # Read-only: finds the build, proves where it came from, and shows the
-  # reviewer what an approval will release.
+  # Read-only: finds the build, proves where it came from and that it depends
+  # only on the owner's production releases, and shows the reviewer what an
+  # approval will release.
   resolve:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -80,6 +89,16 @@ jobs:
           git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
           npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
           echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      # This job runs no caller code, so the token only ever reads releases.
+      - name: Mint a token to read private dependencies
+        id: dependency-token
+        if: inputs.private-deps
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
       - name: Resolve and verify the candidate
         id: resolve
         env:
@@ -88,6 +107,7 @@ jobs:
           LIBRARY: ${{ inputs.library }}
           ENVIRONMENT: ${{ inputs.environment }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/swift-stage.yml
+          DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
         run: |
           node "$RELEASE_TOOLS/swift-release.mjs" resolve --version "$STAGING_VERSION" \
             --package "$PACKAGE_NAME" --library "$LIBRARY" --environment "$ENVIRONMENT" \

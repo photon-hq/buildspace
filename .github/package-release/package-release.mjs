@@ -45,15 +45,16 @@ const fileName = (name, version) =>
 const crateFile = (name, version) => `${name}-${version}.crate`;
 const sorted = (values) => JSON.stringify([...values].sort());
 
-export function exec(command, args) {
+export function exec(command, args, env = process.env) {
   return execFileSync(command, args, {
     encoding: "utf8",
+    env,
     maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
-const notFound = (error, pattern = /HTTP 404/) =>
+export const notFound = (error, pattern = /HTTP 404/) =>
   pattern.test(String(error?.stderr ?? ""));
 
 /**
