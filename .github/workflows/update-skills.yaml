@@ -99,123 +99,23 @@ jobs:
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.release-info.outputs.version }}
-      release_tag: ${{ steps.release-info.outputs.release_tag }}
-      release_notes: ${{ steps.release-info.outputs.release_notes }}
-      changes_diff: ${{ steps.release-info.outputs.changes_diff }}
-      reviewers: ${{ steps.codeowners.outputs.reviewers }}
+      version: ${{ steps.context.outputs.version }}
+      release_tag: ${{ steps.context.outputs.release_tag }}
+      release_notes: ${{ steps.context.outputs.release_notes }}
+      changes_diff: ${{ steps.context.outputs.changes_diff }}
+      reviewers: ${{ steps.context.outputs.reviewers }}
     steps:
       - name: Checkout source repo
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Extract reviewers from CODEOWNERS
-        id: codeowners
-        shell: bash
-        run: |
-          # Look for CODEOWNERS in standard locations
-          CODEOWNERS_FILE=""
-          for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
-            if [ -f "${path}" ]; then
-              CODEOWNERS_FILE="${path}"
-              break
-            fi
-          done
-
-          if [ -z "${CODEOWNERS_FILE}" ]; then
-            echo "No CODEOWNERS file found"
-            echo "reviewers=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Extract unique @usernames, strip the @, comma-separate. Team entries
-          # (@org/team) are matched in full and dropped: gh rejects the entire
-          # reviewer request if any single login is invalid. `|| true` keeps a
-          # CODEOWNERS with no @entries from failing the step under pipefail.
-          REVIEWERS="$({ grep -oE '@[a-zA-Z0-9_/-]+' "${CODEOWNERS_FILE}" || true; } \
-            | sed '/\//d' \
-            | sort -u \
-            | sed 's/^@//' \
-            | paste -sd ',' -)"
-
-          echo "Found reviewers: ${REVIEWERS}"
-          echo "reviewers=${REVIEWERS}" >> "$GITHUB_OUTPUT"
-
-      - name: Extract release info
-        id: release-info
-        shell: bash
-        env:
-          RAW_TAG: ${{ inputs.release-tag || github.event.release.tag_name }}
-          RELEASE_BODY: ${{ inputs.release-notes || github.event.release.body }}
-        run: |
-          # --- Validate release context ---
-          if [ -z "${RAW_TAG}" ]; then
-            echo "::error::github.event.release.tag_name is empty. This workflow must be triggered by a release event."
-            exit 1
-          fi
-
-          VERSION="${RAW_TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "release_tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
-
-          # --- Previous tag & diff ---
-          PREVIOUS_TAG=""
-          FOUND_CURRENT=false
-          while IFS= read -r tag; do
-            if [ "${FOUND_CURRENT}" = true ]; then
-              PREVIOUS_TAG="${tag}"
-              break
-            fi
-            if [ "${tag}" = "${RAW_TAG}" ]; then
-              FOUND_CURRENT=true
-            fi
-          done < <(git tag --sort=-creatordate)
-
-          if [ "${FOUND_CURRENT}" = false ]; then
-            echo "::error::Tag '${RAW_TAG}' not found in the repository. Ensure fetch-depth: 0 includes all tags."
-            exit 1
-          fi
-
-          if [ -n "${PREVIOUS_TAG}" ]; then
-            echo "Generating diff between ${PREVIOUS_TAG} and ${RAW_TAG}"
-            git diff "${PREVIOUS_TAG}..${RAW_TAG}" > "${RUNNER_TEMP}/changes.diff"
-          else
-            echo "No previous tag found — generating diff from root"
-            git diff 4b825dc642cb6eb9a060e54bf899d69f82cf7258..HEAD > "${RUNNER_TEMP}/changes.diff"
-          fi
-
-          # Use Python to safely write multi-line values to GITHUB_OUTPUT
-          # This avoids heredoc delimiter collisions with arbitrary release notes and diffs
-          export DIFF_FILE="${RUNNER_TEMP}/changes.diff"
-          python3 << 'PYEOF'
-          import os, uuid
-
-          output_file = os.environ["GITHUB_OUTPUT"]
-          release_body = os.environ.get("RELEASE_BODY", "")
-
-          # Read the diff from disk and truncate to ~100 000 characters. The diff
-          # is never passed through the environment: a single env var over ~128 KiB
-          # makes execve() fail with E2BIG ("Argument list too long"). errors=
-          # "replace" plus the NUL strip keep binary content from corrupting output.
-          max_chars = 100000
-          with open(os.environ["DIFF_FILE"], "r", encoding="utf-8", errors="replace") as df:
-              diff = df.read(max_chars + 1).replace("\x00", "")
-          if len(diff) > max_chars:
-              diff = diff[:max_chars] + "\n\n... [diff truncated at 100000 characters]"
-
-          def write_multiline(fh, key, value):
-              delim = f"GHDELIM_{uuid.uuid4().hex}"
-              fh.write(f"{key}<<{delim}\n")
-              fh.write(value)
-              if value and not value.endswith("\n"):
-                  fh.write("\n")
-              fh.write(f"{delim}\n")
-
-          with open(output_file, "a") as fh:
-              write_multiline(fh, "release_notes", release_body)
-              write_multiline(fh, "changes_diff", diff)
-          PYEOF
+      - name: Collect release context
+        id: context
+        uses: photon-hq/buildspace/.github/blocks/collect-release-context@17427ad22755196c02ae80a9caac69a256c1932d
+        with:
+          release-tag: ${{ inputs.release-tag || github.event.release.tag_name }}
+          release-notes: ${{ inputs.release-notes || github.event.release.body }}
 
   update-skills:
     needs: gather-changes
