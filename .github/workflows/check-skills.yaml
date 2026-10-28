@@ -37,7 +37,7 @@ jobs:
 
       - name: Check Skills
         id: check
-        uses: photon-hq/buildspace/.github/blocks/check-skills@99049569ddfe13a95a07aa8658cf83eaba043a7c
+        uses: photon-hq/buildspace/.github/blocks/check-skills@c106a1cf6af1417665266bff004d62ed3f724e88
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ secrets.SKILLS_REPO_TOKEN || github.token }}
@@ -45,7 +45,7 @@ jobs:
 
       - name: Comment on PR if skills need update
         if: steps.check.outputs.needs-update == 'true'
-        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@99049569ddfe13a95a07aa8658cf83eaba043a7c
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@c106a1cf6af1417665266bff004d62ed3f724e88
         with:
           comment-key: check-skills
           message: |
@@ -67,7 +67,7 @@ jobs:
 
       - name: Remove stale comment if skills are up to date
         if: steps.check.outputs.needs-update == 'false'
-        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@99049569ddfe13a95a07aa8658cf83eaba043a7c
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@c106a1cf6af1417665266bff004d62ed3f724e88
         with:
           state: absent
           comment-key: check-skills
