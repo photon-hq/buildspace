@@ -1,41 +1,104 @@
-name: CI
+name: Docs updater live sandbox
 
 on:
-  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  check-readme:
-    uses: ./.github/workflows/check-readme.yaml
-    permissions:
-      contents: read
-      pull-requests: write
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-  check-skills:
-    uses: ./.github/workflows/check-skills.yaml
-    permissions:
-      contents: read
-      pull-requests: write
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-
-  test-release-workflows:
+  generate:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - name: Test release and image publishing without registry access
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Generate the existing Docs App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: photon-hq
+          repositories: docs
+
+      - name: Checkout the fixed Docs baseline
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: photon-hq/docs
+          ref: bbfa2b424e60419ee0f0d25f4b4b7325ec2a564f
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+          path: docs/repo
+
+      - name: Checkout the fixed first Voice release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: photon-hq/voice-ts
+          ref: a3182d89779d012b1484f8fbbd0e432a4958756a
+          fetch-depth: 0
+          persist-credentials: false
+          path: voice
+
+      - name: Install the existing generator tooling
         run: |
-          npm ci --prefix .github/blocks/check-production-dependencies --ignore-scripts --no-audit --no-fund
-          npm ci --prefix .github/package-release --ignore-scripts --no-audit --no-fund
-          node --test test/*.test.mjs .github/blocks/check-production-dependencies/*.test.mjs
-          python3 -m venv "$RUNNER_TEMP/tests"
-          "$RUNNER_TEMP/tests/bin/pip" install PyYAML==6.0.3
-          "$RUNNER_TEMP/tests/bin/python" -m unittest discover -s test
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install PyYAML==6.0.3
+          npm install -g @anthropic-ai/claude-code@2.1.312
+          pnpm --dir docs/repo install --frozen-lockfile
+          mkdir -p results
+
+      - name: Validate the unchanged baseline
+        working-directory: docs/repo
+        run: |
+          pnpm test > ../../results/baseline-tests.log 2>&1
+          pnpm docs:validate > ../../results/baseline-validate.log 2>&1
+          pnpm docs:links > ../../results/baseline-links.log 2>&1
+
+      - name: Prepare the real collector and prompt
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: '"$RUNNER_TEMP/py/bin/python" .github/docs-live-sandbox.py prepare'
+
+      - name: Run real AI generation with the existing repository secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: '"$RUNNER_TEMP/py/bin/python" .github/docs-live-sandbox.py generate'
+
+      - name: Validate generated documentation
+        working-directory: docs/repo
+        run: |
+          pnpm test > ../../results/generated-tests.log 2>&1
+          pnpm docs:validate > ../../results/generated-validate.log 2>&1
+          pnpm docs:links > ../../results/generated-links.log 2>&1
+
+      - name: Collect the isolated result without publishing
+        if: always() && steps.prepare.outcome == 'success'
+        run: '"$RUNNER_TEMP/py/bin/python" .github/docs-live-sandbox.py collect'
+
+      - name: Encrypt private Docs evidence for this thread
+        if: always()
+        run: |
+          mkdir -p results
+          tar -czf "$RUNNER_TEMP/results.tar.gz" results
+          openssl cms -encrypt -aes-256-cbc -binary -in "$RUNNER_TEMP/results.tar.gz" -outform DER -out "$RUNNER_TEMP/docs-live-results.enc" .github/docs-sandbox-public.pem
+
+      - name: Retain encrypted evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-live-encrypted
+          path: ${{ runner.temp }}/docs-live-results.enc
+          retention-days: 3
