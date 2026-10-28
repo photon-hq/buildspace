@@ -50,6 +50,8 @@ class WorkflowTests(unittest.TestCase):
             for name, job in workflow['jobs'].items():
                 if workflow is STAGE and name == 'build':
                     continue
+                if workflow is PROMOTE and name == 'resolve':
+                    job = {**job, 'steps': [s for s in job['steps'] if s.get('name') != 'Mint a token to read private dependencies']}
                 for marker in CALLER_CODE:
                     self.assertNotIn(marker, yaml.dump(job), f'{name}: {marker}')
         token = step(build, 'Mint a token for private dependencies')
@@ -84,6 +86,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(PROMOTE['on']['workflow_call']['inputs']['environment']['default'], 'production')
         self.assertIn('--channel production', step(publish, 'Release the candidate')['run'])
         self.assertNotEqual(STAGE['jobs']['publish']['concurrency']['group'], publish['concurrency']['group'])
+
+    def test_promotion_reads_private_dependencies_with_a_read_only_token(self):
+        resolve = PROMOTE['jobs']['resolve']
+        token = step(resolve, 'Mint a token to read private dependencies')
+        self.assertEqual(token['if'], 'inputs.private-deps')
+        self.assertEqual({k: v for k, v in token['with'].items() if k.startswith('permission-')}, {'permission-contents': 'read'})
+        holders = [s.get('name') for s in resolve['steps'] if 'steps.dependency-token.outputs.token' in yaml.dump(s)]
+        self.assertEqual(holders, ['Resolve and verify the candidate'])
+        self.assertEqual(step(resolve, 'Resolve and verify the candidate')['env']['DEPENDENCY_TOKEN'], '${{ steps.dependency-token.outputs.token }}')
+        for name, job in PROMOTE['jobs'].items():
+            if name != 'resolve':
+                self.assertNotIn('APP_PRIVATE_KEY', yaml.dump(job), name)
 
     def test_jamf_receives_only_the_released_package_of_an_approved_promotion(self):
         jamf = PROMOTE['jobs']['jamf-upload']

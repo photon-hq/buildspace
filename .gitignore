@@ -1,2 +1,3 @@
 sync.yaml
 node_modules/
+__pycache__/

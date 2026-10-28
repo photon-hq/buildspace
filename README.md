@@ -948,8 +948,11 @@ jobs:
       package-name: macrocosm-astrolabe
       identifier: codes.photon.macrocosm-astrolabe
       ci-workflow: ci.yml # optional: a push workflow that must pass first
+      private-deps: true # optional: a dependency is one of the owner's private repositories
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
 ```
 
@@ -973,7 +976,10 @@ jobs:
       package-name: macrocosm-astrolabe
       staging-version: ${{ inputs.staging-version }}
       jamf-url: ${{ vars.JAMF_URL }} # optional
+      private-deps: true # optional: a dependency is one of the owner's private repositories
     secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       JAMF_CLIENT_ID: ${{ secrets.JAMF_CLIENT_ID }}
       JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}
 ```
@@ -983,7 +989,24 @@ jobs:
   `APP_PRIVATE_KEY` secrets) work as in [Swift Release](#swift-release).
   `paths`, `ci-workflow`, `ci-wait-minutes`, `environment` (default `staging`)
   and `dry-run` work as in `package-stage`. The promote call names the same
-  `package-name` and `library`.
+  `package-name` and `library`, and sets `private-deps` (with the same
+  secrets) when a dependency is one of the owner's private repositories.
+- **Dependencies.** Production depends only on production. Promotion reads the
+  source commit's `Package.resolved` and `Package.swift` from GitHub, never
+  running them, and checks every dependency fetched from one of the owner's
+  GitHub repositories. A package is held to the pins of its committed
+  `Package.resolved`, which the build resolved from and could not change:
+  each must be a stable `X.Y.Z` (not a branch, a bare revision or a staging
+  version) whose `vX.Y.Z` or `X.Y.Z` tag is a published, non-prerelease
+  release still naming the pinned commit. A library, whose consumers resolve
+  its requirements themselves, and a package that commits no
+  `Package.resolved` are held to the requirements in `Package.swift`
+  instead: each must be a version requirement written as string literals,
+  with no branch, revision or prerelease bound, and its lowest version must be
+  such a release. Reading a private repository's releases takes
+  `private-deps`. The reviewer's summary lists each release it checked: the
+  pinned version from `Package.resolved`, or the lowest version
+  `Package.swift` requires, which SwiftPM may resolve higher.
 - **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
   manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves
@@ -1002,14 +1025,17 @@ jobs:
 - **Promotion refuses** a build whose tag no longer names its commit, whose
   commit is not on `main`, whose candidate fails its checksum or its
   attestation (signer `photon-hq/buildspace/.github/workflows/swift-stage.yml`,
-  the caller repository, `refs/heads/main` and the source commit), or whose
-  version is not newer than the latest `vX.Y.Z`, and it refuses unless the
+  the caller repository, `refs/heads/main` and the source commit), whose
+  version is not newer than the latest `vX.Y.Z`, or that depends on the
+  owner's repositories other than through production releases (see
+  **Dependencies**), and it refuses unless the
   `production` environment requires a reviewer. A build already released as
   `vX.Y.Z` from the same commit has nothing to publish.
 - **Trust boundaries.** Only the build job runs caller code, and it can read but
   not write. `SECRET_ENV_VARS` and the dependency token reach only its build
-  step. The staging publish job rebuilds every manifest claim from the files,
-  its own run and the version job's output.
+  step. Promotion's own read-only dependency token reaches only its resolve
+  step, which runs no caller code. The staging publish job rebuilds every
+  manifest claim from the files, its own run and the version job's output.
 - **Moving from `swift-release`.** The `release` and `prerelease` labels and
   `OPENAI_API_KEY` are no longer used. The first staged version follows the
   latest stable `vX.Y.Z`; `-rc.N` tags are ignored, and a repository without a

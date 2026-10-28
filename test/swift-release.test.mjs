@@ -44,16 +44,39 @@ const collectBuild = (overrides = {}) =>
     ...overrides,
   });
 
-/** A fake GitHub that records every command. */
-function world({ tags = {}, releases = {}, environment = ["octocat"], attested = true, onMain = true } = {}) {
+const MANIFEST_ONLY = '// swift-tools-version: 6.2\nimport PackageDescription\n\nlet package = Package(name: "macrocosm-astrolabe")\n';
+
+/**
+ * A fake GitHub that records every command. `files` are the source commit's;
+ * `repos` are the owner's other repositories, a private one readable only
+ * through `dependencyRun`, which holds the dependency token.
+ */
+function world({ tags = {}, releases = {}, environment = ["octocat"], attested = true, onMain = true, files = { "Package.swift": MANIFEST_ONLY }, repos = {} } = {}) {
   const calls = [];
   const state = { tags, releases };
   const fail = (message) => Object.assign(new Error(message), { stderr: message });
-  const run = (command, args) => {
+  const missing = () => fail("gh: Not Found (HTTP 404)");
+  const handle = (command, args, privileged) => {
     calls.push([command, ...args]);
     const [first, second] = args;
     if (command === "gh" && first === "api") {
       const path = args.find((arg) => arg.startsWith("repos/"));
+      const content = /^repos\/([^/]+\/[^/]+)\/contents\/(.+)\?ref=([a-f0-9]{40})$/.exec(path);
+      if (content) {
+        if (content[1] !== REPOSITORY || content[3] !== SHA || !(content[2] in files)) throw missing();
+        return files[content[2]];
+      }
+      const [, owner, rest] = /^repos\/([^/]+\/[^/]+)(.*)$/.exec(path);
+      if (owner !== REPOSITORY) {
+        const repo = repos[owner];
+        if (!repo || (repo.private && !privileged)) throw missing();
+        if (!rest) return JSON.stringify({ full_name: owner });
+        const named = /^\/(?:releases\/tags|git\/ref\/tags)\/(.+)$/.exec(rest)?.[1];
+        const release = repo.releases[named];
+        if (!release) throw missing();
+        if (rest.startsWith("/releases/")) return JSON.stringify({ tag_name: named, draft: Boolean(release.draft), prerelease: Boolean(release.prerelease) });
+        return JSON.stringify({ object: { type: "commit", sha: release.sha } });
+      }
       if (path.endsWith("/environments/production")) {
         if (!environment) throw fail("gh: Not Found (HTTP 404)");
         return JSON.stringify({ protection_rules: environment.length ? [{ type: "required_reviewers", reviewers: environment }] : [] });
@@ -98,7 +121,7 @@ function world({ tags = {}, releases = {}, environment = ["octocat"], attested =
     }
     throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
   };
-  return { calls, state, run };
+  return { calls, state, run: (command, args) => handle(command, args, false), dependencyRun: (command, args) => handle(command, args, true) };
 }
 
 const commands = (calls, first) => calls.filter((call) => call[0] === "gh" && call[1] === first);
@@ -301,4 +324,128 @@ test("a library is staged and promoted by its tags alone", async () => {
   assert.equal(fake.state.tags["v1.27.0"], SHA);
   assert.deepEqual(fake.state.releases["v1.27.0"].assets, ["release-manifest.json"]);
   await assert.rejects(resolveWith(fake), /kind swift-library/);
+});
+
+const sha = (digit) => digit.repeat(40);
+const RELEASED = {
+  "photon-hq/SignozSwift": { releases: { "v0.4.2": { sha: sha("1") }, "v0.4.3": { sha: sha("2"), prerelease: true } } },
+  "photon-hq/opentelemetry-swift": { releases: { "3.0.0": { sha: sha("3") } } },
+  "photon-hq/IMAgentKit": { private: true, releases: { "v0.1.0": { sha: sha("4") } } },
+  "photon-hq/Unreleased": { releases: {} },
+};
+const pin = (location, state) => ({ identity: location.split("/").at(-1).replace(/\.git$/, "").toLowerCase(), kind: "remoteSourceControl", location, state });
+const resolvedFile = (...pins) => JSON.stringify({ originHash: "0", pins, version: 3 });
+const manifestWith = (...dependencies) =>
+  `// swift-tools-version: 6.2
+import PackageDescription
+
+let package = Package(
+    name: "macrocosm-astrolabe",
+    dependencies: [
+${dependencies.map((line) => `        ${line},`).join("\n")}
+    ]
+)
+`;
+const contentReads = (calls) => calls.filter((call) => call.some((arg) => /\/contents\//.test(arg))).map((call) => /\/contents\/(.+)\?/.exec(call.at(-1))[1]);
+
+test("promotion lists the production releases a package's Package.resolved pins", async () => {
+  const files = {
+    "Package.resolved": resolvedFile(
+      pin("https://github.com/photon-hq/SignozSwift.git", { revision: sha("1"), version: "0.4.2" }),
+      pin("https://github.com/photon-hq/opentelemetry-swift", { revision: sha("3"), version: "3.0.0" }),
+      pin("https://github.com/apple/swift-argument-parser.git", { branch: "main", revision: sha("5") })
+    ),
+    "Package.swift": manifestWith('.package(url: "https://github.com/photon-hq/SignozSwift.git", branch: "main")'),
+  };
+  const { fake } = await staged({ world: { files, repos: RELEASED } });
+  const { pending, dependencies } = await resolveWith(fake);
+  assert.equal(pending, true);
+  assert.deepEqual(dependencies, [
+    { dependency: "photon-hq/SignozSwift", version: "0.4.2" },
+    { dependency: "photon-hq/opentelemetry-swift", version: "3.0.0" },
+  ]);
+  assert.deepEqual(contentReads(fake.calls), ["Package.resolved"]);
+  assert.ok(fake.calls.every((call) => !call.some((arg) => String(arg).includes("swift-argument-parser"))));
+});
+
+test("promotion refuses a package pinned to anything but the owner's production releases", async () => {
+  const files = {
+    "Package.resolved": resolvedFile(
+      pin("https://github.com/photon-hq/Astrolabe", { branch: "main", revision: sha("6") }),
+      pin("git@github.com:photon-hq/BetterEnv.git", { revision: sha("7") }),
+      pin("https://github.com/photon-hq/SignozSwift.git", { revision: sha("1"), version: "0.4.2-staging.900.1" }),
+      pin("https://github.com/photon-hq/opentelemetry-swift", { revision: sha("8"), version: "3.0.0" }),
+      pin("https://github.com/photon-hq/Unreleased", { revision: sha("9"), version: "1.0.0" }),
+      pin("https://github.com/photon-hq/IMAgentKit.git", { revision: sha("4"), version: "0.1.0" })
+    ),
+  };
+  const { fake } = await staged({ world: { files, repos: { ...RELEASED, "photon-hq/SignozSwift": { releases: { "v0.4.2-staging.900.1": { sha: sha("1"), prerelease: true } } } } } });
+  const error = await resolveWith(fake).catch((caught) => caught);
+  assert.match(error.message, /^v1\.27\.0-staging\.900\.1 cannot be promoted until its dependencies are production releases:\n/);
+  for (const finding of [
+    "- Package.resolved pins photon-hq/Astrolabe to branch main; require a released version",
+    `- Package.resolved pins photon-hq/BetterEnv to revision ${sha("7")}; require a released version`,
+    "- Package.resolved pins photon-hq/SignozSwift at 0.4.2-staging.900.1, which is not a stable version",
+    `- Package.resolved pins photon-hq/opentelemetry-swift: photon-hq/opentelemetry-swift 3.0.0 no longer names the resolved commit ${sha("8")}`,
+    "- Package.resolved pins photon-hq/Unreleased: 1.0.0 is not a published release of photon-hq/Unreleased",
+    "- Package.resolved pins photon-hq/IMAgentKit: photon-hq/IMAgentKit is not readable to check its releases; promote with private-deps",
+  ])
+    assert.ok(error.message.includes(finding), finding);
+  assert.equal(error.message.split("\n").length, 7);
+  const prerelease = await staged({ world: { files: { "Package.resolved": resolvedFile(pin("https://github.com/photon-hq/SignozSwift.git", { revision: sha("2"), version: "0.4.3" })) }, repos: RELEASED } });
+  await assert.rejects(resolveWith(prerelease.fake), /photon-hq\/SignozSwift v0\.4\.3 is a prerelease, not a production release/);
+});
+
+test("a private dependency's releases are read with the dependency token", async () => {
+  const files = { "Package.resolved": resolvedFile(pin("https://github.com/photon-hq/IMAgentKit.git", { revision: sha("4"), version: "0.1.0" })) };
+  const { fake } = await staged({ world: { files, repos: RELEASED } });
+  await assert.rejects(resolveWith(fake), /IMAgentKit is not readable to check its releases; promote with private-deps/);
+  const { pending, dependencies } = await resolveWith(fake, { dependencyRun: fake.dependencyRun });
+  assert.equal(pending, true);
+  assert.deepEqual(dependencies, [{ dependency: "photon-hq/IMAgentKit", version: "0.1.0" }]);
+});
+
+test("a library, and a package without Package.resolved, are held to the requirements in Package.swift", async (t) => {
+  const released = manifestWith(
+    '// .package(url: "https://github.com/photon-hq/Astrolabe.git", branch: "main")',
+    '/* .package(url: "https://github.com/photon-hq/BetterEnv.git", branch: "main") */ .package(url: "https://github.com/photon-hq/SignozSwift.git", from: "0.4.2")',
+    '.package(url: "https://github.com/photon-hq/opentelemetry-swift", "3.0.0"..<"4.0.0")',
+    '.package(url: "https://github.com/apple/swift-argument-parser.git", branch: "main")',
+    '.package(path: "../Local")'
+  );
+  const expected = [
+    { dependency: "photon-hq/SignozSwift", version: "0.4.2" },
+    { dependency: "photon-hq/opentelemetry-swift", version: "3.0.0" },
+  ];
+  await t.test("a library ignores its Package.resolved", async () => {
+    const library = { library: true };
+    await collectBuild({ ...library, stagingPackage: undefined, productionPackage: undefined });
+    const files = { "Package.swift": released, "Package.resolved": resolvedFile(pin("https://github.com/photon-hq/Astrolabe", { branch: "main", revision: sha("6") })) };
+    const fake = world({ tags: { "v1.26.0": OTHER }, files, repos: RELEASED });
+    await publishWith(fake, library);
+    fake.calls.length = 0;
+    assert.deepEqual((await resolveWith(fake, library)).dependencies, expected);
+    assert.deepEqual(contentReads(fake.calls), ["Package.swift"]);
+  });
+  await t.test("a package without Package.resolved", async () => {
+    const { fake } = await staged({ world: { files: { "Package.swift": released }, repos: RELEASED } });
+    assert.deepEqual((await resolveWith(fake)).dependencies, expected);
+    assert.deepEqual(contentReads(fake.calls), ["Package.resolved", "Package.swift"]);
+  });
+  for (const [name, declaration, error] of [
+    ["a branch", '.package(url: "https://github.com/photon-hq/SignozSwift.git", branch: "main")', /requires photon-hq\/SignozSwift by branch or revision; require a released version/],
+    ["a revision", `.package(url: "https://github.com/photon-hq/SignozSwift", revision: "${sha("1")}")`, /by branch or revision/],
+    ["a staging version", '.package(url: "https://github.com/photon-hq/SignozSwift.git", exact: "0.4.2-staging.900.1")', /at 0\.4\.2-staging\.900\.1, which admits prerelease versions/],
+    ["an unreleased lower bound", '.package(url: "https://github.com/photon-hq/SignozSwift.git", .upToNextMinor(from: "0.9.0"))', /0\.9\.0 is not a published release of photon-hq\/SignozSwift/],
+    ["a version in a variable", '.package(url: "https://github.com/photon-hq/SignozSwift.git", from: signozVersion)', /without a version literal promotion can check/],
+    ["a url in a variable", '.package(url: signozURL, from: "0.4.2")', /write the url of \.package\(url: signozURL, from: "0\.4\.2"\) as a string literal/],
+  ])
+    await t.test(name, async () => {
+      const { fake } = await staged({ world: { files: { "Package.swift": manifestWith(declaration) }, repos: RELEASED } });
+      await assert.rejects(resolveWith(fake), error);
+    });
+  await t.test("a commit without Package.swift", async () => {
+    const { fake } = await staged({ world: { files: {} } });
+    await assert.rejects(resolveWith(fake), new RegExp(`${SHA} has no Package.swift`));
+  });
 });
