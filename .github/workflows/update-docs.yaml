@@ -111,7 +111,7 @@ jobs:
       # --- Run the update-docs block with the generated token ---
       - name: Update Documentation
         id: update-docs
-        uses: photon-hq/buildspace/.github/blocks/update-docs@c12e8a97976b679f5e93247b15b03e9a80360a29
+        uses: photon-hq/buildspace/.github/blocks/update-docs@15c878fccda921035fcea529bcbc21c98d8739f4
         with:
           service-name: ${{ inputs.service-name }}
           version: ${{ needs.gather-changes.outputs.version }}
