@@ -29,13 +29,13 @@ jobs:
       
       - name: Check README
         id: check
-        uses: photon-hq/buildspace/.github/blocks/check-readme@99049569ddfe13a95a07aa8658cf83eaba043a7c
+        uses: photon-hq/buildspace/.github/blocks/check-readme@c106a1cf6af1417665266bff004d62ed3f724e88
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Comment on PR if README needs update
         if: steps.check.outputs.up-to-date == 'false'
-        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@99049569ddfe13a95a07aa8658cf83eaba043a7c
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@c106a1cf6af1417665266bff004d62ed3f724e88
         with:
           comment-key: check-readme
           message: |
@@ -57,7 +57,7 @@ jobs:
 
       - name: Remove stale comment if README is up to date
         if: steps.check.outputs.up-to-date == 'true'
-        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@99049569ddfe13a95a07aa8658cf83eaba043a7c
+        uses: photon-hq/buildspace/.github/blocks/comment-on-pr@c106a1cf6af1417665266bff004d62ed3f724e88
         with:
           state: absent
           comment-key: check-readme
