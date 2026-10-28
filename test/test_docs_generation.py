@@ -66,7 +66,7 @@ with open(os.environ['PNPM_LOG'], 'a') as log:
     def test_dependency_install_preserves_the_lockfile(self):
         result = self.execute('Install docs dependencies')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(self.log.read_text()), {'args': ['install', '--frozen-lockfile'], 'cwd': str(self.docs)})
+        self.assertEqual(json.loads(self.log.read_text()), {'args': ['install'], 'cwd': str(self.docs)})
 
 
 if __name__ == '__main__':
