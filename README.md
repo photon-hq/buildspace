@@ -181,15 +181,15 @@ jobs:
 
 Then add a `release` label to your PR, merge, and let BuildSpace do the rest.
 
-### Pinning to a Version
+### Pinning BuildSpace
 
-All examples above use `@main` which tracks the latest changes. For production stability, pin to a specific release tag:
+The examples above use `@main`, which picks up every BuildSpace change the moment it merges. Pin a commit of `main` instead, as the stage and promote examples do:
 
 ```yaml
-uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@v1.2.3
+uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@<reviewed-commit-sha>
 ```
 
-Available versions are listed on the [GitHub Releases](https://github.com/photon-hq/buildspace/releases) page. Buildspace versions itself using the same AI-powered release pipeline it provides to other repos.
+Get the current commit with `git ls-remote https://github.com/photon-hq/buildspace refs/heads/main`. Moving the pin is a pull request in your repository, so each BuildSpace change is reviewed there, and a stage workflow's dry run tests it, before it ships. BuildSpace has no releases of its own: merging to `main` is the release. The `v1.x` tags, up to `v1.10.2`, stay for existing references and no longer move.
 
 ---
 
@@ -2114,7 +2114,6 @@ buildspace/
 │       ├── rust-service-release.yaml  # Complete Rust release pipeline
 │       ├── pkg-release.yml             # .pkg release pipeline (no binary)
 │       ├── pkg-release-pr.yml         # .pkg PR build (no binary)
-│       ├── self-release.yaml          # Buildspace's own versioned releases
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
 │       ├── swift-release.yml          # Swift .pkg release pipeline
 │       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
