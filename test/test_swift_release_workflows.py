@@ -1,4 +1,5 @@
 """Check the Swift stage/promote workflows' trust boundaries and build step."""
+import json
 import os
 from pathlib import Path
 import stat
@@ -69,7 +70,9 @@ class WorkflowTests(unittest.TestCase):
 
     def test_promotion_resolves_read_only_and_releases_behind_the_environment(self):
         resolve = PROMOTE['jobs']['resolve']
-        self.assertEqual(resolve['if'], "github.ref == 'refs/heads/main'")
+        self.assertNotIn('if', resolve)
+        self.assertEqual(resolve['steps'][0]['name'], 'Require a dispatch from main')
+        self.assertIn('"$GITHUB_REF" != refs/heads/main', resolve['steps'][0]['run'])
         self.assertFalse(any(level == 'write' for level in resolve['permissions'].values()))
         self.assertEqual(step(resolve, 'Resolve and verify the candidate')['env']['SIGNER_WORKFLOW'], '${{ job.workflow_repository }}/.github/workflows/swift-stage.yml')
         upload = next(s for s in resolve['steps'] if 'upload-artifact' in s.get('uses', ''))
@@ -88,6 +91,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(jamf['if'], "inputs.jamf-url != '' && !inputs.library")
         self.assertTrue(jamf['uses'].startswith('photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@'))
         self.assertEqual(jamf['with']['artifact_name'], 'swift-promotion')
+        self.assertEqual(jamf['with']['tool_ref'], jamf['uses'].rsplit('@', 1)[1])
 
 
 def executable(path, body):
@@ -165,6 +169,48 @@ class BuildStepTests(unittest.TestCase):
         result = self.build()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('changed tracked files', result.stderr)
+
+
+class CollectStepTests(unittest.TestCase):
+    """Runs the collect step's command line against the real release tools."""
+
+    def collect(self, library):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        temp = Path(tmp.name)
+        for channel in ('staging', 'production'):
+            (temp / 'pack' / channel).mkdir(parents=True)
+            (temp / 'pack' / channel / 'macrocosm-astrolabe.pkg').write_text(f'xar {channel}')
+        bump = {'version': '1.27.0', 'from': 'v1.26.0', 'level': 'minor', 'total': 1, 'changes': [{'number': 91, 'title': 'feat: one', 'level': 'minor'}], 'warnings': []}
+        env = {
+            **os.environ,
+            'RUNNER_TEMP': tmp.name,
+            'RELEASE_TOOLS': str(Path('.github/package-release').resolve()),
+            'PACKAGE_NAME': 'macrocosm-astrolabe',
+            'LIBRARY': 'true' if library else 'false',
+            'BUMP': json.dumps(bump),
+            'STAGING_SUFFIX': '-staging.9.1',
+            'GITHUB_SHA': 'a' * 40,
+            'GITHUB_REPOSITORY': 'photon-hq/macrocosm-astrolabe',
+            'GITHUB_SERVER_URL': 'https://github.com',
+            'GITHUB_RUN_ID': '9',
+            'GITHUB_RUN_ATTEMPT': '1',
+            'GITHUB_OUTPUT': str(temp / 'outputs'),
+        }
+        script = step(STAGE['jobs']['build'], 'Collect')['run']
+        result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads((temp / 'swift-release' / 'release-manifest.json').read_text())
+
+    def test_a_package_build_is_collected_under_its_staging_tag(self):
+        manifest = self.collect(library=False)
+        self.assertEqual(manifest['stagingTag'], 'v1.27.0-staging.9.1')
+        self.assertEqual(manifest['pkg']['staging']['version'], '1.27.0-staging.9.1')
+
+    def test_a_library_build_is_collected_under_its_staging_tag(self):
+        manifest = self.collect(library=True)
+        self.assertEqual(manifest['stagingTag'], 'v1.27.0-staging.9.1')
+        self.assertIsNone(manifest['pkg'])
 
 
 if __name__ == '__main__':

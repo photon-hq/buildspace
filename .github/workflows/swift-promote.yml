@@ -50,7 +50,6 @@ jobs:
   # Read-only: finds the build, proves where it came from, and shows the
   # reviewer what an approval will release.
   resolve:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -63,6 +62,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Require a dispatch from main
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::Promote from main; this run is on $GITHUB_REF" >&2
+            exit 1
+          fi
       - name: Fetch the release tools of this workflow's commit
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -143,6 +148,7 @@ jobs:
     uses: photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@5e46776e677d87ce10daa134ce171484e5952e90
     with:
       artifact_name: swift-promotion
+      tool_ref: 5e46776e677d87ce10daa134ce171484e5952e90
       package_name: ${{ inputs.jamf-package-name }}
       jamf_url: ${{ inputs.jamf-url }}
       package_priority: ${{ inputs.jamf-package-priority }}
