@@ -29,12 +29,23 @@ runs:
       uses: actions/github-script@v7
       with:
         script: |
-          const files = await github.paginate(github.rest.pulls.listFiles, {
+          const { data: pr } = await github.rest.pulls.get({
             owner: context.repo.owner,
             repo: context.repo.repo,
             pull_number: context.issue.number
           });
+          const files = await github.paginate(github.rest.pulls.listFiles, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number,
+            per_page: 100
+          });
 
+          if (!Number.isInteger(pr.changed_files) || pr.changed_files < 0 ||
+              pr.changed_files > 3000 || files.length !== pr.changed_files ||
+              files.some(file => typeof file.filename !== 'string' || !file.filename)) {
+            throw new Error('Cannot assess skills: the PR file list is incomplete or invalid.');
+          }
           core.setOutput('files', files.map(f => f.filename).join('\n'));
 
     - name: Checkout skills repository
@@ -81,44 +92,23 @@ runs:
           If this PR is entirely irrelevant to the skills documentation (e.g., it only touches CI config,
           internal tooling, or infrastructure), respond with VERDICT: IRRELEVANT.
 
+          Choose exactly one verdict: IRRELEVANT, UP_TO_DATE, or NEEDS_UPDATE.
           Respond in EXACTLY this format (two lines, nothing else):
-          VERDICT: IRRELEVANT or UP_TO_DATE or NEEDS_UPDATE
+          VERDICT: <chosen verdict>
           REASON: <one sentence explanation>
 
     - name: Parse AI output
       id: parse
-      shell: bash
+      uses: actions/github-script@v7
       env:
         RAW_OUTPUT: ${{ steps.ai-check.outputs.final-message }}
-      run: |
-        echo "Raw AI output: '${RAW_OUTPUT}'"
-
-        if [ -z "$RAW_OUTPUT" ]; then
-          echo "::warning::AI check produced no output — defaulting to up-to-date."
-          echo "needs-update=false" >> $GITHUB_OUTPUT
-          echo "explanation=Could not determine skills status (AI produced no output)." >> $GITHUB_OUTPUT
-          exit 0
-        fi
-
-        VERDICT=$(echo "$RAW_OUTPUT" | grep -oE '(IRRELEVANT|UP_TO_DATE|NEEDS_UPDATE)' | head -1)
-        REASON=$(echo "$RAW_OUTPUT" | grep -i 'REASON:' | sed 's/^.*REASON:[[:space:]]*//')
-
-        if [ "$VERDICT" == "NEEDS_UPDATE" ]; then
-          echo "needs-update=true" >> $GITHUB_OUTPUT
-        else
-          echo "needs-update=false" >> $GITHUB_OUTPUT
-        fi
-
-        if [ -n "$REASON" ]; then
-          {
-            echo "explanation<<EXPLANATION_EOF"
-            echo "$REASON"
-            echo "EXPLANATION_EOF"
-          } >> $GITHUB_OUTPUT
-        else
-          {
-            echo "explanation<<EXPLANATION_EOF"
-            echo "$RAW_OUTPUT"
-            echo "EXPLANATION_EOF"
-          } >> $GITHUB_OUTPUT
-        fi
+      with:
+        script: |
+          const output = (process.env.RAW_OUTPUT || '').replace(/\r\n/g, '\n').trim();
+          const result = /^VERDICT: (IRRELEVANT|UP_TO_DATE|NEEDS_UPDATE)\nREASON: ([^\r\n]+)$/.exec(output);
+          if (!result || !result[2].trim()) {
+            core.setFailed('Skills status is unknown: expected a verdict and a nonempty reason. Existing warnings are retained.');
+            return;
+          }
+          core.setOutput('needs-update', String(result[1] === 'NEEDS_UPDATE'));
+          core.setOutput('explanation', result[2].trim());
