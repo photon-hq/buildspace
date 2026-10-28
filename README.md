@@ -948,8 +948,11 @@ jobs:
       package-name: macrocosm-astrolabe
       identifier: codes.photon.macrocosm-astrolabe
       ci-workflow: ci.yml # optional: a push workflow that must pass first
+      private-deps: true # optional: a dependency is one of the owner's private repositories
       dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
       SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
 ```
 
@@ -1001,8 +1004,9 @@ jobs:
   instead: each must be a version requirement written as string literals,
   with no branch, revision or prerelease bound, and its lowest version must be
   such a release. Reading a private repository's releases takes
-  `private-deps`. The reviewer's summary lists the releases the build depends
-  on.
+  `private-deps`. The reviewer's summary lists each release it checked: the
+  pinned version from `Package.resolved`, or the lowest version
+  `Package.swift` requires, which SwiftPM may resolve higher.
 - **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
   manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves
