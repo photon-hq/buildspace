@@ -1258,7 +1258,7 @@ The workflow automatically generates a cross-repo GitHub App token from the `pho
 
 AI may update authored guides through ordinary PR review. Existing target-repository rules determine edit scope and page placement. `docs-path` is a focus hint and may name a page or directory that does not exist yet. No extra directory allowlist, producer mapping, or approval gate is imposed.
 
-For `photon-hq/docs`, the updater follows the existing Mintlify conventions and preserves producer-owned references, navigation, and locks. It installs dependencies with `pnpm install --frozen-lockfile` without forcing SDK upgrades. The generator uses the repository's current checks: `pnpm test`, `pnpm docs:validate`, and `pnpm docs:links`. Other target repositories follow their own validation instructions.
+For `photon-hq/docs`, the updater follows the existing Mintlify conventions and preserves producer-owned references, navigation, and locks. Dependency installation retains pnpm's normal CI behavior without forcing SDK upgrades or requiring a lockfile from targets that do not have one. The generator uses the repository's current checks: `pnpm test`, `pnpm docs:validate`, and `pnpm docs:links`. Other target repositories follow their own validation instructions.
 
 #### Inputs
 
@@ -1979,7 +1979,7 @@ Posts or updates a single comment on a pull request. When a `comment-key` is pro
 
 Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs the Claude Code CLI to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow handles token generation automatically from org secrets).
 
-Authored guide updates follow the target repository's existing rules without an added directory allowlist. Generated references stay with their declared producers. The action uses frozen dependencies and instructs the generator to run the repository's current checks.
+Authored guide updates follow the target repository's existing rules without an added directory allowlist. Generated references stay with their declared producers. The action keeps pnpm's normal CI installation behavior and instructs the generator to run the repository's current checks.
 
 #### Inputs
 

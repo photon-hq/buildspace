@@ -116,7 +116,7 @@ runs:
       shell: bash
       env:
         DOCS_DIR: ${{ steps.clone-docs.outputs.docs-dir }}
-      run: cd "${DOCS_DIR}" && pnpm install --frozen-lockfile
+      run: cd "${DOCS_DIR}" && pnpm install
 
     - name: Install Claude Code CLI
       shell: bash
