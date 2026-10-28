@@ -43,7 +43,7 @@ on:
       docs-path:
         type: string
         required: true
-        description: "Path within the docs repo that this service maps to (e.g., 'legacy/imessage.mdx' or 'advanced-kits/imessage')"
+        description: "Documentation focus hint; existing target-repository rules determine edit scope and page placement"
       use-blacksmith:
         type: boolean
         required: false
