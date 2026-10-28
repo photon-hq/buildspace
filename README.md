@@ -1256,14 +1256,19 @@ Runs when a release is published. Uses [Claude Code](https://github.com/anthropi
 
 The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target docs repo, lets Claude Code read the existing docs and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
 
+AI may update authored guides through ordinary PR review. Existing target-repository rules determine edit scope and page placement. `docs-path` is a focus hint and may name a page or directory that does not exist yet. No extra directory allowlist, producer mapping, or approval gate is imposed.
+
+For `photon-hq/docs`, the updater follows the existing Mintlify conventions and preserves producer-owned references, navigation, and locks. It installs dependencies with `pnpm install --frozen-lockfile` without forcing SDK upgrades. The generator uses the repository's current checks: `pnpm test`, `pnpm docs:validate`, and `pnpm docs:links`. Other target repositories follow their own validation instructions.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `service-name` | string | No | Repository name | Name of the service being released |
-| `docs-path` | string | Yes | — | Path within the docs repo this service maps to (e.g., `legacy/imessage.mdx` or `advanced-kits/imessage`) |
+| `docs-path` | string | Yes | — | Documentation focus hint; existing target-repository rules determine edit scope and page placement |
 | `docs-repo` | string | No | `photon-hq/docs` | Target documentation repository (`owner/repo`) |
 | `docs-branch` | string | No | `main` | Base branch of the docs repo |
+| `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners instead of `ubuntu-latest` |
 
 #### Secrets
 
@@ -1303,6 +1308,9 @@ The workflow automatically generates a cross-repo GitHub App token from the `pho
 | `skills-path` | string | Yes | — | Path within the skills repo that this service maps to (e.g., `skills/buildspace-ci-cd` or `skills/imessage`) |
 | `skills-repo` | string | No | `photon-hq/skills` | Target skills repository (`owner/repo`) |
 | `skills-branch` | string | No | `main` | Base branch of the skills repo |
+| `release-tag` | string | No | `""` | Override the release event's tag |
+| `release-notes` | string | No | `""` | Override the release event's notes |
+| `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners instead of `ubuntu-latest` |
 
 #### Secrets
 
@@ -1971,6 +1979,8 @@ Posts or updates a single comment on a pull request. When a `comment-key` is pro
 
 Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs the Claude Code CLI to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow handles token generation automatically from org secrets).
 
+Authored guide updates follow the target repository's existing rules without an added directory allowlist. Generated references stay with their declared producers. The action uses frozen dependencies and instructs the generator to run the repository's current checks.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
@@ -1980,7 +1990,7 @@ Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release
 | `release-tag` | string | Yes | — | The raw release tag (e.g., `v1.2.3`). Used for linking back to the release. |
 | `release-notes` | string | Yes | — | Release notes markdown from the release |
 | `changes-diff` | string | Yes | — | Git diff of changes in this release |
-| `docs-path` | string | Yes | — | Path within the docs repo this service maps to (e.g., `legacy/imessage.mdx` or `advanced-kits/imessage`) |
+| `docs-path` | string | Yes | — | Documentation focus hint; existing target-repository rules determine edit scope and page placement |
 | `docs-repo` | string | No | `photon-hq/docs` | Target docs repository (`owner/repo`) |
 | `docs-branch` | string | No | `main` | Base branch of the docs repo |
 | `anthropic-api-key` | secret | Yes | — | Anthropic API key for Claude Code |
