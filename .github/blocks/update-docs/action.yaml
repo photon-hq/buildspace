@@ -55,16 +55,24 @@ runs:
         DOCS_REPO: ${{ inputs.docs-repo }}
         DOCS_BRANCH: ${{ inputs.docs-branch }}
       run: |
-        DOCS_DIR="${GITHUB_WORKSPACE}/docs-repo"
+        set -euo pipefail
+        DOCS_TEMP="$(mktemp -d "${RUNNER_TEMP}/buildspace-docs.XXXXXX")"
+        trap 'rm -rf "$DOCS_TEMP"' ERR
+        DOCS_DIR="${DOCS_TEMP}/repo"
         echo "docs-dir=${DOCS_DIR}" >> "$GITHUB_OUTPUT"
+        echo "cleanup-root=${DOCS_TEMP}" >> "$GITHUB_OUTPUT"
 
-        git clone \
+        GIT_CONFIG_COUNT=2 \
+        GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='' \
+        GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
+        GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" \
+          git clone \
           --branch "${DOCS_BRANCH}" \
           --single-branch \
-          "https://x-access-token:${GH_TOKEN}@github.com/${DOCS_REPO}.git" \
+          "https://github.com/${DOCS_REPO}.git" \
           "${DOCS_DIR}"
 
-        git -C "${DOCS_DIR}" remote set-url origin "https://github.com/${DOCS_REPO}.git"
+        trap - ERR
 
     - name: Write release context for Claude
       id: write-context
@@ -125,7 +133,7 @@ runs:
         DOCS_PATH: ${{ inputs.docs-path }}
         CONTEXT_DIR: ${{ steps.write-context.outputs.context-dir }}
       run: |
-        PROMPT_FILE="${RUNNER_TEMP}/claude-prompt.txt"
+        PROMPT_FILE="${DOCS_DIR%/repo}/claude-prompt.txt"
         echo "prompt-file=${PROMPT_FILE}" >> "$GITHUB_OUTPUT"
         export PROMPT_FILE
 
@@ -236,6 +244,7 @@ runs:
         SOURCE_SERVER: ${{ github.server_url }}
         RELEASE_TAG: ${{ inputs.release-tag }}
       run: |
+        set -euo pipefail
         cd "${DOCS_DIR}"
 
         # Sanitize branch name
@@ -243,18 +252,27 @@ runs:
         SANITIZED_VERSION="$(echo "${VERSION}" | sed 's/[^a-zA-Z0-9.\-]/-/g')"
         BRANCH_NAME="docs/update-${SANITIZED_SERVICE}-v${SANITIZED_VERSION}"
 
+        EXISTING_PR="$(gh pr list \
+          --repo "${DOCS_REPO}" \
+          --head "${BRANCH_NAME}" \
+          --state open \
+          --json url \
+          --jq '.[0].url // empty')"
+
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
         git checkout -B "${BRANCH_NAME}"
         git add -A
         git commit -m "docs: update ${SERVICE_NAME} documentation for v${VERSION}"
-        git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${DOCS_REPO}.git"
-        git push --force-with-lease origin "${BRANCH_NAME}"
-        git remote set-url origin "https://github.com/${DOCS_REPO}.git"
+        GIT_CONFIG_COUNT=2 \
+        GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='' \
+        GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
+        GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" \
+          git push --force-with-lease origin "${BRANCH_NAME}"
 
         # Build PR body safely via Python to avoid shell escaping issues
-        PR_BODY_FILE="${RUNNER_TEMP}/pr-body.md"
+        PR_BODY_FILE="${DOCS_DIR%/repo}/pr-body.md"
         export PR_BODY_FILE
 
         python3 << 'PYEOF'
@@ -289,14 +307,6 @@ runs:
             f.write(body)
         PYEOF
 
-        # Check for existing PR on this branch
-        EXISTING_PR="$(gh pr list \
-          --repo "${DOCS_REPO}" \
-          --head "${BRANCH_NAME}" \
-          --state open \
-          --json url \
-          --jq '.[0].url // empty')" || true
-
         if [ -n "${EXISTING_PR}" ]; then
           PR_URL="${EXISTING_PR}"
         else
@@ -325,5 +335,8 @@ runs:
       if: always()
       shell: bash
       env:
-        DOCS_DIR: ${{ steps.clone-docs.outputs.docs-dir }}
-      run: rm -rf "${DOCS_DIR}" || true
+        DOCS_TEMP: ${{ steps.clone-docs.outputs.cleanup-root }}
+      run: |
+        if [[ -n "$DOCS_TEMP" && "$DOCS_TEMP" == "$RUNNER_TEMP"/buildspace-docs.* && "${DOCS_TEMP#"$RUNNER_TEMP"/buildspace-docs.}" != */* ]]; then
+          rm -rf "$DOCS_TEMP"
+        fi

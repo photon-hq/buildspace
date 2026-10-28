@@ -1,0 +1,111 @@
+name: 'Collect Release Context'
+description: 'Read reviewers, release metadata and diff from an existing full caller checkout with tags; requires Bash, Git and Python 3'
+
+inputs:
+  release-tag:
+    description: 'Tag in the checked-out caller repository'
+    required: true
+  release-notes:
+    description: 'Release notes supplied by the caller'
+    required: false
+    default: ''
+
+outputs:
+  version:
+    description: 'Release tag with one leading v removed'
+    value: ${{ steps.release-info.outputs.version }}
+  release_tag:
+    description: 'Release tag unchanged'
+    value: ${{ steps.release-info.outputs.release_tag }}
+  previous_tag:
+    description: 'Previous tag in creation-date order, or empty for the first release'
+    value: ${{ steps.release-info.outputs.previous_tag }}
+  release_notes:
+    description: 'Release notes unchanged'
+    value: ${{ steps.release-info.outputs.release_notes }}
+  changes_diff:
+    description: 'Diff capped at 100000 characters plus a truncation notice, with NUL characters removed'
+    value: ${{ steps.release-info.outputs.changes_diff }}
+  reviewers:
+    description: 'Comma-separated unique user logins from the first CODEOWNERS file, excluding teams'
+    value: ${{ steps.codeowners.outputs.reviewers }}
+
+runs:
+  using: composite
+  steps:
+    - name: Extract reviewers from CODEOWNERS
+      id: codeowners
+      shell: bash
+      run: |
+        CODEOWNERS_FILE=""
+        for path in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+          if [ -f "${path}" ]; then
+            CODEOWNERS_FILE="${path}"
+            break
+          fi
+        done
+        if [ -z "${CODEOWNERS_FILE}" ]; then
+          echo "reviewers=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        REVIEWERS="$({ grep -oE '@[a-zA-Z0-9_/-]+' "${CODEOWNERS_FILE}" || true; } \
+          | sed '/\//d' | sort -u | sed 's/^@//' | paste -sd ',' -)"
+        echo "reviewers=${REVIEWERS}" >> "$GITHUB_OUTPUT"
+
+    - name: Extract release info
+      id: release-info
+      shell: bash
+      env:
+        RAW_TAG: ${{ inputs.release-tag }}
+        RELEASE_BODY: ${{ inputs.release-notes }}
+      run: |
+        set -euo pipefail
+        if [ -z "${RAW_TAG}" ]; then
+          echo "::error::A release tag is required."
+          exit 1
+        fi
+        git rev-parse --verify "refs/tags/${RAW_TAG}^{commit}" > /dev/null
+        PREVIOUS_TAG=""
+        FOUND_CURRENT=false
+        while IFS= read -r tag; do
+          if [ "${FOUND_CURRENT}" = true ]; then
+            PREVIOUS_TAG="${tag}"
+            break
+          fi
+          if [ "${tag}" = "${RAW_TAG}" ]; then
+            FOUND_CURRENT=true
+          fi
+        done < <(git tag --sort=-creatordate)
+        if [ "${FOUND_CURRENT}" = false ]; then
+          echo "::error::The release tag was not found in the checkout."
+          exit 1
+        fi
+        DIFF_FILE="$(mktemp "${RUNNER_TEMP}/release-context.XXXXXX")"
+        export DIFF_FILE
+        trap 'rm -f "$DIFF_FILE"' EXIT
+        if [ -n "${PREVIOUS_TAG}" ]; then
+          git diff "refs/tags/${PREVIOUS_TAG}" "refs/tags/${RAW_TAG}" > "$DIFF_FILE"
+        else
+          git diff "$(git hash-object -t tree /dev/null)" "refs/tags/${RAW_TAG}" > "$DIFF_FILE"
+        fi
+        echo "version=${RAW_TAG#v}" >> "$GITHUB_OUTPUT"
+        echo "release_tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+        echo "previous_tag=${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+        python3 <<'PYEOF'
+        import os
+        import uuid
+
+        max_chars = 100000
+        with open(os.environ['DIFF_FILE'], encoding='utf-8', errors='replace') as source:
+            raw_diff = source.read(max_chars + 1)
+        diff = raw_diff[:max_chars].replace('\x00', '')
+        if len(raw_diff) > max_chars:
+            diff += '\n\n... [diff truncated at 100000 characters]'
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            for key, value in [('release_notes', os.environ.get('RELEASE_BODY', '')), ('changes_diff', diff)]:
+                delimiter = f'GHDELIM_{uuid.uuid4().hex}'
+                output.write(f'{key}<<{delimiter}\n{value}')
+                if value and not value.endswith('\n'):
+                    output.write('\n')
+                output.write(f'{delimiter}\n')
+        PYEOF
