@@ -39,10 +39,14 @@ class LegacyNotifyTests(unittest.TestCase):
             'pull-requests': 'read', 'contents': 'read',
         })
 
-    def test_xcode_and_makefile_dylib_paths_remain_available(self):
+    def test_only_the_makefile_dylib_chain_remains_available(self):
         for path in (
             '.github/workflows/dylib-release.yml', '.github/blocks/build-dylib/action.yml',
-            '.github/blocks/install-cocoapods/action.yml', '.github/workflows/makefile-dylib-release.yml',
+            '.github/blocks/install-cocoapods/action.yml',
+        ):
+            self.assertFalse((ROOT / path).exists(), path)
+        for path in (
+            '.github/workflows/makefile-dylib-release.yml',
             '.github/blocks/build-makefile-dylib/action.yml',
         ):
             self.assertTrue((ROOT / path).is_file(), path)
