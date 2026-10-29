@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import yaml
+from git_fixture import commit_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,11 +50,14 @@ save()
 sys.exit(int(os.environ.get('PUSH_EXIT', '0')) if args[0] == 'push' else 0)
 ''')
         self.stub('gh', '''
-assert sys.argv[1:3] in (['pr', 'list'], ['pr', 'create'])
+assert sys.argv[1:3] in (['pr', 'list'], ['pr', 'view'], ['pr', 'create'])
 save()
 if sys.argv[2] == 'list':
     print(os.environ.get('EXISTING_PR', ''))
     sys.exit(int(os.environ.get('LOOKUP_EXIT', '0')))
+if sys.argv[2] == 'view':
+    print(os.environ.get('EXISTING_HEAD', 'a' * 40))
+    sys.exit(int(os.environ.get('HEAD_LOOKUP_EXIT', '0')))
 print('https://github.com/fixture/docs/pull/1')
 sys.exit(int(os.environ.get('CREATE_EXIT', '0')))
 ''')
@@ -111,6 +115,74 @@ def save():
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output.read_text(), 'pr-url=https://github.com/fixture/docs/pull/2\n')
         self.assertFalse(any(item['args'][:2] == ['pr', 'create'] for item in self.commands()))
+
+    def test_failed_existing_head_lookup_stops_before_git_writes(self):
+        result = self.execute(EXISTING_PR='https://github.com/fixture/docs/pull/2', HEAD_LOOKUP_EXIT='29')
+        self.assertEqual(result.returncode, 29)
+        self.assertEqual([(item['command'], item['args'][:2]) for item in self.commands()],
+                         [('gh', ['pr', 'list']), ('gh', ['pr', 'view'])])
+        self.assertEqual(self.output.read_text(), '')
+
+    def test_push_lease_pins_the_observed_head_or_requires_a_new_branch(self):
+        for head in ('', 'a' * 40):
+            with self.subTest(head=head):
+                self.log.unlink(missing_ok=True)
+                self.output.write_text('')
+                result = self.execute(EXISTING_PR='https://github.com/fixture/docs/pull/2' if head else '',
+                                      EXISTING_HEAD=head)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                push = next(item for item in self.commands()
+                            if item['command'] == 'git' and item['args'][0] == 'push')
+                self.assertIn(f'--force-with-lease=refs/heads/docs/update-fixture-service-v1.2.3:{head}', push['args'])
+
+    def test_real_single_branch_clone_retries_and_rejects_a_stale_head(self):
+        (self.bin / 'git').unlink()
+        source = self.root / 'source'
+        source.mkdir()
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(source)], check=True, capture_output=True)
+        (source / 'README.md').write_text('fixture docs\n')
+        commit_fixture(source, 'fixture source')
+        remote = self.root / 'origin.git'
+        subprocess.run(['git', 'clone', '--bare', str(source), str(remote)], check=True, capture_output=True)
+        config = self.root / 'fixture.gitconfig'
+        config.write_text(f'[url "file://{remote}"]\n\tinsteadOf = https://github.com/fixture/docs.git\n')
+        self.env['GIT_CONFIG_GLOBAL'] = str(config)
+        branch = 'docs/update-fixture-service-v1.2.3'
+        clone = next(step['run'] for step in STEPS if step.get('id') == 'clone-docs')
+
+        def publish(marker, expected=None):
+            self.output.write_text('')
+            result = subprocess.run(['bash', '--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', clone],
+                                    cwd=self.root, env=self.env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            values = dict(line.split('=', 1) for line in self.output.read_text().splitlines())
+            self.docs = Path(values['docs-dir'])
+            self.env['DOCS_DIR'] = str(self.docs)
+            tracking = subprocess.run(['git', '-C', str(self.docs), 'rev-parse', '--verify',
+                                       f'refs/remotes/origin/{branch}'], env=self.env, capture_output=True)
+            self.assertNotEqual(tracking.returncode, 0)
+            (self.docs / 'README.md').write_text(f'fixture docs: {marker}\n')
+            self.output.write_text('')
+            return self.execute(EXISTING_PR='https://github.com/fixture/docs/pull/1' if expected else '',
+                                EXISTING_HEAD=expected or '')
+
+        def remote_head():
+            return subprocess.check_output(['git', '--git-dir', str(remote), 'rev-parse',
+                                            f'refs/heads/{branch}'], text=True, env=self.env).strip()
+
+        first = publish('first')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        first_head = remote_head()
+        second = publish('second', first_head)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_head = remote_head()
+        self.assertNotEqual(first_head, second_head)
+        self.assertEqual(self.output.read_text(), 'pr-url=https://github.com/fixture/docs/pull/1\n')
+        stale = publish('stale retry', first_head)
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn('stale info', stale.stderr)
+        self.assertEqual(remote_head(), second_head)
+        self.assertEqual(self.output.read_text(), '')
 
     def test_push_and_create_failures_emit_no_success_output(self):
         for failure in ('PUSH_EXIT', 'CREATE_EXIT'):
