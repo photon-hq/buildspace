@@ -208,7 +208,7 @@ Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and relea
 | `APP_ID` | Update Documentation and Update Skills (required), release workflows (optional, for protected branches) | GitHub App settings |
 | `APP_PRIVATE_KEY` | Update Documentation and Update Skills (required), release workflows (optional, for protected branches) | GitHub App settings |
 
-Add these in your repository's **Settings > Secrets and variables > Actions**, or configure organization secrets with access granted to the calling repository. Pass the required secrets explicitly or use supported GitHub secret inheritance.
+Add these in your repository's **Settings > Secrets and variables > Actions**, or configure organization secrets with access granted to the calling repository. Pass the required secrets explicitly. GitHub supports [secret inheritance](https://docs.github.com/en/actions/how-tos/sharing-automations/reuse-workflows#passing-inputs-and-secrets-to-a-reusable-workflow) only when the caller and reusable workflow are within the same organization or enterprise. Callers outside that boundary must use explicit secret mappings, as shown below.
 
 GitHub Packages publishing does not need another stored secret. It uses the caller repository's short-lived `GITHUB_TOKEN`; grant the reusable-workflow job `packages: write` when `publish-github-packages` is enabled.
 
@@ -1314,7 +1314,7 @@ For `photon-hq/docs`, the updater follows the existing Mintlify conventions and 
 
 #### Secrets
 
-Configure `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` in the calling repository, or as organization secrets available to it. Pass all three secrets explicitly or use supported GitHub secret inheritance. The GitHub App must have access to the target docs repository. The workflow uses its credentials to mint a short-lived token scoped to that repository.
+Configure `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` in the calling repository, or as organization secrets available to it. Pass all three secrets explicitly, as shown below. For inheritance restrictions, see [Required Secrets](#required-secrets). The GitHub App must have access to the target docs repository. The workflow uses its credentials to mint a short-lived token scoped to that repository.
 
 #### Example
 
@@ -1330,7 +1330,10 @@ jobs:
     uses: photon-hq/buildspace/.github/workflows/update-docs.yaml@main
     with:
       docs-path: advanced-kits/imessage
-    secrets: inherit
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 ### Update Skills
@@ -1356,7 +1359,7 @@ The workflow generates a cross-repo GitHub App token from the caller-provided `A
 
 #### Secrets
 
-Configure `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` in the calling repository, or as organization secrets available to it. Pass all three secrets explicitly or use supported GitHub secret inheritance. The GitHub App must have access to the target skills repository. The workflow uses its credentials to mint a short-lived token scoped to that repository.
+Configure `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` in the calling repository, or as organization secrets available to it. Pass all three secrets explicitly, as shown below. For inheritance restrictions, see [Required Secrets](#required-secrets). The GitHub App must have access to the target skills repository. The workflow uses its credentials to mint a short-lived token scoped to that repository.
 
 #### Example
 
@@ -1373,7 +1376,10 @@ jobs:
     with:
       skills-need-update: true
       skills-path: skills/my-service
-    secrets: inherit
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 ```
 
 ---

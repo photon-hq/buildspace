@@ -5,7 +5,8 @@
 #
 # Configure APP_ID, APP_PRIVATE_KEY, and ANTHROPIC_API_KEY in the calling
 # repository or its organization, with access granted to that repository.
-# Pass them explicitly or use supported GitHub secret inheritance.
+# Pass them explicitly. Secret inheritance requires the caller and reusable
+# workflow to be within the same organization or enterprise.
 #
 # Usage (from another repository):
 #
@@ -19,7 +20,10 @@
 #       with:
 #         # service-name: my-service  # optional, defaults to repo name
 #         docs-path: advanced-kits/imessage
-#       secrets: inherit
+#       secrets:
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#         APP_ID: ${{ secrets.APP_ID }}
+#         APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 
 name: Update Documentation
 

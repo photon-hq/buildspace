@@ -10,7 +10,8 @@
 #
 # Configure APP_ID, APP_PRIVATE_KEY, and ANTHROPIC_API_KEY in the calling
 # repository or its organization, with access granted to that repository.
-# Pass them explicitly or use supported GitHub secret inheritance.
+# Pass them explicitly. Secret inheritance requires the caller and reusable
+# workflow to be within the same organization or enterprise.
 #
 # Usage (from another repository, triggered by a release event):
 #
@@ -24,7 +25,10 @@
 #       with:
 #         skills-need-update: true
 #         skills-path: skills/my-service
-#       secrets: inherit
+#       secrets:
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#         APP_ID: ${{ secrets.APP_ID }}
+#         APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 #
 # When calling from a non-release context (e.g., a push-triggered workflow),
 # pass release-tag and release-notes to override the release event context:
@@ -36,7 +40,10 @@
 #       skills-path: skills/my-service
 #       release-tag: v1.2.3
 #       release-notes: ${{ needs.some-job.outputs.notes }}
-#     secrets: inherit
+#     secrets:
+#       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#       APP_ID: ${{ secrets.APP_ID }}
+#       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
 
 name: Update Skills
 
