@@ -26,6 +26,14 @@ inputs:
     description: '[secret] GitHub App private key for pushing to protected branches (optional)'
     required: false
     default: ''
+  commit-user-name:
+    description: '[string] Git user name for release commits'
+    required: false
+    default: 'photon-release[bot]'
+  commit-user-email:
+    description: '[string] Git user email for release commits'
+    required: false
+    default: 'photon-release[bot]@users.noreply.github.com'
 
 outputs:
   versions:
@@ -284,6 +292,8 @@ runs:
         APP_TOKEN: ${{ steps.app-token.outputs.token }}
         FALLBACK_TOKEN: ${{ inputs.github-token }}
         COMMIT_MSG: ${{ steps.apply-versions.outputs.commit-message }}
+        COMMIT_USER_NAME: ${{ inputs.commit-user-name }}
+        COMMIT_USER_EMAIL: ${{ inputs.commit-user-email }}
       run: |
         set -euo pipefail
 
@@ -292,8 +302,8 @@ runs:
         AUTH=$(echo -n "x-access-token:${TOKEN}" | base64 | tr -d '\n')
         git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${AUTH}"
 
-        git config user.name "photon-release[bot]"
-        git config user.email "photon-release[bot]@users.noreply.github.com"
+        git config user.name "$COMMIT_USER_NAME"
+        git config user.email "$COMMIT_USER_EMAIL"
 
         git add -A
         if ! git diff --staged --quiet; then

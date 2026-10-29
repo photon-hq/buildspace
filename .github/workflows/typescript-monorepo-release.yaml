@@ -7,6 +7,16 @@ on:
         type: string
         required: true
         description: "Display name for the monorepo (used in release title)"
+      commit-user-name:
+        type: string
+        required: false
+        default: "photon-release[bot]"
+        description: "Git user name for release commits"
+      commit-user-email:
+        type: string
+        required: false
+        default: "photon-release[bot]@users.noreply.github.com"
+        description: "Git user email for release commits"
       packages:
         type: string
         required: true
@@ -140,6 +150,8 @@ jobs:
         id: bump
         uses: photon-hq/buildspace/.github/blocks/bump-monorepo-versions@main
         with:
+          commit-user-name: ${{ inputs.commit-user-name }}
+          commit-user-email: ${{ inputs.commit-user-email }}
           changed-packages: ${{ needs.detect-changes.outputs.changed }}
           service-name: ${{ inputs.service-name }}
           prerelease: ${{ inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease }}
