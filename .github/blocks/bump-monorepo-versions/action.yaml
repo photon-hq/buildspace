@@ -3,7 +3,7 @@ description: 'Determine versions for changed monorepo packages using AI, bump pa
 
 inputs:
   changed-packages:
-    description: '[string] JSON array of changed packages from detect-changed-packages (e.g. [{"name":"photon","path":"packages/photon"}])'
+    description: '[string] JSON array of changed packages from detect-changed-packages (e.g. [{"name":"@acme/app","path":"packages/app"}])'
     required: true
   service-name:
     description: '[string] Service name for commit messages and release notes'
@@ -29,7 +29,7 @@ inputs:
 
 outputs:
   versions:
-    description: 'JSON object mapping package names to their new versions (e.g. {"photon":"1.2.0","@photon/openai":"0.5.0"})'
+    description: 'JSON object mapping package names to their new versions (e.g. {"@acme/app":"1.2.0","@acme/client":"0.5.0"})'
     value: ${{ steps.apply-versions.outputs.versions }}
   release-notes:
     description: 'Combined AI-generated release notes for all bumped packages'

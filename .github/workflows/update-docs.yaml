@@ -3,8 +3,9 @@
 # Analyzes release changes using Claude Code and submits a PR
 # to update documentation in the target docs repository.
 #
-# All repos under photon-hq inherit the org-level APP_ID,
-# APP_PRIVATE_KEY, and ANTHROPIC_API_KEY secrets automatically.
+# Configure APP_ID, APP_PRIVATE_KEY, and ANTHROPIC_API_KEY in the calling
+# repository or its organization, with access granted to that repository.
+# Pass them explicitly or use supported GitHub secret inheritance.
 #
 # Usage (from another repository):
 #
@@ -52,13 +53,13 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         required: true
-        description: "Anthropic API key for Claude Code (org secret)"
+        description: "Anthropic API key for Claude Code (repository or organization secret)"
       APP_ID:
         required: true
-        description: "GitHub App ID for creating PRs on the docs repo (org secret)"
+        description: "GitHub App ID for creating PRs on the docs repo (repository or organization secret)"
       APP_PRIVATE_KEY:
         required: true
-        description: "GitHub App private key (org secret)"
+        description: "GitHub App private key (repository or organization secret)"
 
 jobs:
   gather-changes:
@@ -90,7 +91,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # --- Generate a cross-repo token from the org-level GitHub App secrets ---
+      # --- Generate a cross-repo token from the caller-provided GitHub App secrets ---
       - name: Parse docs repo owner and name
         id: parse-repo
         shell: bash

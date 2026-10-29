@@ -3,7 +3,7 @@ description: 'Detect which monorepo packages changed since the last release and 
 
 inputs:
   packages:
-    description: '[string] JSON array of packages, e.g. [{"name":"photon","path":"packages/photon"}]'
+    description: '[string] JSON array of packages, e.g. [{"name":"@acme/app","path":"packages/app"}]'
     required: true
   include-dependents:
     description: "[boolean: 'true'/'false'] Also include downstream dependents of changed packages"

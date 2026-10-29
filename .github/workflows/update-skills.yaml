@@ -8,8 +8,9 @@
 # skip the expensive AI step entirely when the release is irrelevant
 # to skills (e.g., CI-only changes).
 #
-# All repos under photon-hq inherit the org-level APP_ID,
-# APP_PRIVATE_KEY, and ANTHROPIC_API_KEY secrets automatically.
+# Configure APP_ID, APP_PRIVATE_KEY, and ANTHROPIC_API_KEY in the calling
+# repository or its organization, with access granted to that repository.
+# Pass them explicitly or use supported GitHub secret inheritance.
 #
 # Usage (from another repository, triggered by a release event):
 #
@@ -84,13 +85,13 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         required: true
-        description: "Anthropic API key for Claude Code (org secret)"
+        description: "Anthropic API key for Claude Code (repository or organization secret)"
       APP_ID:
         required: true
-        description: "GitHub App ID for creating PRs on the skills repo (org secret)"
+        description: "GitHub App ID for creating PRs on the skills repo (repository or organization secret)"
       APP_PRIVATE_KEY:
         required: true
-        description: "GitHub App private key (org secret)"
+        description: "GitHub App private key (repository or organization secret)"
 
 jobs:
   gather-changes:

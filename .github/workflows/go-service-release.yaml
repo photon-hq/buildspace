@@ -45,7 +45,7 @@ on:
         type: string
         required: false
         default: ""
-        description: "Homebrew tap repository to update (e.g., 'photon-hq/homebrew-tap'). Leave empty to skip."
+        description: "Homebrew tap repository to update (e.g., 'acme/homebrew-tap'). Leave empty to skip."
       tap-formula:
         type: string
         required: false
