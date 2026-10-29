@@ -7,6 +7,16 @@ on:
         type: string
         required: true
         description: "The name of the service to release"
+      commit-user-name:
+        type: string
+        required: false
+        default: "photon-release[bot]"
+        description: "Git user name for release commits"
+      commit-user-email:
+        type: string
+        required: false
+        default: "photon-release[bot]@users.noreply.github.com"
+        description: "Git user email for release commits"
       binary-name:
         type: string
         required: true
@@ -161,6 +171,8 @@ jobs:
       - name: Update Homebrew Tap
         uses: photon-hq/buildspace/.github/blocks/update-tap@main
         with:
+          commit-user-name: ${{ inputs.commit-user-name }}
+          commit-user-email: ${{ inputs.commit-user-email }}
           formula-name: ${{ inputs.tap-formula }}
           version: ${{ needs.release-info.outputs.version }}
           tap-repo: ${{ inputs.tap-repo }}

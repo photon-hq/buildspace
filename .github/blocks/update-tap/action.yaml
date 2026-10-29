@@ -17,6 +17,14 @@ inputs:
   app-private-key:
     description: '[secret] GitHub App private key for pushing to the tap repository'
     required: true
+  commit-user-name:
+    description: '[string] Git user name for release commits'
+    required: false
+    default: 'photon-release[bot]'
+  commit-user-email:
+    description: '[string] Git user email for release commits'
+    required: false
+    default: 'photon-release[bot]@users.noreply.github.com'
 
 runs:
   using: 'composite'
@@ -178,9 +186,12 @@ runs:
     - name: Commit and push
       shell: bash
       working-directory: _homebrew_tap
+      env:
+        COMMIT_USER_NAME: ${{ inputs.commit-user-name }}
+        COMMIT_USER_EMAIL: ${{ inputs.commit-user-email }}
       run: |
-        git config user.name "photon-release[bot]"
-        git config user.email "photon-release[bot]@users.noreply.github.com"
+        git config user.name "$COMMIT_USER_NAME"
+        git config user.email "$COMMIT_USER_EMAIL"
 
         git add Formula/
 

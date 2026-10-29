@@ -7,6 +7,16 @@ on:
         type: string
         required: true
         description: "The name of the service to release"
+      commit-user-name:
+        type: string
+        required: false
+        default: "photon-release[bot]"
+        description: "Git user name for release commits"
+      commit-user-email:
+        type: string
+        required: false
+        default: "photon-release[bot]@users.noreply.github.com"
+        description: "Git user email for release commits"
       source-sha:
         type: string
         required: false
@@ -204,6 +214,8 @@ jobs:
       - name: Bump Version
         uses: photon-hq/buildspace/.github/blocks/bump-npm-version@main
         with:
+          commit-user-name: ${{ inputs.commit-user-name }}
+          commit-user-email: ${{ inputs.commit-user-email }}
           version: ${{ needs.release-info.outputs.version }}
           working-directory: ${{ inputs.working-directory }}
           github-token: ${{ github.token }}

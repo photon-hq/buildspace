@@ -41,12 +41,14 @@ BuildSpace gives you two layers of CI/CD automation:
   - [determine-publish-version](#determine-publish-version)
   - [create-github-release](#create-github-release)
   - [detect-changed-packages](#detect-changed-packages)
+  - [bump-npm-version](#bump-npm-version)
   - [bump-monorepo-versions](#bump-monorepo-versions)
   - [publish-github-packages](#publish-github-packages)
   - [publish-npm-packages](#publish-npm-packages)
   - [rust-build](#rust-build)
   - [typescript-build](#typescript-build)
   - [sync-crates-version](#sync-crates-version)
+  - [update-tap](#update-tap)
   - [publish-crates](#publish-crates)
   - [publish-npm](#publish-npm)
   - [publish-github-package](#publish-github-package)
@@ -653,6 +655,8 @@ Complete release pipeline for Rust services: checks PR labels, generates version
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Display name for the service |
 | `binary-name` | string | Yes | — | Name of the binary from `Cargo.toml` |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
 | `binary-path` | string | No | `""` | Path to crate directory (e.g., `crates/client`) |
 | `crates` | string | No | `[]` | JSON array of crate paths to publish in dependency order |
 | `build-env` | string | No | `""` | Compile-time env vars (e.g., `BASE_URL=https://...`) |
@@ -702,6 +706,8 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Display name for the service |
 | `source-sha` | string | No | `""` | Inspect and tag this exact full commit SHA; omission preserves existing behavior |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
 | `bun-version` | string | No | `latest` | Bun version to use |
 | `npm-tag` | string | No | `latest` | Package tag for npmjs.org and GitHub Packages (e.g., `latest`, `beta`, `next`) |
 | `no-npm-publish` | boolean | No | `false` | Skip npmjs.org publishing |
@@ -772,6 +778,8 @@ Complete release pipeline for TypeScript/JavaScript monorepos with independently
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Display name for the monorepo |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
 | `packages` | string | Yes | — | JSON array of packages: `[{"name":"pkg","path":"packages/pkg"}]` |
 | `bun-version` | string | No | `latest` | Bun version to use |
 | `npm-tag` | string | No | `latest` | Package tag for npmjs.org and GitHub Packages |
@@ -856,6 +864,8 @@ Complete release pipeline for Go binaries: checks PR labels, generates version a
 |-------|------|----------|---------|-------------|
 | `service-name` | string | Yes | — | Display name for the service |
 | `binary-name` | string | Yes | — | Output binary name |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for optional Homebrew tap commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for optional Homebrew tap commits |
 | `go-version` | string | No | `stable` | Go version to use |
 | `build-flags` | string | No | `""` | Additional `go build` flags |
 | `ldflags` | string | No | `-s -w` | Linker flags |
@@ -1707,17 +1717,57 @@ Detects which monorepo packages have changed since the last GitHub Release and r
 
 ---
 
+### bump-npm-version
+
+**Path:** `.github/blocks/bump-npm-version/action.yaml`
+
+Bumps `package.json`, commits, and pushes. Optional `commit-user-name` and
+`commit-user-email` inputs configure the Git identity without changing authentication.
+Omitting both preserves `photon-release[bot] <photon-release[bot]@users.noreply.github.com>`.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `version` | string | Yes | — | Version to set in `package.json` |
+| `working-directory` | string | No | `.` | Directory containing `package.json` |
+| `github-token` | secret | Yes | — | GitHub token (fallback) |
+| `app-id` | secret | No | `""` | GitHub App ID (for protected branches) |
+| `app-private-key` | secret | No | `""` | GitHub App private key |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
+
+#### Usage
+
+```yaml
+- uses: photon-hq/buildspace/.github/blocks/bump-npm-version@main
+  with:
+    version: "1.2.3"
+    github-token: ${{ github.token }}
+    commit-user-name: "Acme Release Bot"
+    commit-user-email: "release@acme.example"
+```
+
+The TypeScript service, TypeScript monorepo, Rust service, and Go service workflows
+accept the same optional identity inputs. Existing callers need no changes.
+
+---
+
 ### bump-monorepo-versions
 
 **Path:** `.github/blocks/bump-monorepo-versions/action.yaml`
 
 Determines versions for all changed monorepo packages using a single AI call, bumps each `package.json`, commits, and pushes.
 
+Use optional `commit-user-name` and `commit-user-email` inputs to change the Git identity for these commits.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `changed-packages` | string | Yes | — | JSON array from `detect-changed-packages` output |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
 | `service-name` | string | Yes | — | Service name for commit messages |
 | `prerelease` | boolean | No | `false` | Append `-rc.N` suffix to versions |
 | `openai-api-key` | secret | Yes | — | OpenAI API key |
@@ -1877,12 +1927,16 @@ Builds a TypeScript project using Bun.
 
 Sets a single version across all workspace crates using `cargo-edit`, commits, and pushes.
 
+Use optional `commit-user-name` and `commit-user-email` inputs to change the Git identity for these commits.
+
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `version` | string | Yes | — | Version to set across all crates |
 | `commit-changes` | boolean | No | `true` | Whether to commit and push |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
 | `github-token` | secret | Yes | — | GitHub token for pushing |
 
 #### Outputs
@@ -1899,6 +1953,27 @@ Sets a single version across all workspace crates using `cargo-edit`, commits, a
     version: "1.2.3"
     github-token: ${{ github.token }}
 ```
+
+---
+
+### update-tap
+
+**Path:** `.github/blocks/update-tap/action.yaml`
+
+Updates a Homebrew formula's version and checksums, then commits and pushes to the tap.
+Use optional `commit-user-name` and `commit-user-email` inputs to change the Git identity for that commit.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `formula-name` | string | Yes | — | Name of the formula to update |
+| `version` | string | Yes | — | Version to set |
+| `tap-repo` | string | Yes | — | Homebrew tap repository |
+| `app-id` | secret | Yes | — | GitHub App ID with access to the tap |
+| `app-private-key` | secret | Yes | — | GitHub App private key |
+| `commit-user-name` | string | No | `photon-release[bot]` | Git user name for release commits |
+| `commit-user-email` | string | No | `photon-release[bot]@users.noreply.github.com` | Git user email for release commits |
 
 ---
 

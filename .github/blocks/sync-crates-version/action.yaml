@@ -20,6 +20,14 @@ inputs:
     description: '[secret] GitHub App private key for pushing to protected branches (optional)'
     required: false
     default: ''
+  commit-user-name:
+    description: '[string] Git user name for release commits'
+    required: false
+    default: 'photon-release[bot]'
+  commit-user-email:
+    description: '[string] Git user email for release commits'
+    required: false
+    default: 'photon-release[bot]@users.noreply.github.com'
 
 outputs:
   updated-crates:
@@ -69,9 +77,12 @@ runs:
 
     - name: Configure git
       shell: bash
+      env:
+        COMMIT_USER_NAME: ${{ inputs.commit-user-name }}
+        COMMIT_USER_EMAIL: ${{ inputs.commit-user-email }}
       run: |
-        git config user.name "photon-release[bot]"
-        git config user.email "photon-release[bot]@users.noreply.github.com"
+        git config user.name "$COMMIT_USER_NAME"
+        git config user.email "$COMMIT_USER_EMAIL"
 
     - name: Sync workspace version
       id: sync
