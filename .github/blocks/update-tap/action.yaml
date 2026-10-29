@@ -9,7 +9,7 @@ inputs:
     description: '[string] Version number (e.g., "1.2.3")'
     required: true
   tap-repo:
-    description: '[string] The tap repository (e.g., "photon-hq/homebrew-photon")'
+    description: '[string] The tap repository (e.g., "acme/homebrew-tap")'
     required: true
   app-id:
     description: '[secret] GitHub App ID for pushing to the tap repository'

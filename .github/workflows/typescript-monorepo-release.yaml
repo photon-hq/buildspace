@@ -10,7 +10,7 @@ on:
       packages:
         type: string
         required: true
-        description: 'JSON array of packages, e.g. [{"name":"photon","path":"packages/photon"},{"name":"@photon/openai-compatible","path":"packages/openai-compatible"}]'
+        description: 'JSON array of packages, e.g. [{"name":"@acme/app","path":"packages/app"},{"name":"@acme/client","path":"packages/client"}]'
       bun-version:
         type: string
         required: false

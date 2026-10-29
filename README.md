@@ -153,8 +153,8 @@ jobs:
       pull-requests: read
       # packages: write  # required when publish-github-packages: true
     with:
-      service-name: photon-ts
-      packages: '[{"name":"@photon-hq/photon","path":"packages/photon"},{"name":"@photon-hq/openai-compatible","path":"packages/openai-compatible"}]'
+      service-name: acme
+      packages: '[{"name":"@acme/app","path":"packages/app"},{"name":"@acme/client","path":"packages/client"}]'
       root-build-command: "turbo build"
       # publish-github-packages: true
     secrets:
@@ -205,10 +205,10 @@ Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and relea
 | `ANTHROPIC_API_KEY` | Update Documentation, Update Skills | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
 | `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
 | `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
-| `APP_ID` | Update Documentation (required), release workflows (optional, for protected branches) | GitHub App settings |
-| `APP_PRIVATE_KEY` | Update Documentation (required), release workflows (optional, for protected branches) | GitHub App settings |
+| `APP_ID` | Update Documentation and Update Skills (required), release workflows (optional, for protected branches) | GitHub App settings |
+| `APP_PRIVATE_KEY` | Update Documentation and Update Skills (required), release workflows (optional, for protected branches) | GitHub App settings |
 
-Add these in your repo's **Settings > Secrets and variables > Actions**, or set them as **org-level secrets** under `photon-hq` so every repo inherits them automatically via `secrets: inherit`.
+Add these in your repository's **Settings > Secrets and variables > Actions**, or configure organization secrets with access granted to the calling repository. Pass the required secrets explicitly or use supported GitHub secret inheritance.
 
 GitHub Packages publishing does not need another stored secret. It uses the caller repository's short-lived `GITHUB_TOKEN`; grant the reusable-workflow job `packages: write` when `publish-github-packages` is enabled.
 
@@ -324,7 +324,7 @@ Local validation: `actionlint .github/workflows/publish-image.yml` and `python3 
 ### Package Stage and Promote
 
 `.github/workflows/package-stage.yml` and `.github/workflows/package-promote.yml` publish
-internal `@photon-hq/*` packages to GitHub Packages, or public packages to npmjs, the way `publish-image` and
+private packages to GitHub Packages, or public packages to npmjs, the way `publish-image` and
 Kargo ship images: every main commit is built and tested once, and production
 receives exactly the files that staging tested. Internal Rust crates built from
 the same commit are staged and promoted with them.
@@ -360,8 +360,8 @@ jobs:
       verify: pnpm verify
       pack: pnpm release:pack
       paths: packages/adapter scripts/pack.mjs # optional: what counts toward the version
-      crates: photon-adapter # optional: Rust crates released with the packages
-      downstream: fusor-v2 base-bffs
+      crates: acme-adapter # optional: Rust crates released with the packages
+      downstream: api web
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
@@ -472,7 +472,7 @@ source commit, and moves `latest`.
   for the environment's reviewers as before. Set it only where that actor's dispatches are already
   gated by people, and keep its token scoped to the repository.
 - **A public package on npmjs** sets `registry: https://registry.npmjs.org` and
-  `package`, its scoped name such as `@photon-ai/otel`, in both callers, and grants
+  `package`, its scoped name such as `@acme/app`, in both callers, and grants
   `id-token: write` to both calls. The staging build and the promoted candidates
   are published through npm trusted publishing, with provenance and no token,
   by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
@@ -488,16 +488,18 @@ source commit, and moves `latest`.
 - **A Bun repository** sets `bun-version` in the stage caller, which sets up Bun
   in place of pnpm, and its own `install`, such as `bun install --frozen-lockfile`.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already
-  published with other contents, and one whose `@photon-hq/*` `dependencies` or
+  published with other contents, and one whose same-scope `dependencies` or
   `optionalDependencies` are not exact stable published versions (or packages
-  promoted with it), or whose `@photon-hq/*` peer ranges no published stable
+  promoted with it), or whose same-scope peer ranges no published stable
   version satisfies. Promote dependencies first.
 - **Rust crates** named in `crates` are staged and promoted with the packages.
   Cargo fetches internal crates from Git, not a registry, so a crate's release is
   the build's tag: consumers pin the production tag and the crate's own exact
-  version, as the release notes show, for example
-  `photon-error = { version = "=0.1.0", git = "https://github.com/photon-hq/error", tag = "v0.3.0" }`
-  (pin the staging tag to try a staging build). After `verify`, the build job runs
+  version, as the release notes show, for example:
+  ```toml
+  acme-error = { version = "=0.1.0", git = "https://github.com/acme/error", tag = "v0.3.0" }
+  ```
+  Pin the staging tag to try a staging build. After `verify`, the build job runs
   `cargo package --locked --no-verify --exclude-lockfile` for each crate (Cargo
   1.87+, clean checkout); the `.crate` records its source commit and is attested
   and attached to both releases. Cargo reads a crate's version from its source at
@@ -757,7 +759,7 @@ Omitting `source-sha` retains existing caller behavior. Source-aware caller chan
 must be deployed after these workflow and composite-action changes reach `main`.
 Run `node --test test/source-release.test.mjs` for the exact-source regression tests.
 
-> **Publishing to GitHub Packages (opt-in):** set `publish-github-packages: true` and add `packages: write` to the caller's `permissions`. The package's `name` must be scoped to the repository owner (for example, `@photon-hq/notebooklm-kit`). BuildSpace authenticates with the automatic `GITHUB_TOKEN`, so no PAT or additional secret is required. Leave `no-npm-publish` as `false` to publish to both registries, or set it to `true` for GitHub Packages only.
+> **Publishing to GitHub Packages (opt-in):** set `publish-github-packages: true` and add `packages: write` to the caller's `permissions`. The package's `name` must be scoped to the repository owner (for example, `@acme/app`). BuildSpace authenticates with the automatic `GITHUB_TOKEN`, so no PAT or additional secret is required. Leave `no-npm-publish` as `false` to publish to both registries, or set it to `true` for GitHub Packages only.
 
 ---
 
@@ -804,12 +806,12 @@ jobs:
       pull-requests: read
       packages: write
     with:
-      service-name: photon-ts
+      service-name: acme
       packages: |
         [
-          {"name":"@photon-hq/photon","path":"packages/photon"},
-          {"name":"@photon-hq/openai-compatible","path":"packages/openai-compatible"},
-          {"name":"@photon-hq/create-photon","path":"packages/create-photon"}
+          {"name":"@acme/app","path":"packages/app"},
+          {"name":"@acme/client","path":"packages/client"},
+          {"name":"@acme/create-app","path":"packages/create-app"}
         ]
       root-build-command: "turbo build"
       include-dependents: true
@@ -819,7 +821,7 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
-GitHub Packages uses the automatic `GITHUB_TOKEN`; no additional secret is needed. Every opted-in package must be scoped to the repository owner, such as `@photon-hq/openai-compatible`.
+GitHub Packages uses the automatic `GITHUB_TOKEN`; no additional secret is needed. Every opted-in package must be scoped to the repository owner, such as `@acme/client`.
 
 #### How It Works
 
@@ -1294,7 +1296,7 @@ jobs:
 
 Runs when a release is published. Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze the changes between the current and previous release, then submits a PR to the documentation repository with any necessary updates. Focuses on API changes, new features, configuration changes, breaking changes, and deprecations.
 
-The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target docs repo, lets Claude Code read the existing docs and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
+The workflow generates a cross-repo GitHub App token from the caller-provided `APP_ID` and `APP_PRIVATE_KEY` secrets. It clones the target docs repository, updates the documentation from the release diff and notes, and opens a PR when changes exist.
 
 AI may update authored guides through ordinary PR review. Existing target-repository rules determine edit scope and page placement. `docs-path` is a focus hint and may name a page or directory that does not exist yet. No extra directory allowlist, producer mapping, or approval gate is imposed.
 
@@ -1312,7 +1314,7 @@ For `photon-hq/docs`, the updater follows the existing Mintlify conventions and 
 
 #### Secrets
 
-Handled automatically. The workflow reads `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` from the `photon-hq` org-level secrets (passed via `secrets: inherit`). It uses the GitHub App credentials internally to mint a short-lived token scoped to the docs repo — individual repos never need to configure these.
+Configure `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` in the calling repository, or as organization secrets available to it. Pass all three secrets explicitly or use supported GitHub secret inheritance. The GitHub App must have access to the target docs repository. The workflow uses its credentials to mint a short-lived token scoped to that repository.
 
 #### Example
 
@@ -1337,7 +1339,7 @@ jobs:
 
 Runs when a release is published. Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze the changes between the current and previous release, then submits a PR to the skills repository (`photon-hq/skills`) with updated `SKILL.md` files. The caller controls whether skills actually need updating via the `skills-need-update` input — when `false`, the workflow exits early without running AI or cloning the skills repo.
 
-The workflow automatically generates a cross-repo GitHub App token from the `photon-hq` org-level `APP_ID` and `APP_PRIVATE_KEY` secrets, clones the target skills repo, lets Claude Code read the existing skills and modify them based on the release diff and notes, then opens a PR if any changes were made. No per-repo secret configuration is needed — just use `secrets: inherit`.
+The workflow generates a cross-repo GitHub App token from the caller-provided `APP_ID` and `APP_PRIVATE_KEY` secrets. It clones the target skills repository, updates the skills from the release diff and notes, and opens a PR when changes exist.
 
 #### Inputs
 
@@ -1354,7 +1356,7 @@ The workflow automatically generates a cross-repo GitHub App token from the `pho
 
 #### Secrets
 
-Handled automatically. The workflow reads `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` from the `photon-hq` org-level secrets (passed via `secrets: inherit`). It uses the GitHub App credentials internally to mint a short-lived token scoped to the skills repo — individual repos never need to configure these.
+Configure `ANTHROPIC_API_KEY`, `APP_ID`, and `APP_PRIVATE_KEY` in the calling repository, or as organization secrets available to it. Pass all three secrets explicitly or use supported GitHub secret inheritance. The GitHub App must have access to the target skills repository. The workflow uses its credentials to mint a short-lived token scoped to that repository.
 
 #### Example
 
@@ -1702,7 +1704,7 @@ Detects which monorepo packages have changed since the last GitHub Release and r
 - uses: photon-hq/buildspace/.github/blocks/detect-changed-packages@main
   id: detect
   with:
-    packages: '[{"name":"photon","path":"packages/photon"},{"name":"@photon/openai","path":"packages/openai"}]'
+    packages: '[{"name":"@acme/app","path":"packages/app"},{"name":"@acme/client","path":"packages/client"}]'
     include-dependents: true
 
 - if: steps.detect.outputs.has-changes == 'true'
@@ -1743,7 +1745,7 @@ Determines versions for all changed monorepo packages using a single AI call, bu
   id: bump
   with:
     changed-packages: ${{ steps.detect.outputs.changed }}
-    service-name: photon-ts
+    service-name: acme
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
     github-token: ${{ github.token }}
 ```
@@ -2034,7 +2036,7 @@ Without a key, the default `present` state creates an unmarked comment.
 
 **Path:** `.github/blocks/update-docs/action.yaml`
 
-Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs the Claude Code CLI to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow handles token generation automatically from org secrets).
+Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a documentation repository. Clones the docs repo, runs the Claude Code CLI to identify and make documentation updates, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the docs repo (the `update-docs` workflow generates this token from the caller-provided App secrets).
 
 Authored guide updates follow the target repository's existing rules without an added directory allowlist. Generated references stay with their declared producers. The action keeps pnpm's normal CI installation behavior and instructs the generator to run the repository's current checks.
 
@@ -2078,7 +2080,7 @@ Authored guide updates follow the target repository's existing rules without an 
 
 **Path:** `.github/blocks/update-skills/action.yaml`
 
-Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a skills repository. Clones the skills repo, runs the Claude Code CLI to identify and update relevant `SKILL.md` files, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the skills repo (the `update-skills` workflow handles token generation automatically from org secrets).
+Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release changes and submit a PR to a skills repository. Clones the skills repo, runs the Claude Code CLI to identify and update relevant `SKILL.md` files, then creates a PR if changes were made. Expects a pre-generated `github-token` with write access to the skills repo (the `update-skills` workflow generates this token from the caller-provided App secrets).
 
 #### Inputs
 

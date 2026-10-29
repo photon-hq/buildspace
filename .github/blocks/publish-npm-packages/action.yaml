@@ -3,7 +3,7 @@ description: 'Build and publish multiple monorepo packages to npm in dependency 
 
 inputs:
   changed-packages:
-    description: '[string] JSON array of packages in topological order (e.g. [{"name":"photon","path":"packages/photon"}])'
+    description: '[string] JSON array of packages in topological order (e.g. [{"name":"@acme/app","path":"packages/app"}])'
     required: true
   bun-version:
     description: '[string] Bun version to use'
