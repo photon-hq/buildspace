@@ -262,6 +262,12 @@ runs:
           --json url \
           --jq '.[0].url // empty')"
 
+        EXPECTED_HEAD=""
+        if [ -n "${EXISTING_PR}" ]; then
+          EXPECTED_HEAD="$(gh pr view "${EXISTING_PR}" \
+            --repo "${DOCS_REPO}" --json headRefOid --jq '.headRefOid')"
+        fi
+
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -272,7 +278,7 @@ runs:
         GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='' \
         GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
         GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" \
-          git push --force-with-lease origin "${BRANCH_NAME}"
+          git push --force-with-lease="refs/heads/${BRANCH_NAME}:${EXPECTED_HEAD}" origin "${BRANCH_NAME}"
 
         # Build PR body safely via Python to avoid shell escaping issues
         PR_BODY_FILE="${DOCS_DIR%/repo}/pr-body.md"
