@@ -991,6 +991,10 @@ jobs:
   and `dry-run` work as in `package-stage`. The promote call names the same
   `package-name` and `library`, and sets `private-deps` (with the same
   secrets) when a dependency is one of the owner's private repositories.
+- **Toolchain.** The build installs the Swift toolchain that the package's
+  committed `.swift-version` names, or the latest Swift release when it has
+  none. swiftly rewrites `.swift-version` when it selects a toolchain, so the
+  build restores the committed file before building.
 - **Dependencies.** Production depends only on production. Promotion reads the
   source commit's `Package.resolved` and `Package.swift` from GitHub, never
   running them, and checks every dependency fetched from one of the owner's
