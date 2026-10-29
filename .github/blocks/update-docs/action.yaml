@@ -259,8 +259,8 @@ runs:
           --repo "${DOCS_REPO}" \
           --head "${BRANCH_NAME}" \
           --state open \
-          --json url \
-          --jq '.[0].url // empty')"
+          --json url,isCrossRepository \
+          --jq '[.[] | select(.isCrossRepository | not)] | .[0].url // empty')"
 
         EXPECTED_HEAD=""
         if [ -n "${EXISTING_PR}" ]; then
