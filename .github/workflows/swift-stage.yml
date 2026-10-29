@@ -146,8 +146,26 @@ jobs:
           CI_WORKFLOW: ${{ inputs.ci-workflow }}
           CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
         run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
+      - name: Read the Swift version the package pins
+        id: swift-version
+        if: ${{ !inputs.library }}
+        run: |
+          set -euo pipefail
+          version=latest
+          if [[ -f .swift-version ]]; then
+            version="$(tr -d '[:space:]' < .swift-version)"
+            [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || { echo "::error::.swift-version does not name a Swift toolchain" >&2; exit 1; }
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
         if: ${{ !inputs.library }}
+        with:
+          swift-version: ${{ steps.swift-version.outputs.value }}
+      # swiftly rewrites a tracked .swift-version with the toolchain it selected.
+      - name: Keep the committed .swift-version
+        if: ${{ !inputs.library }}
+        run: |
+          if git ls-files --error-unmatch .swift-version >/dev/null 2>&1; then git checkout -- .swift-version; fi
       - name: Mint a token for private dependencies
         id: dependency-token
         if: inputs.private-deps && !inputs.library

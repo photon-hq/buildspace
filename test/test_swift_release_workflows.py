@@ -185,6 +185,66 @@ class BuildStepTests(unittest.TestCase):
         self.assertIn('changed tracked files', result.stderr)
 
 
+class ToolchainStepTests(unittest.TestCase):
+    """Runs the steps around setup-swift against a package that pins its toolchain."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / 'repository'
+        self.root.mkdir()
+        self.git = ['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com']
+        subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
+        (self.root / 'Package.swift').write_text('// swift-tools-version: 6.2\n')
+        self.build = STAGE['jobs']['build']
+
+    def run_step(self, name):
+        outputs = Path(self.tmp.name) / 'outputs'
+        outputs.write_text('')
+        env = {**os.environ, 'GITHUB_OUTPUT': str(outputs)}
+        result = subprocess.run(['bash', '-c', step(self.build, name)['run']], cwd=self.root, env=env, capture_output=True, text=True)
+        return result, outputs.read_text()
+
+    def commit(self, swift_version=None):
+        if swift_version is not None:
+            (self.root / '.swift-version').write_text(swift_version)
+        subprocess.run([*self.git, 'add', '.'], check=True)
+        subprocess.run([*self.git, 'commit', '-qm', 'source'], check=True)
+
+    def test_setup_swift_installs_the_pinned_version_or_the_latest(self):
+        setup = next(s for s in self.build['steps'] if s.get('uses', '').startswith('swift-actions/setup-swift@'))
+        self.assertEqual(setup['with']['swift-version'], '${{ steps.swift-version.outputs.value }}')
+        names = [s.get('name', s.get('uses')) for s in self.build['steps']]
+        read, keep = 'Read the Swift version the package pins', 'Keep the committed .swift-version'
+        self.assertEqual(step(self.build, read)['id'], 'swift-version')
+        self.assertLess(names.index(read), names.index(setup['uses']))
+        self.assertLess(names.index(setup['uses']), names.index(keep))
+        self.assertLess(names.index(keep), names.index('Build the staging package and its production candidate'))
+        self.commit()
+        self.assertEqual(self.run_step(read)[1], 'value=latest\n')
+        self.commit('6.3.3\n')
+        self.assertEqual(self.run_step(read)[1], 'value=6.3.3\n')
+
+    def test_a_swift_version_that_is_not_a_toolchain_name_fails(self):
+        self.commit('6.3.3 $(id)\n')
+        result, outputs = self.run_step('Read the Swift version the package pins')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('does not name a Swift toolchain', result.stderr)
+        self.assertEqual(outputs, '')
+
+    def test_the_committed_swift_version_survives_the_toolchain_setup(self):
+        keep = 'Keep the committed .swift-version'
+        self.commit()
+        result, _ = self.run_step(keep)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / '.swift-version').exists())
+        self.commit('6.3.3\n')
+        (self.root / '.swift-version').write_text('6.4.1')
+        result, _ = self.run_step(keep)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / '.swift-version').read_text(), '6.3.3\n')
+
+
 class CollectStepTests(unittest.TestCase):
     """Runs the collect step's command line against the real release tools."""
 
