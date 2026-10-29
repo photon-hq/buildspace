@@ -94,6 +94,9 @@ def save():
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = self.commands()
         self.assertEqual(commands[0]['args'][:2], ['pr', 'list'])
+        lookup = commands[0]['args']
+        self.assertEqual(lookup[lookup.index('--json') + 1], 'url,isCrossRepository')
+        self.assertIn('select(.isCrossRepository | not)', lookup[lookup.index('--jq') + 1])
         pushes = [item for item in commands if item['command'] == 'git' and item['args'][0] == 'push']
         self.assertEqual(len(pushes), 1)
         self.assertTrue(pushes[0]['authenticated'])
