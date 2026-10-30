@@ -33,11 +33,6 @@ on:
         required: false
         default: false
         description: "Mint an app token (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone private/internal org dependencies."
-      labels-to-check:
-        type: string
-        required: false
-        default: '["release", "prerelease"]'
-        description: "JSON array of PR labels to check. `release` cuts a stable release (GitHub release + Jamf deploy); `prerelease` cuts a release candidate (rc) instead — GitHub pre-release only, no Jamf."
       prerelease:
         type: boolean
         required: false
@@ -97,7 +92,7 @@ jobs:
         id: check
         uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
-          labels: ${{ inputs.labels-to-check }}
+          labels: '["release", "prerelease"]'
 
   prepare-release:
     needs: check-labels

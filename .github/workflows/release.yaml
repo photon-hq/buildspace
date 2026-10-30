@@ -7,11 +7,6 @@ on:
         type: string
         required: true
         description: "The name of the service to release"
-      labels-to-check:
-        type: string
-        required: false
-        default: '["release"]'
-        description: "JSON array of PR labels to check"
       release:
         type: boolean
         required: false
@@ -40,7 +35,7 @@ jobs:
         id: check
         uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
-          labels: ${{ inputs.labels-to-check }}
+          labels: '["release"]'
 
   release-info:
     needs: check-labels

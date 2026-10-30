@@ -26,8 +26,15 @@ release gates remain unchanged in this cleanup.
 
 The README now recommends stage/promote for supported package and Swift
 products. The generic checker describes label inspection rather than a release
-policy. Its executable script, inputs, defaults, outputs, API error handling,
-and all eight wrappers remain compatible.
+policy.
+
+Two options that no audited caller used were removed: the checker's
+`default-on-push` input and the `labels-to-check` input of six wrappers. Those
+wrappers now pass their fixed label lists directly, as `pkg-release.yml` and
+`makefile-dylib-release.yml` already did. A caller that still passes
+`labels-to-check` to a wrapper fails GitHub's input validation. Everything
+else is unchanged: the other inputs, outputs, API error handling, and all
+eight label gates.
 
 ## Workflow rules
 
@@ -50,22 +57,18 @@ runs `check-labels`, which forwards the checker's JSON-encoded string as
 | `pkg-release.yml` | Hard-coded `release` | Release label only | Packages payload/scripts, creates a GitHub Release, and optionally uploads to Jamf. |
 | `makefile-dylib-release.yml` | Hard-coded `release` | Release label only | Builds a Makefile dylib and creates a GitHub Release. |
 
-`labels-to-check` is a string containing a JSON array. Six wrappers expose it;
-the last two hard-code their list. The wrappers read fixed `release` and
-`prerelease` keys, so changing the requested names does not rename a trigger.
-The checker lowercases names but does not turn `pre release` or `pre-release`
-into `prerelease`.
+Each wrapper passes a fixed label list to the checker and reads the fixed
+`release` and `prerelease` keys. The checker lowercases names but does not turn
+`pre release` or `pre-release` into `prerelease`.
 
 `release: true` does not force stable mode when P is true. It also does not
 bypass a failed checker job. A prerelease label/input alone starts only the
 monorepo and Swift chains; single-package TypeScript, Rust, and Go still need R.
 
-The checker's required `labels` input accepts arbitrary names and returns only
-the requested lowercase boolean keys. Its optional comma-separated
-`default-on-push` input defaults to an empty string. Configured defaults apply
-only on non-PR events when GitHub confirms zero associated PRs, including manual
-events. API failures, ambiguous owners, and an unlabeled owning PR never become
-default release authorization. None of the eight wrappers passes this input.
+The checker's only input, `labels`, accepts arbitrary names and returns only
+the requested lowercase boolean keys. A push or manual run with no associated PR,
+an API failure, an ambiguous owner, or an unlabeled owning PR never produces a
+true label.
 
 Legacy publisher `dry-run` is not a pipeline-wide write prohibition: version
 commits and GitHub Releases can still occur. `no-npm-publish` disables npmjs
