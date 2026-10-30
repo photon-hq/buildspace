@@ -118,6 +118,20 @@ class AssociationTests(unittest.TestCase):
         self.assertEqual(result['errors'], [])
         self.assertEqual(json.loads(result['outputs']['labels']), {'release': True, 'prerelease': True})
 
+    def test_generic_labels_do_not_imply_release_policy(self):
+        result = execute(labels='["Needs-Review", "documentation"]', pages=[[pr()]],
+                         prLabels=[{'name': 'NEEDS-REVIEW'}])
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(json.loads(result['outputs']['labels']), {'needs-review': True, 'documentation': False})
+
+    def test_prerelease_spellings_are_distinct_label_names(self):
+        names = ['prerelease', 'pre release', 'pre-release']
+        for name in names:
+            with self.subTest(name=name):
+                result = execute(labels=json.dumps(names), pages=[[pr()]], prLabels=[{'name': name.upper()}])
+                self.assertEqual(result['errors'], [])
+                self.assertEqual(json.loads(result['outputs']['labels']), {key: key == name for key in names})
+
     def test_manual_runs_use_the_same_commit_ownership_and_direct_push_rules(self):
         owned = execute(event='workflow_dispatch', pages=[[pr()]])
         self.assertTrue(json.loads(owned['outputs']['labels'])['release'])
