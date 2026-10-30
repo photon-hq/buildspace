@@ -117,6 +117,8 @@ runs:
     - name: Verify publish landed on registry
       if: inputs.dry-run != 'true'
       uses: $/.github/primitives/wait-npm-version
+      env:
+        NODE_AUTH_TOKEN: ''
       with:
         package: ${{ steps.package.outputs.name }}
         version: ${{ steps.package.outputs.version }}

@@ -134,6 +134,12 @@ class PrimitiveContracts(unittest.TestCase):
             setup_index = next(i for i, reference in enumerate(references) if reference.startswith(setup))
             self.assertLess(setup_index, references.index(primitive))
 
+    def test_public_npm_verification_does_not_inherit_a_placeholder_or_unused_token(self):
+        steps = action(ROOT / '.github/blocks/publish-npm')['runs']['steps']
+        verify = next(step for step in steps if step.get('name') == 'Verify publish landed on registry')
+        self.assertEqual(verify['env'], {'NODE_AUTH_TOKEN': ''})
+        self.assertEqual(verify['with']['registry'], 'https://registry.npmjs.org')
+
 
 if __name__ == '__main__':
     unittest.main()
