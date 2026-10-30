@@ -121,6 +121,19 @@ class PrimitiveContracts(unittest.TestCase):
             self.assertEqual(secrets[name]['required'], 'false')
             self.assertIn(f'secrets.{name}', yaml.dump(token['with']))
 
+    def test_native_smoke_composition_sets_up_its_tools_before_invoking_primitives(self):
+        workflow = yaml.load((ROOT / '.github/workflows/primitives-smoke.yml').read_text(), Loader=yaml.BaseLoader)
+        compose = workflow['jobs']['compose']
+        self.assertEqual(compose['strategy']['fail-fast'], 'false')
+        references = [step.get('uses', '') for step in compose['steps']]
+        for setup, primitive in (
+            ('actions/setup-go@', '$/.github/primitives/go-build'),
+            ('dtolnay/rust-toolchain@', '$/.github/primitives/cargo-build'),
+            ('actions/setup-node@', '$/.github/primitives/npm-publish'),
+        ):
+            setup_index = next(i for i, reference in enumerate(references) if reference.startswith(setup))
+            self.assertLess(setup_index, references.index(primitive))
+
 
 if __name__ == '__main__':
     unittest.main()
