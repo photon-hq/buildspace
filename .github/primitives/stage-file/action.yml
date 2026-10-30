@@ -1,0 +1,20 @@
+name: Stage file
+description: Copy one file to an explicit destination without building or uploading it
+inputs:
+  source:
+    description: File to copy
+    required: true
+  destination:
+    description: Destination file, relative to the working directory or absolute
+    required: true
+  executable:
+    description: Add executable permission to the destination
+    default: 'false'
+outputs:
+  name:
+    description: Destination filename
+  path:
+    description: Destination path, as supplied
+runs:
+  using: node24
+  main: index.mjs

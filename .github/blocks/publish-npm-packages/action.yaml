@@ -34,62 +34,35 @@ inputs:
     required: true
 
 runs:
-  using: 'composite'
+  using: composite
   steps:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
-
     - uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        registry-url: 'https://registry.npmjs.org'
-
+        registry-url: https://registry.npmjs.org
     - name: Install dependencies
       shell: bash
       run: bun install
-
     - name: Build (root)
-      if: ${{ inputs.root-build-command != '' }}
-      shell: bash
-      run: ${{ inputs.root-build-command }}
-
-    - name: Build and publish packages
+      if: inputs.root-build-command != ''
       shell: bash
       env:
+        BUILD_COMMAND: ${{ inputs.root-build-command }}
+      run: bash -euo pipefail -c "$BUILD_COMMAND"
+    - name: Build and publish packages in dependency order
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
         CHANGED_JSON: ${{ inputs.changed-packages }}
         BUILD_CMD: ${{ inputs.build-command }}
         ROOT_BUILD_CMD: ${{ inputs.root-build-command }}
         TAG: ${{ inputs.tag }}
         DRY_RUN: ${{ inputs.dry-run }}
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
-      run: |
-        set -euo pipefail
-
-        PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
-
-        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
-          NAME=$(echo "$CHANGED_JSON" | jq -r ".[$i].name")
-          PKG_PATH=$(echo "$CHANGED_JSON" | jq -r ".[$i].path")
-
-          echo "========================================="
-          echo "Publishing $NAME ($PKG_PATH)"
-          echo "========================================="
-
-          if [ -z "$ROOT_BUILD_CMD" ]; then
-            echo "Building $NAME..."
-            (cd "$PKG_PATH" && $BUILD_CMD)
-          fi
-
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "Dry run: would publish $NAME with tag $TAG"
-            (cd "$PKG_PATH" && bun publish --registry https://registry.npmjs.org --tag "$TAG" --access public --dry-run)
-          else
-            echo "Publishing $NAME with tag $TAG"
-            (cd "$PKG_PATH" && bun publish --registry https://registry.npmjs.org --tag "$TAG" --access public)
-          fi
-
-          echo ""
-        done
-
-        echo "All packages published successfully"
+        REGISTRY_URL: https://registry.npmjs.org
+        PACKAGE_ACCESS: public
+        PACKAGE_OWNER: ''
+      run: node "$ACTION_PATH/../publish-packages.mjs"

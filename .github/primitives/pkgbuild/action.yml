@@ -1,0 +1,27 @@
+name: Build macOS package
+description: Create one unsigned macOS installer from a prepared payload root
+inputs:
+  root:
+    description: Prepared installation tree
+    required: true
+  identifier:
+    description: Installer identifier
+    required: true
+  version:
+    description: Installer version
+    required: true
+  output:
+    description: Output .pkg filename
+    required: true
+  install-location:
+    description: Installation location
+    default: '/'
+  scripts:
+    description: Installer scripts directory; empty includes no scripts
+    default: ''
+outputs:
+  package-path:
+    description: Output path, as supplied
+runs:
+  using: node24
+  main: index.mjs

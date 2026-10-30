@@ -1,0 +1,14 @@
+name: Read npm package identity
+description: Read a package's name and version without installing, building, or publishing it
+inputs:
+  working-directory:
+    description: Directory containing package.json
+    default: '.'
+outputs:
+  name:
+    description: Package name
+  version:
+    description: Package version
+runs:
+  using: node24
+  main: index.mjs

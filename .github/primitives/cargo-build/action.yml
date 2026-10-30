@@ -1,0 +1,21 @@
+name: Build Cargo binary
+description: Compile one release binary with an already installed Cargo toolchain
+inputs:
+  binary:
+    description: Binary target name
+    required: true
+  package:
+    description: Workspace package to select; empty uses Cargo's default selection
+    default: ''
+  target:
+    description: Target triple; empty leaves the target selection to Cargo
+    default: ''
+  working-directory:
+    description: Directory from which to run Cargo
+    default: '.'
+outputs:
+  binary-path:
+    description: Absolute executable path reported by Cargo, including configured target and target-directory settings
+runs:
+  using: node24
+  main: index.mjs

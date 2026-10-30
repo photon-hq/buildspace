@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Create Package
-        uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
+        uses: $/.github/blocks/swift-pkg
         with:
           package-name: ${{ inputs.package-name }}
           identifier: ${{ inputs.identifier }}

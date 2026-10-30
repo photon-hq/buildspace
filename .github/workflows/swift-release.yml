@@ -71,6 +71,12 @@ on:
     secrets:
       SECRET_ENV_VARS:
         required: false
+      APP_ID:
+        description: GitHub App ID for private Swift dependencies when private-deps is enabled
+        required: false
+      APP_PRIVATE_KEY:
+        description: GitHub App private key for private Swift dependencies when private-deps is enabled
+        required: false
       OPENAI_API_KEY:
         required: true
       JAMF_CLIENT_ID:
@@ -135,7 +141,7 @@ jobs:
           owner: ${{ github.repository_owner }}
       - name: Swift Build
         id: build
-        uses: photon-hq/buildspace/.github/blocks/swift-build@main
+        uses: $/.github/blocks/swift-build
         with:
           binary-name: ${{ inputs.package-name }}
           use-cache: "false"
@@ -147,7 +153,7 @@ jobs:
             ${{ secrets.SECRET_ENV_VARS }}
           resource-bundles: ${{ inputs.resource-bundles }}
       - name: Swift Package
-        uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
+        uses: $/.github/blocks/swift-pkg
         with:
           swift-binary-path: ${{ steps.build.outputs.binary-path }}
           package-name: ${{ inputs.package-name }}

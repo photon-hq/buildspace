@@ -8,10 +8,11 @@
 
 **Reusable GitHub Actions blocks and workflows for fast shipping teams**
 
-BuildSpace gives you two layers of CI/CD automation:
+BuildSpace gives you three layers of CI/CD automation:
 
 - **Workflows**: plug-and-play release pipelines. Point a workflow at your repo, provide a few secrets, and you're done. Most teams only need this.
-- **Blocks**: the composable actions that workflows are built from. Use them to assemble custom pipelines when the prebuilt workflows don't fit.
+- **Blocks**: compatibility recipes that combine setup, builds, packaging, and publication. Their existing inputs and output names remain available.
+- **Primitives**: single-operation actions with no release policy or toolchain setup. Use them to compose a pipeline without adopting a block's other behavior.
 
 ---
 
@@ -19,6 +20,7 @@ BuildSpace gives you two layers of CI/CD automation:
 
 - [Quick Start](#quick-start)
 - [Prerequisites](#prerequisites)
+- [Primitives](#primitives)
 - [Workflows](#workflows)
   - [Immutable Image Publisher](#immutable-image-publisher)
   - [Package Stage and Promote](#package-stage-and-promote)
@@ -2203,6 +2205,49 @@ Uses [Claude Code](https://github.com/anthropics/claude-code) to analyze release
 
 ---
 
+## Primitives
+
+The [primitive catalog](.github/primitives/README.md) documents each action's inputs, outputs, prerequisites, and side effects. These actions do not check out source, install toolchains or dependencies, choose release channels, mint tokens, or approve a release.
+
+| Primitive | One responsibility |
+|-----------|--------------------|
+| `cargo-build` | Compile one Rust binary |
+| `go-build` | Compile one Go binary |
+| `swift-build` | Compile one Swift executable product |
+| `stage-file` | Copy one file to an explicit destination |
+| `pkgbuild` | Build one unsigned macOS installer from a prepared root |
+| `npm-package-info` | Read a package's name and version |
+| `npm-publish` | Run one npm-compatible publication |
+| `wait-npm-version` | Wait for an exact package version to be visible |
+| `cargo-publish` | Run one Cargo publication |
+
+For example, compilation does not require packaging or publishing:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: actions/setup-go@v5
+  with:
+    go-version: stable
+- id: compile
+  uses: photon-hq/buildspace/.github/primitives/go-build@<buildspace-commit-sha>
+  with:
+    output: bin/worker
+    goos: linux
+    goarch: amd64
+- id: artifact
+  uses: photon-hq/buildspace/.github/primitives/stage-file@<buildspace-commit-sha>
+  with:
+    source: ${{ steps.compile.outputs.binary-path }}
+    destination: artifacts/worker-linux-amd64
+    executable: 'true'
+```
+
+Replace both placeholders with the same full Buildspace commit SHA. Uploading the file is a separate step, using `steps.artifact.outputs.path` with `actions/upload-artifact` if needed.
+
+The refactored build and publication recipes use GitHub's [`$/` self-repository references](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended). Nested actions resolve to the recipe's own commit, not the caller's checkout or a floating `@main`. These references require GitHub.com; GitHub Enterprise Server does not support them. Native primitives use the runner's Node 24 action runtime and do not change the caller's Node version.
+
+The stage/promote workflows still enforce their existing provenance, approval, and credential boundaries. Raw publication primitives are not a replacement for those checks. Release gates, environments, and credential scope belong to the composing workflow.
+
 ## Architecture
 
 ```
@@ -2230,6 +2275,17 @@ buildspace/
 │   │   ├── typescript-build/          # TypeScript builds
 │   │   ├── update-docs/               # AI docs update via Claude Code
 │   │   └── update-skills/             # AI skills update via Claude Code
+│   │
+│   ├── primitives/                    # Single-operation actions, shared by recipes
+│   │   ├── cargo-build/               # Compile a Rust binary
+│   │   ├── go-build/                  # Compile a Go binary
+│   │   ├── swift-build/               # Compile a Swift product
+│   │   ├── stage-file/                # Copy one artifact
+│   │   ├── pkgbuild/                  # Package a prepared macOS install root
+│   │   ├── npm-package-info/          # Read package identity
+│   │   ├── npm-publish/               # Publish once, without auth fallback policy
+│   │   ├── wait-npm-version/          # Read exact registry visibility
+│   │   └── cargo-publish/             # Publish one crate
 │   │
 │   └── workflows/                     # Reusable workflows (full pipelines)
 │       ├── check-readme.yaml          # AI README freshness check (PR)

@@ -92,7 +92,7 @@ jobs:
       # ── Build ────────────────────────────────────────────────────────────
       - name: Swift Build
         id: build
-        uses: photon-hq/buildspace/.github/blocks/swift-build@main
+        uses: $/.github/blocks/swift-build
         with:
           binary-name: ${{ inputs.package-name }}
           entitlements: ${{ inputs.entitlements }}
@@ -104,7 +104,7 @@ jobs:
           resource-bundles: ${{ inputs.resource-bundles }}
 
       - name: Swift Package
-        uses: photon-hq/buildspace/.github/blocks/swift-pkg@main
+        uses: $/.github/blocks/swift-pkg
         with:
           swift-binary-path: ${{ steps.build.outputs.binary-path }}
           package-name: ${{ inputs.package-name }}

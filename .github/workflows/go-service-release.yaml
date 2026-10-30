@@ -131,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Go Build
-        uses: photon-hq/buildspace/.github/blocks/go-build@main
+        uses: $/.github/blocks/go-build
         with:
           binary-name: ${{ inputs.binary-name }}
           go-version: ${{ inputs.go-version }}

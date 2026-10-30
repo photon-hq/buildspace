@@ -15,95 +15,15 @@ inputs:
     required: true
 
 runs:
-  using: 'composite'
+  using: composite
   steps:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
-
-    - name: Publish crates to crates.io
+    - name: Publish crates to crates.io in dependency order
       shell: bash
       env:
+        ACTION_PATH: ${{ github.action_path }}
+        CRATES: ${{ inputs.crates }}
+        DRY_RUN: ${{ inputs.dry-run }}
         CARGO_REGISTRY_TOKEN: ${{ inputs.cargo-registry-token }}
-      run: |
-        CRATES='${{ inputs.crates }}'
-        DRY_RUN="${{ inputs.dry-run }}"
-        
-        publish_crate() {
-          local crate_path="$1"
-          local crate_name
-          
-          if [ -n "$crate_path" ] && [ -f "${crate_path}/Cargo.toml" ]; then
-            crate_name=$(grep '^name = ' "${crate_path}/Cargo.toml" | head -1 | sed 's/name = "\(.*\)"/\1/')
-            echo "Publishing ${crate_name} from ${crate_path}..."
-            cd "$crate_path"
-            
-            if [ "$DRY_RUN" == "true" ]; then
-              cargo publish --dry-run --allow-dirty
-            else
-              # Retry logic for crates.io rate limiting
-              for i in 1 2 3; do
-                if cargo publish --allow-dirty; then
-                  echo "Successfully published ${crate_name}"
-                  break
-                else
-                  if [ $i -lt 3 ]; then
-                    echo "Publish failed, waiting 30s before retry..."
-                    sleep 30
-                  else
-                    echo "Failed to publish ${crate_name} after 3 attempts"
-                    exit 1
-                  fi
-                fi
-              done
-            fi
-            
-            cd - > /dev/null
-            
-            # Wait between publishes to avoid crates.io rate limiting
-            if [ "$DRY_RUN" != "true" ]; then
-              echo "Waiting 10s for crates.io index to update..."
-              sleep 10
-            fi
-          else
-            # Publish from workspace root using -p flag
-            crate_name="$crate_path"
-            echo "Publishing ${crate_name} from workspace root..."
-            
-            if [ "$DRY_RUN" == "true" ]; then
-              cargo publish --dry-run -p "$crate_name" --allow-dirty
-            else
-              for i in 1 2 3; do
-                if cargo publish -p "$crate_name" --allow-dirty; then
-                  echo "Successfully published ${crate_name}"
-                  break
-                else
-                  if [ $i -lt 3 ]; then
-                    echo "Publish failed, waiting 30s before retry..."
-                    sleep 30
-                  else
-                    echo "Failed to publish ${crate_name} after 3 attempts"
-                    exit 1
-                  fi
-                fi
-              done
-              
-              echo "Waiting 10s for crates.io index to update..."
-              sleep 10
-            fi
-          fi
-        }
-        
-        if [ "$CRATES" == "[]" ] || [ -z "$CRATES" ]; then
-          echo "::error::No crates specified. Please provide crate paths in the 'crates' input."
-          exit 1
-        fi
-        
-        echo "Publishing specified crates in order..."
-        
-        # Publish each crate in the specified order (dependencies first)
-        for crate_path in $(echo "$CRATES" | jq -r '.[]'); do
-          publish_crate "$crate_path"
-        done
-        
-        echo ""
-        echo "All crates published successfully!"
+      run: node "$ACTION_PATH/publish.mjs"

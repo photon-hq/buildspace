@@ -209,7 +209,7 @@ jobs:
           fetch-depth: 0
 
       - name: Publish NPM Packages
-        uses: photon-hq/buildspace/.github/blocks/publish-npm-packages@main
+        uses: $/.github/blocks/publish-npm-packages
         with:
           changed-packages: ${{ needs.detect-changes.outputs.changed }}
           bun-version: ${{ inputs.bun-version }}
@@ -233,7 +233,7 @@ jobs:
           fetch-depth: 0
 
       - name: Publish GitHub Packages
-        uses: photon-hq/buildspace/.github/blocks/publish-github-packages@main
+        uses: $/.github/blocks/publish-github-packages
         with:
           changed-packages: ${{ needs.detect-changes.outputs.changed }}
           bun-version: ${{ inputs.bun-version }}

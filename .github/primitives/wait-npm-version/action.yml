@@ -1,0 +1,24 @@
+name: Wait for npm version
+description: Read a registry until an exact package version is visible; never publishes or changes a distribution tag
+inputs:
+  package:
+    description: Package name
+    required: true
+  version:
+    description: Exact version to find
+    required: true
+  registry:
+    description: npm-compatible registry URL
+    required: true
+  attempts:
+    description: Maximum registry reads
+    default: '6'
+  interval-seconds:
+    description: Delay between registry reads
+    default: '5'
+outputs:
+  version:
+    description: Verified version
+runs:
+  using: node24
+  main: index.mjs

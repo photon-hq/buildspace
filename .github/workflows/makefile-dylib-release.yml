@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Build dylib
-        uses: photon-hq/buildspace/.github/blocks/build-makefile-dylib@main
+        uses: $/.github/blocks/build-makefile-dylib
         with:
           output-name: ${{ inputs.dylib-name }}
           version: ${{ needs.prepare-release.outputs.version }}

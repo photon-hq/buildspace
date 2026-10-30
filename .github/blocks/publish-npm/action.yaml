@@ -35,188 +35,89 @@ inputs:
     required: false
 
 runs:
-  using: 'composite'
+  using: composite
   steps:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
-
     - uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        registry-url: 'https://registry.npmjs.org'
-
-    # npm OIDC Trusted Publishing requires npm >= 11.5.1. Node's bundled npm
-    # can be older (e.g. Node 20 ships npm 10.x). Without this, the OIDC publish
-    # below signs provenance yet can't authenticate tokenlessly, so it publishes
-    # unauthenticated and 404s.
+        registry-url: https://registry.npmjs.org
     - name: Upgrade npm for OIDC Trusted Publishing
       shell: bash
-      run: |
-        npm install -g npm@latest
-        echo "npm version: $(npm --version)"
-
+      run: npm install -g npm@latest
     - name: Install dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: bun install
-
     - name: Build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: ${{ inputs.build-command }}
-
-    # Step 1: try npm OIDC Trusted Publishing (tokenless). The runner only sets
-    # ACTIONS_ID_TOKEN_REQUEST_TOKEN when the job has 'id-token: write', so when
-    # that permission is absent we skip OIDC entirely rather than run a publish
-    # that is guaranteed to fail on auth. On success we record published=true so
-    # the token fallback below is skipped.
+      env:
+        BUILD_COMMAND: ${{ inputs.build-command }}
+      run: bash -euo pipefail -c "$BUILD_COMMAND"
+    - name: Read package identity
+      id: package
+      uses: $/.github/primitives/npm-package-info
+      with:
+        working-directory: ${{ inputs.working-directory }}
+    - name: Check OIDC availability
+      id: oidc
+      shell: bash
+      run: |
+        if [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          echo "available=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "available=false" >> "$GITHUB_OUTPUT"
+        fi
     - name: Publish via OIDC (npm Trusted Publishing)
       id: oidc-publish
+      if: steps.oidc.outputs.available == 'true'
+      continue-on-error: true
+      uses: $/.github/primitives/npm-publish
+      env:
+        NODE_AUTH_TOKEN: ''
+      with:
+        working-directory: ${{ inputs.working-directory }}
+        registry: https://registry.npmjs.org
+        tag: ${{ inputs.tag }}
+        access: public
+        provenance: 'true'
+        dry-run: ${{ inputs.dry-run }}
+        command: ${{ inputs.publish-command }}
+    - name: Reject a publisher that swallowed an OIDC error
+      if: steps.oidc-publish.outcome == 'failure' && steps.oidc-publish.outputs.exit-code == '0'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
-        DRYRUN_FLAG=""
-        if [ "${{ inputs.dry-run }}" == "true" ]; then
-          DRYRUN_FLAG="--dry-run"
-          echo "🧪 Dry run mode enabled."
-        fi
-
-        if [ -z "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
-          echo "ℹ️ No OIDC id-token available (job lacks 'id-token: write'). Skipping OIDC; will use NPM token."
-          echo "published=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        echo "🔒 Attempting publish via npm Trusted Publishing (OIDC, no token)..."
-
-        # Capture output via tee so the user still sees the log in real time.
-        # PIPESTATUS[0] is the publisher's real exit code (tee's exit, which is
-        # the pipeline's $?, would always be 0). `set +e` keeps a non-zero exit
-        # from killing the script before we can branch on it.
-        LOG="$(mktemp)"
-        set +e
-        ${{ inputs.publish-command }} --registry https://registry.npmjs.org --tag ${{ inputs.tag }} --access public --provenance $DRYRUN_FLAG 2>&1 | tee "$LOG"
-        PUBLISH_EXIT=${PIPESTATUS[0]}
-        set -e
-
-        if [ "$PUBLISH_EXIT" -ne 0 ]; then
-          echo "⚠️ OIDC publish failed (exit $PUBLISH_EXIT). Falling back to NPM token."
-          echo "published=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        # Defense-in-depth: publishers like `bunx clean-publish` can exit 0 even
-        # when npm itself errored. Treat any 'npm error' / 'npm ERR!' line in the
-        # captured output as a real failure. Critically, do NOT fall back to the
-        # NPM token here — a "successful" OIDC publish that printed npm errors
-        # signals a deeper problem (e.g. wrapper swallowing exits) that the
-        # token path won't fix; falling back would just hide it again, which is
-        # exactly how spectrum-ts 1.10.0..1.11.1 went four releases unnoticed.
-        if grep -qE '^npm (error|ERR!)' "$LOG"; then
-          echo "❌ OIDC publisher reported success but npm emitted error lines in its output."
-          echo "   Refusing to fall back to NPM_TOKEN; failing the publish loudly instead."
-          exit 1
-        fi
-
-        echo "✅ Published via OIDC Trusted Publishing."
-        echo "published=true" >> "$GITHUB_OUTPUT"
-
-    # Step 2: fall back to the traditional token-based publish. This runs only
-    # when OIDC was skipped or failed, and reproduces the original publish
-    # behavior exactly (same flags, tag, access, and dry-run handling).
-    - name: Publish via NPM token (fallback)
-      if: steps.oidc-publish.outputs.published != 'true'
+        echo "::error::The OIDC publisher swallowed an npm error; refusing a token fallback"
+        exit 1
+    - name: Require fallback credentials
+      if: steps.oidc-publish.outcome != 'success' && inputs.dry-run != 'true'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       env:
         NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
       run: |
-        # A dry run only validates packaging and needs no credentials, so run it
-        # before the token check — otherwise a dry-run with no OIDC and no token
-        # would fail packaging validation for no reason.
-        if [ "${{ inputs.dry-run }}" == "true" ]; then
-          echo "Dry run mode - would publish with tag: ${{ inputs.tag }}"
-          ${{ inputs.publish-command }} --registry https://registry.npmjs.org --tag ${{ inputs.tag }} --access public --dry-run
-          exit 0
-        fi
-
         if [ -z "$NODE_AUTH_TOKEN" ]; then
-          echo "❌ OIDC was unavailable or failed, and no NPM token was provided. Cannot publish."
+          echo "::error::OIDC was unavailable or failed, and no npm token was provided"
           exit 1
         fi
-
-        echo "🔑 Publishing via NPM token..."
-
-        # Same defense-in-depth as the OIDC branch: capture output, get the real
-        # exit code via PIPESTATUS (not tee's), and reject silent successes that
-        # contain npm error lines. GHA bash defaults (-e -o pipefail) handle the
-        # explicit-non-zero case on their own, but this block additionally
-        # catches the wrapper-swallowed-exit case that broke spectrum-ts.
-        LOG="$(mktemp)"
-        set +e
-        ${{ inputs.publish-command }} --registry https://registry.npmjs.org --tag ${{ inputs.tag }} --access public 2>&1 | tee "$LOG"
-        PUBLISH_EXIT=${PIPESTATUS[0]}
-        set -e
-
-        if [ "$PUBLISH_EXIT" -ne 0 ]; then
-          echo "❌ NPM token publish exited non-zero ($PUBLISH_EXIT)."
-          exit "$PUBLISH_EXIT"
-        fi
-
-        if grep -qE '^npm (error|ERR!)' "$LOG"; then
-          echo "❌ Publisher reported success but npm emitted error lines in its output."
-          echo "   Common cause: 'bunx clean-publish' swallowing npm's non-zero exit on a 404 / auth failure."
-          exit 1
-        fi
-
-        echo "✅ Published via NPM token."
-
-    # Step 3: verify the version actually landed on the npm registry.
-    #
-    # Why this exists: publishers like `bunx clean-publish` (and `bunx`-wrapped
-    # commands generally) can swallow `npm publish`'s non-zero exit code, so a
-    # 404/auth failure prints `npm error code E404` to the log but leaves the
-    # step exit code at 0. Without this assertion, the whole release pipeline
-    # goes green while npm has nothing — which is exactly what happened to
-    # spectrum-ts 1.10.0..1.11.1 (silent fails for four releases). The OIDC
-    # branch above also explicitly catches publish failures to fall through to
-    # the token path, so neither path can be trusted on its own.
-    #
-    # We resolve <name>@<version> from package.json (the source of truth that
-    # both publish paths consume) and probe the registry for that exact tarball.
-    # A few retries absorb npm CDN propagation, which is typically <10s.
+    - name: Publish via NPM token (fallback)
+      if: steps.oidc-publish.outcome != 'success'
+      uses: $/.github/primitives/npm-publish
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
+      with:
+        working-directory: ${{ inputs.working-directory }}
+        registry: https://registry.npmjs.org
+        tag: ${{ inputs.tag }}
+        access: public
+        dry-run: ${{ inputs.dry-run }}
+        command: ${{ inputs.publish-command }}
     - name: Verify publish landed on registry
-      if: ${{ inputs.dry-run != 'true' }}
-      shell: bash
-      working-directory: ${{ inputs.working-directory }}
-      run: |
-        NAME=$(jq -r .name package.json)
-        VERSION=$(jq -r .version package.json)
-        if [ -z "$NAME" ] || [ "$NAME" = "null" ] || [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-          echo "❌ Could not read name/version from package.json; cannot verify publish."
-          exit 1
-        fi
-
-        URL="https://registry.npmjs.org/$NAME/$VERSION"
-        echo "🔎 Verifying $NAME@$VERSION at $URL ..."
-
-        for attempt in 1 2 3 4 5 6; do
-          STATUS=$(curl -fsS -o /dev/null -w "%{http_code}" "$URL" || true)
-          if [ "$STATUS" = "200" ]; then
-            echo "✅ $NAME@$VERSION is live on the npm registry."
-            exit 0
-          fi
-          echo "Attempt $attempt: registry returned HTTP $STATUS — retrying in 5s..."
-          sleep 5
-        done
-
-        echo "❌ Publish verification failed: $NAME@$VERSION is not on the registry."
-        echo ""
-        echo "The publisher reported success but the version did not land on npm."
-        echo "Common causes:"
-        echo "  • NPM_TOKEN expired/revoked (npm returns 404, not 401/403, for auth failures)"
-        echo "  • NPM_TOKEN scope does not include write access to this package"
-        echo "  • OIDC Trusted Publisher not configured for this repo+workflow on npmjs.com"
-        echo "  • Publisher CLI (e.g. 'bunx clean-publish') swallowed npm's non-zero exit"
-        exit 1
+      if: inputs.dry-run != 'true'
+      uses: $/.github/primitives/wait-npm-version
+      with:
+        package: ${{ steps.package.outputs.name }}
+        version: ${{ steps.package.outputs.version }}
+        registry: https://registry.npmjs.org
