@@ -57,13 +57,8 @@ class ReleaseLabelPolicyTests(unittest.TestCase):
                 self.assertEqual(job['permissions'], {'pull-requests': 'read', 'contents': 'read'})
                 check = next(step for step in job['steps'] if step.get('id') == 'check')
                 self.assertEqual(check['uses'], 'photon-hq/buildspace/.github/blocks/check-pr-label@main')
-                if 'labels-to-check' in inputs:
-                    self.assertEqual(inputs['labels-to-check']['type'], 'string')
-                    self.assertEqual(json.loads(inputs['labels-to-check']['default']), labels)
-                    self.assertEqual(check['with'], {'labels': '${{ inputs.labels-to-check }}'})
-                else:
-                    self.assertEqual(json.loads(check['with']['labels']), labels)
-                    self.assertNotIn('default-on-push', check['with'])
+                self.assertNotIn('labels-to-check', inputs)
+                self.assertEqual(check['with'], {'labels': json.dumps(labels)})
                 for flag in ('release', 'prerelease'):
                     if flag in inputs:
                         self.assertEqual(inputs[flag]['type'], 'boolean')

@@ -623,7 +623,6 @@ Complete release pipeline for Rust services: checks PR labels, generates version
 | `binary-path` | string | No | `""` | Path to crate directory (e.g., `crates/client`) |
 | `crates` | string | No | `[]` | JSON array of crate paths to publish in dependency order |
 | `build-env` | string | No | `""` | Compile-time env vars (e.g., `BASE_URL=https://...`) |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | Label keys to inspect; consumers read fixed `release` and `prerelease` keys |
 | `prerelease` | boolean | No | `false` | Select RC mode for an enabled release (adds `-rc.N`) |
 | `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
 | `dry-run` | boolean | No | `false` | Publisher dry run only; version commits and GitHub Releases can still occur |
@@ -681,7 +680,6 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 | `working-directory` | string | No | `.` | Directory containing `package.json` |
 | `build-command` | string | No | `bun run build` | Build command to run |
 | `publish-command` | string | No | `npm publish` | Publisher command; target-specific registry and publish flags are appended |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | Label keys to inspect; consumers read fixed `release` and `prerelease` keys |
 | `prerelease` | boolean | No | `false` | Select RC mode; see the compatibility entry rules |
 | `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
 | `dry-run` | boolean | No | `false` | Publisher dry run only; version commits and GitHub Releases can still occur |
@@ -757,7 +755,6 @@ Complete release pipeline for TypeScript/JavaScript monorepos with independently
 | `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
 | `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
 | `include-dependents` | boolean | No | `false` | Also release downstream dependents of changed packages |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | Label keys to inspect; consumers read fixed `release` and `prerelease` keys |
 | `prerelease` | boolean | No | `false` | Select RC mode; see the compatibility entry rules |
 | `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
 | `dry-run` | boolean | No | `false` | Publisher dry run only; version commits and GitHub Releases can still occur |
@@ -842,7 +839,6 @@ Complete release pipeline for Go binaries: checks PR labels, generates version a
 | `go-version` | string | No | `stable` | Go version to use |
 | `build-flags` | string | No | `""` | Additional `go build` flags |
 | `ldflags` | string | No | `-s -w` | Linker flags |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | Label keys to inspect; consumers read fixed `release` and `prerelease` keys |
 | `prerelease` | boolean | No | `false` | Select RC mode; see the compatibility entry rules |
 | `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
 
@@ -1055,7 +1051,6 @@ The label-driven pipeline that Swift Stage and Promote replaces. Complete releas
 | `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
 | `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | Label keys to inspect; consumers read fixed `release` and `prerelease` keys |
 | `prerelease` | boolean | No | `false` | Enable an RC release, mark the GitHub release as prerelease, and skip Jamf |
 | `release` | boolean | No | `false` | Enable the legacy release; a prerelease input or label still selects RC mode |
 | `jamf-url` | string | No | `""` | Jamf Pro instance URL (leave empty to skip Jamf upload) |
@@ -1443,17 +1438,13 @@ but modern stage/promote workflows do not.
 On a push or manual run, it paginates the commit's associated pull requests and
 selects the merged result matching that commit and base branch. API errors and
 ambiguous owning matches fail without emitting labels. Other associations
-supply no labels.
-`default-on-push` applies only when GitHub confirms an empty association list,
-never when lookup fails or the owning pull request has no labels. This default
-rule applies to manual events too, despite the input's name.
+supply no labels, including a push with no associated pull request.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `labels` | string | Yes | — | JSON array of labels to check (e.g., `["needs-review", "documentation"]`) |
-| `default-on-push` | string | No | `""` | Comma-separated labels to default to `true` on non-PR events with no associated PRs |
 
 #### Outputs
 
