@@ -20,10 +20,10 @@ inputs:
 outputs:
   artifact-name:
     description: 'Name of the artifact'
-    value: ${{ steps.package.outputs.artifact-name }}
+    value: ${{ steps.package.outputs.name }}
   artifact-path:
     description: 'Path to the built artifact'
-    value: ${{ steps.package.outputs.artifact-path }}
+    value: ${{ steps.package.outputs.path }}
 
 runs:
   using: 'composite'
@@ -54,34 +54,23 @@ runs:
     - name: Create .env file
       if: inputs.build-env != ''
       shell: bash
-      run: echo "${{ inputs.build-env }}" > .env
+      env:
+        BUILD_ENV: ${{ inputs.build-env }}
+      run: printf '%s\n' "$BUILD_ENV" > .env
 
     - name: Build
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.binary-path }}" ]; then
-          # Build from crate directory
-          cd "${{ inputs.binary-path }}"
-          cargo build --release --target ${{ inputs.target }}
-        else
-          # Build from workspace root using -p flag
-          cargo build --release --target ${{ inputs.target }} -p ${{ inputs.binary-name }}
-        fi
+      id: build
+      uses: $/.github/primitives/cargo-build
+      with:
+        binary: ${{ inputs.binary-name }}
+        package: ${{ inputs.binary-path == '' && inputs.binary-name || '' }}
+        working-directory: ${{ inputs.binary-path || '.' }}
+        target: ${{ inputs.target }}
 
     - name: Package
       id: package
-      shell: bash
-      run: |
-        mkdir -p artifacts
-        if [ "${{ runner.os }}" == "Windows" ]; then
-          ARTIFACT_NAME="${{ inputs.binary-name }}-${{ inputs.target }}.exe"
-          ARTIFACT_PATH="artifacts/$ARTIFACT_NAME"
-          cp target/${{ inputs.target }}/release/${{ inputs.binary-name }}.exe "$ARTIFACT_PATH"
-        else
-          ARTIFACT_NAME="${{ inputs.binary-name }}-${{ inputs.target }}"
-          ARTIFACT_PATH="artifacts/$ARTIFACT_NAME"
-          cp target/${{ inputs.target }}/release/${{ inputs.binary-name }} "$ARTIFACT_PATH"
-          chmod +x "$ARTIFACT_PATH"
-        fi
-        echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-        echo "artifact-path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
+      uses: $/.github/primitives/stage-file
+      with:
+        source: ${{ steps.build.outputs.binary-path }}
+        destination: artifacts/${{ inputs.binary-name }}-${{ inputs.target }}${{ contains(inputs.target, 'windows') && '.exe' || '' }}
+        executable: ${{ runner.os != 'Windows' }}

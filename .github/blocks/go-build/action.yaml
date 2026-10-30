@@ -27,10 +27,10 @@ inputs:
 outputs:
   artifact-name:
     description: 'Name of the artifact'
-    value: ${{ steps.package.outputs.artifact-name }}
+    value: ${{ steps.package.outputs.name }}
   artifact-path:
     description: 'Path to the built artifact'
-    value: ${{ steps.package.outputs.artifact-path }}
+    value: ${{ steps.package.outputs.path }}
 
 runs:
   using: 'composite'
@@ -41,32 +41,19 @@ runs:
         go-version: ${{ inputs.go-version }}
 
     - name: Build
-      shell: bash
-      env:
-        GOOS: ${{ inputs.goos }}
-        GOARCH: ${{ inputs.goarch }}
-        CGO_ENABLED: '0'
-      run: |
-        # go build -o uses the name verbatim (no .exe auto-append on windows);
-        # build with the suffix the Package step expects to find.
-        SUFFIX=""
-        if [ "${{ inputs.goos }}" == "windows" ]; then
-          SUFFIX=".exe"
-        fi
-        go build ${{ inputs.build-flags }} -ldflags "${{ inputs.ldflags }}" -o "${{ inputs.binary-name }}${SUFFIX}" .
+      id: build
+      uses: $/.github/primitives/go-build
+      with:
+        output: ${{ inputs.binary-name }}${{ inputs.goos == 'windows' && '.exe' || '' }}
+        goos: ${{ inputs.goos }}
+        goarch: ${{ inputs.goarch }}
+        build-flags: ${{ inputs.build-flags }}
+        ldflags: ${{ inputs.ldflags }}
 
     - name: Package
       id: package
-      shell: bash
-      run: |
-        mkdir -p artifacts
-        SUFFIX=""
-        if [ "${{ inputs.goos }}" == "windows" ]; then
-          SUFFIX=".exe"
-        fi
-        ARTIFACT_NAME="${{ inputs.binary-name }}-${{ inputs.goos }}-${{ inputs.goarch }}${SUFFIX}"
-        ARTIFACT_PATH="artifacts/$ARTIFACT_NAME"
-        mv "${{ inputs.binary-name }}${SUFFIX}" "$ARTIFACT_PATH"
-        chmod +x "$ARTIFACT_PATH"
-        echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
-        echo "artifact-path=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
+      uses: $/.github/primitives/stage-file
+      with:
+        source: ${{ steps.build.outputs.binary-path }}
+        destination: artifacts/${{ inputs.binary-name }}-${{ inputs.goos }}-${{ inputs.goarch }}${{ inputs.goos == 'windows' && '.exe' || '' }}
+        executable: 'true'

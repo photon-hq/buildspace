@@ -1,0 +1,175 @@
+name: Primitive composition smoke tests
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  publication-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      POLICY_PUBLISHER: ${{ github.workspace }}/test/npm-policy-publisher.mjs
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare a package that never reaches a registry
+        run: |
+          mkdir -p "$RUNNER_TEMP/policy-package"
+          printf '%s\n' '{"name":"buildspace-policy-fixture","version":"1.0.0"}' > "$RUNNER_TEMP/policy-package/package.json"
+          echo "POLICY_LOG=$RUNNER_TEMP/publication-policy.jsonl" >> "$GITHUB_ENV"
+      - name: OIDC success does not invoke the token publisher
+        uses: $/.github/blocks/publish-npm
+        env:
+          POLICY_MODE: success
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: fixture-availability-only
+        with:
+          working-directory: ${{ runner.temp }}/policy-package
+          build-command: 'true'
+          publish-command: node "$POLICY_PUBLISHER"
+          dry-run: 'true'
+          npm-token: fixture-not-a-credential
+      - name: An actual OIDC failure invokes the token publisher
+        uses: $/.github/blocks/publish-npm
+        env:
+          POLICY_MODE: failure
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: fixture-availability-only
+        with:
+          working-directory: ${{ runner.temp }}/policy-package
+          build-command: 'true'
+          publish-command: node "$POLICY_PUBLISHER"
+          dry-run: 'true'
+          npm-token: fixture-not-a-credential
+      - name: A swallowed OIDC error fails without invoking the token publisher
+        id: swallowed
+        continue-on-error: true
+        uses: $/.github/blocks/publish-npm
+        env:
+          POLICY_MODE: swallowed
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: fixture-availability-only
+        with:
+          working-directory: ${{ runner.temp }}/policy-package
+          build-command: 'true'
+          publish-command: node "$POLICY_PUBLISHER"
+          dry-run: 'true'
+          npm-token: fixture-not-a-credential
+      - name: Assert native composite outcomes and attempted publications
+        env:
+          SWALLOWED_OUTCOME: ${{ steps.swallowed.outcome }}
+        run: |
+          node --input-type=module <<'EOF'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          assert.equal(process.env.SWALLOWED_OUTCOME, 'failure');
+          const records = readFileSync(process.env.POLICY_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+          assert.deepEqual(records.map(({mode, hasToken}) => [mode, hasToken]), [
+            ['success', false], ['failure', false], ['failure', true], ['swallowed', false],
+          ]);
+          assert.ok(records.every(({args}) => args.includes('--dry-run')));
+          EOF
+
+  compose:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Prepare independent build inputs
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/primitives"/{cargo/src,go,swift/Sources/hello,npm}
+          cat > "$RUNNER_TEMP/primitives/cargo/Cargo.toml" <<'EOF'
+          [package]
+          name = "hello"
+          version = "1.0.0"
+          edition = "2021"
+          EOF
+          printf '%s\n' 'fn main() { println!("hello"); }' > "$RUNNER_TEMP/primitives/cargo/src/main.rs"
+          printf '%s\n' 'module example.com/hello' 'go 1.22' > "$RUNNER_TEMP/primitives/go/go.mod"
+          printf '%s\n' 'package main' 'import "fmt"' 'func main() { fmt.Println("hello") }' > "$RUNNER_TEMP/primitives/go/main.go"
+          cat > "$RUNNER_TEMP/primitives/swift/Package.swift" <<'EOF'
+          // swift-tools-version: 6.0
+          import PackageDescription
+          let package = Package(name: "hello", targets: [.executableTarget(name: "hello")])
+          EOF
+          printf '%s\n' 'print("hello")' > "$RUNNER_TEMP/primitives/swift/Sources/hello/main.swift"
+          printf '%s\n' '{"name":"buildspace-composition-fixture","version":"1.0.0","files":["index.js"]}' > "$RUNNER_TEMP/primitives/npm/package.json"
+          printf '%s\n' 'export const value = 1;' > "$RUNNER_TEMP/primitives/npm/index.js"
+      - name: Compile Rust without setup, signing, staging, or publishing
+        id: cargo
+        uses: $/.github/primitives/cargo-build
+        with:
+          binary: hello
+          working-directory: ${{ runner.temp }}/primitives/cargo
+      - name: Stage the Rust binary independently
+        id: stage
+        uses: $/.github/primitives/stage-file
+        with:
+          source: ${{ steps.cargo.outputs.binary-path }}
+          destination: ${{ runner.temp }}/primitives/output/hello-rust${{ runner.os == 'Windows' && '.exe' || '' }}
+          executable: 'true'
+      - name: Compile Go into a different output layout
+        id: go
+        uses: $/.github/primitives/go-build
+        with:
+          working-directory: ${{ runner.temp }}/primitives/go
+          output: bin/hello${{ runner.os == 'Windows' && '.exe' || '' }}
+          goos: ${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'darwin' || 'linux' }}
+          goarch: ${{ runner.arch == 'ARM64' && 'arm64' || 'amd64' }}
+      - name: Run both composed binaries
+        shell: bash
+        env:
+          RUST_BINARY: ${{ steps.stage.outputs.path }}
+          GO_BINARY: ${{ steps.go.outputs.binary-path }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { execFileSync } from 'node:child_process';
+          import assert from 'node:assert/strict';
+          for (const binary of [process.env.RUST_BINARY, process.env.GO_BINARY]) {
+            assert.equal(execFileSync(binary, {encoding: 'utf8'}).trim(), 'hello');
+          }
+          EOF
+      - name: Compile Swift without the compatibility recipe's checkout or signing
+        if: runner.os == 'macOS'
+        id: swift
+        uses: $/.github/primitives/swift-build
+        with:
+          product: hello
+          working-directory: ${{ runner.temp }}/primitives/swift
+      - name: Compose the existing installer recipe with the new compiler output
+        if: runner.os == 'macOS'
+        uses: $/.github/blocks/swift-pkg
+        with:
+          swift-binary-path: ${{ steps.swift.outputs.binary-path }}
+          identifier: org.example.hello
+          version: '1.0.0'
+          package-name: hello
+      - name: Inspect the unsigned package without installing it
+        if: runner.os == 'macOS'
+        shell: bash
+        run: pkgutil --payload-files artifacts/hello.pkg | grep -E '^\.?/?usr/local/bin/hello$'
+      - name: Read a prepared npm package independently
+        id: package
+        uses: $/.github/primitives/npm-package-info
+        with:
+          working-directory: ${{ runner.temp }}/primitives/npm
+      - name: Exercise the publisher without registry writes
+        uses: $/.github/primitives/npm-publish
+        env:
+          NODE_AUTH_TOKEN: ''
+          NPM_CONFIG_USERCONFIG: ${{ runner.os == 'Windows' && 'NUL' || '/dev/null' }}
+        with:
+          working-directory: ${{ runner.temp }}/primitives/npm
+          registry: https://registry.npmjs.org
+          dry-run: 'true'
+          access: public
+      - name: Verify registry reads through the runner's real npm launcher
+        shell: bash
+        run: node --test test/primitive-registry.test.mjs

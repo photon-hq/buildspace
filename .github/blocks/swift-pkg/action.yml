@@ -37,42 +37,44 @@ runs:
   steps:
     - name: Prepare
       shell: bash
+      env:
+        BINARY: ${{ inputs.swift-binary-path }}
       run: |
         mkdir -p tmp/pkgroot
-        mkdir -p artifacts
-        if [ -n "${{ inputs.swift-binary-path }}" ]; then
+        if [ -n "$BINARY" ]; then
           mkdir -p tmp/pkgroot/usr/local/bin
-          cp ${{ inputs.swift-binary-path }} tmp/pkgroot/usr/local/bin
+          cp "$BINARY" tmp/pkgroot/usr/local/bin
         fi
 
     - name: Copy additional payload
       if: ${{ inputs.payload-path != '' }}
       shell: bash
-      run: cp -R ${{ inputs.payload-path }}/ tmp/pkgroot/
+      env:
+        PAYLOAD: ${{ inputs.payload-path }}
+      run: cp -R "$PAYLOAD/" tmp/pkgroot/
 
     - name: Copy resource bundles
       if: ${{ inputs.resource-bundles-path != '' }}
       shell: bash
+      env:
+        RESOURCE_BUNDLES: ${{ inputs.resource-bundles-path }}
       run: |
         mkdir -p tmp/pkgroot/usr/local/bin
-        cp -R "${{ inputs.resource-bundles-path }}"/*.bundle tmp/pkgroot/usr/local/bin/
+        cp -R "$RESOURCE_BUNDLES"/*.bundle tmp/pkgroot/usr/local/bin/
         echo "Resource bundles installed to /usr/local/bin/:"
         ls -d tmp/pkgroot/usr/local/bin/*.bundle
 
     - name: Create package
-      shell: bash
-      run: |
-        ARGS=(--root tmp/pkgroot
-              --identifier "${{ inputs.identifier }}"
-              --install-location /
-              --version "${{ inputs.version }}")
-
-        if [ -n "${{ inputs.scripts-path }}" ]; then
-          ARGS+=(--scripts "${{ inputs.scripts-path }}")
-        fi
-
-        pkgbuild "${ARGS[@]}" "${{ inputs.package-name }}.pkg"
+      uses: $/.github/primitives/pkgbuild
+      with:
+        root: tmp/pkgroot
+        identifier: ${{ inputs.identifier }}
+        version: ${{ inputs.version }}
+        scripts: ${{ inputs.scripts-path }}
+        output: ${{ inputs.package-name }}.pkg
 
     - name: Prepare artifact
-      shell: bash
-      run: cp "${{ inputs.package-name }}.pkg" artifacts
+      uses: $/.github/primitives/stage-file
+      with:
+        source: ${{ inputs.package-name }}.pkg
+        destination: artifacts/${{ inputs.package-name }}.pkg

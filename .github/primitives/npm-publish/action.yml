@@ -1,0 +1,30 @@
+name: Publish npm package
+description: Run one registry publication without installing dependencies, building, or choosing authentication policy
+inputs:
+  working-directory:
+    description: Prepared package directory
+    default: '.'
+  registry:
+    description: npm-compatible registry URL
+    required: true
+  tag:
+    description: Distribution tag
+    default: latest
+  access:
+    description: Package access; empty leaves the publisher's default
+    default: ''
+  dry-run:
+    description: Validate publication without writing to the registry
+    default: 'false'
+  provenance:
+    description: Ask the publisher to attach provenance
+    default: 'false'
+  command:
+    description: Trusted shell command; publication flags are appended as literal arguments
+    default: npm publish
+outputs:
+  exit-code:
+    description: Publisher exit code; zero with a failed action means the publisher swallowed an npm error
+runs:
+  using: node24
+  main: index.mjs

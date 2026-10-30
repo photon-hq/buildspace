@@ -257,7 +257,7 @@ jobs:
         run: |
           node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("package.json", "utf8")); p.version = process.env.RELEASE_VERSION; writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
       - name: Publish to NPM
-        uses: photon-hq/buildspace/.github/blocks/publish-npm@main
+        uses: $/.github/blocks/publish-npm
         with:
           bun-version: ${{ inputs.bun-version }}
           tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
@@ -290,7 +290,7 @@ jobs:
         run: |
           node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("package.json", "utf8")); p.version = process.env.RELEASE_VERSION; writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
       - name: Publish to NPM
-        uses: photon-hq/buildspace/.github/blocks/publish-npm@main
+        uses: $/.github/blocks/publish-npm
         with:
           bun-version: ${{ inputs.bun-version }}
           tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}
@@ -320,7 +320,7 @@ jobs:
         run: |
           node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; const p = JSON.parse(readFileSync("package.json", "utf8")); p.version = process.env.RELEASE_VERSION; writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
       - name: Publish to GitHub Packages
-        uses: photon-hq/buildspace/.github/blocks/publish-github-package@main
+        uses: $/.github/blocks/publish-github-package
         with:
           bun-version: ${{ inputs.bun-version }}
           tag: ${{ (inputs.prerelease || fromJSON(needs.check-labels.outputs.labels).prerelease) && 'beta' || inputs.npm-tag }}

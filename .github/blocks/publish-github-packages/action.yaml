@@ -34,119 +34,41 @@ inputs:
     required: true
 
 runs:
-  using: 'composite'
+  using: composite
   steps:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
-
-    # Keep dependency installation on its existing registry configuration. The
-    # GitHub Packages scope mapping is added only after dependencies are ready.
-    # Credentials only, no scope mapping — see publish-github-package for the
-    # reasoning. A package whose own dependencies live on GitHub Packages needs
-    # a token to install them; remapping the owner's scope this early would
-    # break one being published to both registries for the first time.
     - name: Authenticate to GitHub Packages
       shell: bash
       env:
         GITHUB_PACKAGES_TOKEN: ${{ inputs.github-token }}
-      run: |
-        printf '//npm.pkg.github.com/:_authToken=%s\n' \
-          "$GITHUB_PACKAGES_TOKEN" >> "$HOME/.npmrc"
-
+      run: printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_PACKAGES_TOKEN" >> "$HOME/.npmrc"
     - name: Install dependencies
       shell: bash
       run: bun install
-
     - name: Build (root)
-      if: ${{ inputs.root-build-command != '' }}
+      if: inputs.root-build-command != ''
       shell: bash
-      run: ${{ inputs.root-build-command }}
-
+      env:
+        BUILD_COMMAND: ${{ inputs.root-build-command }}
+      run: bash -euo pipefail -c "$BUILD_COMMAND"
     - uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        registry-url: 'https://npm.pkg.github.com'
+        registry-url: https://npm.pkg.github.com
         scope: ${{ format('@{0}', github.repository_owner) }}
-
-    - name: Build and publish packages
+    - name: Build and publish packages in dependency order
       shell: bash
       env:
+        ACTION_PATH: ${{ github.action_path }}
         CHANGED_JSON: ${{ inputs.changed-packages }}
         BUILD_CMD: ${{ inputs.build-command }}
         ROOT_BUILD_CMD: ${{ inputs.root-build-command }}
         TAG: ${{ inputs.tag }}
         DRY_RUN: ${{ inputs.dry-run }}
         NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+        REGISTRY_URL: https://npm.pkg.github.com
         PACKAGE_OWNER: ${{ github.repository_owner }}
-        REGISTRY_URL: 'https://npm.pkg.github.com'
-      run: |
-        set -euo pipefail
-
-        if [ "$DRY_RUN" != "true" ] && [ -z "$NODE_AUTH_TOKEN" ]; then
-          echo "❌ No GitHub token was provided. Grant the caller 'packages: write'."
-          exit 1
-        fi
-
-        PKG_COUNT=$(echo "$CHANGED_JSON" | jq 'length')
-        EXPECTED_PREFIX=$(printf '@%s/' "$PACKAGE_OWNER" | tr '[:upper:]' '[:lower:]')
-
-        for i in $(seq 0 $(( PKG_COUNT - 1 ))); do
-          PKG_PATH=$(echo "$CHANGED_JSON" | jq -r ".[$i].path")
-          NAME=$(jq -r .name "$PKG_PATH/package.json")
-          VERSION=$(jq -r .version "$PKG_PATH/package.json")
-
-          if [ -z "$NAME" ] || [ "$NAME" = "null" ] || [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-            echo "❌ Could not read name/version from $PKG_PATH/package.json."
-            exit 1
-          fi
-
-          NAME_LOWER=$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]')
-          case "$NAME_LOWER" in
-            "$EXPECTED_PREFIX"*) ;;
-            *)
-              echo "❌ GitHub Packages requires every package name to use the repository owner's scope."
-              echo "   Expected @${PACKAGE_OWNER}/<package>, found: $NAME"
-              exit 1
-              ;;
-          esac
-
-          echo "========================================="
-          echo "Publishing $NAME@$VERSION ($PKG_PATH) to GitHub Packages"
-          echo "========================================="
-
-          if [ -z "$ROOT_BUILD_CMD" ]; then
-            echo "Building $NAME..."
-            (cd "$PKG_PATH" && $BUILD_CMD)
-          fi
-
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "Dry run: would publish $NAME with tag $TAG"
-            (cd "$PKG_PATH" && bun publish --registry "$REGISTRY_URL" --tag "$TAG" --dry-run)
-            continue
-          fi
-
-          echo "Publishing $NAME with tag $TAG"
-          (cd "$PKG_PATH" && bun publish --registry "$REGISTRY_URL" --tag "$TAG")
-
-          PUBLISHED=false
-          for attempt in 1 2 3 4 5 6; do
-            PUBLISHED_VERSION=$(npm view "$NAME@$VERSION" version --registry "$REGISTRY_URL" 2>/dev/null || true)
-            if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
-              echo "✅ $NAME@$VERSION is live on GitHub Packages."
-              PUBLISHED=true
-              break
-            fi
-            echo "Attempt $attempt: package version is not visible yet — retrying in 5s..."
-            sleep 5
-          done
-
-          if [ "$PUBLISHED" != "true" ]; then
-            echo "❌ Publish verification failed: $NAME@$VERSION is not visible on GitHub Packages."
-            exit 1
-          fi
-
-          echo ""
-        done
-
-        echo "All GitHub Packages published successfully"
+        PACKAGE_ACCESS: ''
+      run: node "$ACTION_PATH/../publish-packages.mjs"

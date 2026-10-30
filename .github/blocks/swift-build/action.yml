@@ -32,7 +32,7 @@ outputs:
     value: ${{ steps.build.outputs.binary-path }}
   resource-bundles-path:
     description: "Path to staging directory containing collected resource bundles (empty if none)"
-    value: ${{ steps.build.outputs.resource-bundles-path }}
+    value: ${{ steps.bundles.outputs.resource-bundles-path }}
 
 runs:
   using: composite
@@ -52,11 +52,9 @@ runs:
     - name: Prepare .env
       if: inputs.compile-env != ''
       shell: bash
-      run: |
-        echo "${{ inputs.compile-env }}" > .env
-    - name: Create artifacts directory
-      run: mkdir -p artifacts
-      shell: bash
+      env:
+        COMPILE_ENV: ${{ inputs.compile-env }}
+      run: printf '%s\n' "$COMPILE_ENV" > .env
     - name: Configure git auth for private/internal SPM dependencies
       if: inputs.github-token != ''
       shell: bash
@@ -65,26 +63,33 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
     - name: Build Swift Binary
-      shell: bash
       id: build
+      uses: $/.github/primitives/swift-build
+      with:
+        product: ${{ inputs.binary-name }}
+    - name: Sign Swift binary
+      if: inputs.entitlements != ''
+      shell: bash
+      env:
+        BINARY: ${{ steps.build.outputs.binary-path }}
+        ENTITLEMENTS: ${{ inputs.entitlements }}
+      run: codesign -s - --entitlements "$ENTITLEMENTS" -f "$BINARY"
+    - name: Stage binary
+      uses: $/.github/primitives/stage-file
+      with:
+        source: ${{ steps.build.outputs.binary-path }}
+        destination: artifacts/${{ inputs.binary-name }}
+    - name: Collect resource bundles
+      id: bundles
+      shell: bash
+      env:
+        RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
       run: |
-        swift build -c release
-        BIN=".build/release/${{ inputs.binary-name }}"
-        if [ -n "${{ inputs.entitlements }}" ]; then
-          echo "::group::Codesign $BIN (entitlements: ${{ inputs.entitlements }})"
-          codesign -s - --entitlements "${{ inputs.entitlements }}" -f "$BIN"
-          codesign -dvvv "$BIN" || true
-          echo "::endgroup::"
-        fi
-        cp "$BIN" artifacts
-        echo "binary-path=$BIN" >> $GITHUB_OUTPUT
-
-        # ── Collect resource bundles ──
         BUNDLES_PATH=""
-        if [ -n "${{ inputs.resource-bundles }}" ]; then
+        if [ -n "$RESOURCE_BUNDLES" ]; then
           BUNDLES_PATH="${RUNNER_TEMP}/resource-bundles"
           mkdir -p "$BUNDLES_PATH"
-          for BUNDLE in ${{ inputs.resource-bundles }}; do
+          for BUNDLE in $RESOURCE_BUNDLES; do
             SRC=".build/release/${BUNDLE}"
             if [ -d "$SRC" ]; then
               cp -R "$SRC" "$BUNDLES_PATH/"

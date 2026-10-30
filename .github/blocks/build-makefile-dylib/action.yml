@@ -17,21 +17,22 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
+        OUTPUT_NAME: ${{ inputs.output-name }}
       run: |
         make ${VERSION:+VERSION=$VERSION} release
 
-        DYLIB="build/${{ inputs.output-name }}.dylib"
+        DYLIB="build/$OUTPUT_NAME.dylib"
 
         if [ -f "$DYLIB" ]; then
-          echo "${{ inputs.output-name }}.dylib built successfully"
+          echo "$OUTPUT_NAME.dylib built successfully"
           file "$DYLIB"
         else
-          echo "::error::${{ inputs.output-name }}.dylib not found — build failure"
+          echo "::error::$OUTPUT_NAME.dylib not found — build failure"
           exit 1
         fi
 
     - name: Prepare artifact
-      shell: bash
-      run: |
-        mkdir -p artifacts
-        cp "build/${{ inputs.output-name }}.dylib" artifacts/
+      uses: $/.github/primitives/stage-file
+      with:
+        source: build/${{ inputs.output-name }}.dylib
+        destination: artifacts/${{ inputs.output-name }}.dylib

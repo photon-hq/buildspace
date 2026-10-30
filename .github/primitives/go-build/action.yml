@@ -1,0 +1,27 @@
+name: Build Go binary
+description: Compile one binary with an already installed Go toolchain
+inputs:
+  output:
+    description: Output filename, including any target-specific extension
+    required: true
+  goos:
+    description: Target operating system
+    required: true
+  goarch:
+    description: Target architecture
+    required: true
+  build-flags:
+    description: Trusted shell fragment containing additional go build flags
+    default: ''
+  ldflags:
+    description: Go linker flags, passed as one argument
+    default: '-s -w'
+  working-directory:
+    description: Package directory to compile
+    default: '.'
+outputs:
+  binary-path:
+    description: Absolute path to the binary
+runs:
+  using: node24
+  main: index.mjs

@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Rust Build
-        uses: photon-hq/buildspace/.github/blocks/rust-build@main
+        uses: $/.github/blocks/rust-build
         with:
           binary-name: ${{ inputs.binary-name }}
           binary-path: ${{ inputs.binary-path }}
@@ -199,7 +199,7 @@ jobs:
       - name: Pull latest version changes
         run: git pull --ff-only origin ${{ github.ref_name }}
       - name: Publish to Crates.io
-        uses: photon-hq/buildspace/.github/blocks/publish-crates@main
+        uses: $/.github/blocks/publish-crates
         with:
           crates: ${{ inputs.crates }}
           dry-run: ${{ inputs.dry-run }}

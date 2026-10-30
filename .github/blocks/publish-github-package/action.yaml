@@ -35,118 +35,70 @@ inputs:
     required: true
 
 runs:
-  using: 'composite'
+  using: composite
   steps:
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
-
-    # Credentials only, no scope mapping. A package whose own dependencies
-    # live on GitHub Packages needs a token to install them, but remapping the
-    # owner's scope here would break a package being published to both
-    # registries for the first time — its npmjs.org scope-siblings would stop
-    # resolving. Supplying the token without touching the registry mapping
-    # fixes the former and preserves the latter; a repository that routes a
-    # scope to GitHub Packages does so in its own .npmrc.
     - name: Authenticate to GitHub Packages
       shell: bash
       env:
         GITHUB_PACKAGES_TOKEN: ${{ inputs.github-token }}
-      run: |
-        printf '//npm.pkg.github.com/:_authToken=%s\n' \
-          "$GITHUB_PACKAGES_TOKEN" >> "$HOME/.npmrc"
-
-    # Install and build before mapping the repository owner's npm scope to
-    # GitHub Packages, for the reason above.
+      run: printf '//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_PACKAGES_TOKEN" >> "$HOME/.npmrc"
     - name: Install dependencies
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: bun install
-
     - name: Build
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: ${{ inputs.build-command }}
-
+      env:
+        BUILD_COMMAND: ${{ inputs.build-command }}
+      run: bash -euo pipefail -c "$BUILD_COMMAND"
     - uses: actions/setup-node@v4
       with:
         node-version: ${{ inputs.node-version }}
-        registry-url: 'https://npm.pkg.github.com'
+        registry-url: https://npm.pkg.github.com
         scope: ${{ format('@{0}', github.repository_owner) }}
-
-    - name: Publish to GitHub Packages
+    - name: Read package identity
+      id: package
+      uses: $/.github/primitives/npm-package-info
+      with:
+        working-directory: ${{ inputs.working-directory }}
+    - name: Require the repository owner's package scope and credentials
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       env:
-        NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+        PACKAGE_NAME: ${{ steps.package.outputs.name }}
         PACKAGE_OWNER: ${{ github.repository_owner }}
-        REGISTRY_URL: 'https://npm.pkg.github.com'
-        TAG: ${{ inputs.tag }}
+        NODE_AUTH_TOKEN: ${{ inputs.github-token }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: |
-        set -euo pipefail
-
-        NAME=$(jq -r .name package.json)
-        VERSION=$(jq -r .version package.json)
-        if [ -z "$NAME" ] || [ "$NAME" = "null" ] || [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
-          echo "❌ Could not read name/version from package.json."
-          exit 1
-        fi
-
-        NAME_LOWER=$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]')
-        EXPECTED_PREFIX=$(printf '@%s/' "$PACKAGE_OWNER" | tr '[:upper:]' '[:lower:]')
+        NAME_LOWER="$(printf '%s' "$PACKAGE_NAME" | tr '[:upper:]' '[:lower:]')"
+        PREFIX="$(printf '@%s/' "$PACKAGE_OWNER" | tr '[:upper:]' '[:lower:]')"
         case "$NAME_LOWER" in
-          "$EXPECTED_PREFIX"*) ;;
-          *)
-            echo "❌ GitHub Packages requires the package name to use the repository owner's scope."
-            echo "   Expected @${PACKAGE_OWNER}/<package>, found: $NAME"
-            exit 1
-            ;;
+          "$PREFIX"*) ;;
+          *) echo "::error::GitHub Packages requires the repository owner's scope: $PREFIX"; exit 1 ;;
         esac
-
-        DRYRUN_FLAG=""
-        if [ "$DRY_RUN" = "true" ]; then
-          DRYRUN_FLAG="--dry-run"
-          echo "🧪 Dry run mode enabled."
-        elif [ -z "$NODE_AUTH_TOKEN" ]; then
-          echo "❌ No GitHub token was provided. Grant the caller 'packages: write'."
+        if [ "$DRY_RUN" != "true" ] && [ -z "$NODE_AUTH_TOKEN" ]; then
+          echo "::error::No GitHub Packages token was provided"
           exit 1
         fi
-
-        echo "Publishing $NAME@$VERSION to GitHub Packages with tag $TAG..."
-        LOG=$(mktemp)
-        trap 'rm -f "$LOG"' EXIT
-
-        set +e
-        ${{ inputs.publish-command }} --registry "$REGISTRY_URL" --tag "$TAG" $DRYRUN_FLAG 2>&1 | tee "$LOG"
-        PUBLISH_EXIT=${PIPESTATUS[0]}
-        set -e
-
-        if [ "$PUBLISH_EXIT" -ne 0 ]; then
-          echo "❌ GitHub Packages publish exited non-zero ($PUBLISH_EXIT)."
-          exit "$PUBLISH_EXIT"
-        fi
-
-        if grep -qE '^npm (error|ERR!)' "$LOG"; then
-          echo "❌ Publisher reported success but npm emitted error lines in its output."
-          exit 1
-        fi
-
-        if [ "$DRY_RUN" = "true" ]; then
-          echo "✅ GitHub Packages dry run completed."
-          exit 0
-        fi
-
-        for attempt in 1 2 3 4 5 6; do
-          PUBLISHED_VERSION=$(npm view "$NAME@$VERSION" version --registry "$REGISTRY_URL" 2>/dev/null || true)
-          if [ "$PUBLISHED_VERSION" = "$VERSION" ]; then
-            echo "✅ $NAME@$VERSION is live on GitHub Packages."
-            exit 0
-          fi
-          echo "Attempt $attempt: package version is not visible yet — retrying in 5s..."
-          sleep 5
-        done
-
-        echo "❌ Publish verification failed: $NAME@$VERSION is not visible on GitHub Packages."
-        echo "Confirm the caller grants packages: write and the package scope matches @${PACKAGE_OWNER}."
-        exit 1
+    - name: Publish to GitHub Packages
+      uses: $/.github/primitives/npm-publish
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+      with:
+        working-directory: ${{ inputs.working-directory }}
+        registry: https://npm.pkg.github.com
+        tag: ${{ inputs.tag }}
+        dry-run: ${{ inputs.dry-run }}
+        command: ${{ inputs.publish-command }}
+    - name: Verify publish landed on registry
+      if: inputs.dry-run != 'true'
+      uses: $/.github/primitives/wait-npm-version
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.github-token }}
+      with:
+        package: ${{ steps.package.outputs.name }}
+        version: ${{ steps.package.outputs.version }}
+        registry: https://npm.pkg.github.com
