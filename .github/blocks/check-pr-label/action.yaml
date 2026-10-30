@@ -1,12 +1,12 @@
 name: 'Check PR Labels'
-description: 'Check PR labels and output flags for release decisions'
+description: 'Inspect configured PR labels and return boolean results for the caller'
 
 inputs:
   labels:
-    description: 'JSON array of labels to check (e.g., ["github-release", "prerelease"])'
+    description: 'JSON array of labels to check (e.g., ["needs-review", "documentation"])'
     required: true
   default-on-push:
-    description: 'Comma-separated list of labels to default to true on direct push (no PR found)'
+    description: 'Comma-separated labels to default to true on non-PR events only when GitHub confirms no associated PRs'
     required: false
     default: ''
 
