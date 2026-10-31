@@ -129,6 +129,8 @@ class PrimitiveContracts(unittest.TestCase):
         workflow = yaml.load((ROOT / '.github/workflows/primitives-smoke.yml').read_text(), Loader=yaml.BaseLoader)
         compose = workflow['jobs']['compose']
         self.assertEqual(compose['strategy']['fail-fast'], 'false')
+        checkout = next(step for step in compose['steps'] if step.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout['with']['fetch-depth'], '0')
         references = [step.get('uses', '') for step in compose['steps']]
         for setup, primitive in (
             ('actions/setup-go@', '$/.github/primitives/go-build'),
