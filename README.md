@@ -2220,6 +2220,9 @@ The [primitive catalog](.github/primitives/README.md) documents each action's in
 | `npm-publish` | Run one npm-compatible publication |
 | `wait-npm-version` | Wait for an exact package version to be visible |
 | `cargo-publish` | Run one Cargo publication |
+| `git-stage` | Stage explicit Git pathspecs |
+| `git-commit` | Commit the existing Git index |
+| `git-push` | Push without staging, committing, fetching, or rebasing |
 
 For example, compilation does not require packaging or publishing:
 
@@ -2244,7 +2247,7 @@ For example, compilation does not require packaging or publishing:
 
 Replace both placeholders with the same full Buildspace commit SHA. Uploading the file is a separate step, using `steps.artifact.outputs.path` with `actions/upload-artifact` if needed.
 
-The refactored build and publication recipes use GitHub's [`$/` self-repository references](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended). Nested actions resolve to the recipe's own commit, not the caller's checkout or a floating `@main`. These references require GitHub.com; GitHub Enterprise Server does not support them. Native primitives use the runner's Node 24 action runtime and do not change the caller's Node version.
+The refactored build, publication, and Git mutation recipes use GitHub's [`$/` self-repository references](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended). Nested actions resolve to the recipe's own commit, not the caller's checkout or a floating `@main`. These references require GitHub.com; GitHub Enterprise Server does not support them. Native primitives use the runner's Node 24 action runtime and do not change the caller's Node version.
 
 The stage/promote workflows still enforce their existing provenance, approval, and credential boundaries. Raw publication primitives are not a replacement for those checks. Release gates, environments, and credential scope belong to the composing workflow.
 
@@ -2285,7 +2288,10 @@ buildspace/
 │   │   ├── npm-package-info/          # Read package identity
 │   │   ├── npm-publish/               # Publish once, without auth fallback policy
 │   │   ├── wait-npm-version/          # Read exact registry visibility
-│   │   └── cargo-publish/             # Publish one crate
+│   │   ├── cargo-publish/             # Publish one crate
+│   │   ├── git-stage/                 # Stage explicit pathspecs
+│   │   ├── git-commit/                # Commit an existing index
+│   │   └── git-push/                  # Push with caller-selected Git policy
 │   │
 │   └── workflows/                     # Reusable workflows (full pipelines)
 │       ├── check-readme.yaml          # AI README freshness check (PR)

@@ -1,0 +1,12 @@
+name: Stage Git paths
+description: Stage additions, modifications, and deletions matching explicit pathspecs without committing
+inputs:
+  paths:
+    description: Nonempty JSON array of Git pathspecs, relative to working-directory
+    required: true
+  working-directory:
+    description: Directory in the Git worktree
+    default: '.'
+runs:
+  using: node24
+  main: index.mjs

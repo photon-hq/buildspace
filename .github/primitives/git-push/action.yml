@@ -1,0 +1,15 @@
+name: Push Git ref
+description: Push one remote without force, retries, fetching, rebasing, or credential setup
+inputs:
+  refspec:
+    description: One non-forced Git refspec; empty uses Git's configured push selection
+    default: ''
+  remote:
+    description: Git remote name or URL; remote groups and mirrored remotes are not supported
+    default: origin
+  working-directory:
+    description: Directory in the Git worktree
+    default: '.'
+runs:
+  using: node24
+  main: index.mjs

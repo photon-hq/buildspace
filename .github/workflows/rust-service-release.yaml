@@ -178,7 +178,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Sync Workspace Version
-        uses: photon-hq/buildspace/.github/blocks/sync-crates-version@main
+        uses: $/.github/blocks/sync-crates-version
         with:
           commit-user-name: ${{ inputs.commit-user-name }}
           commit-user-email: ${{ inputs.commit-user-email }}
@@ -214,7 +214,7 @@ jobs:
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - name: Update Homebrew Tap
-        uses: photon-hq/buildspace/.github/blocks/update-tap@main
+        uses: $/.github/blocks/update-tap
         with:
           commit-user-name: ${{ inputs.commit-user-name }}
           commit-user-email: ${{ inputs.commit-user-email }}
