@@ -625,7 +625,7 @@ Complete release pipeline for Rust services: checks PR labels, generates version
 | `build-env` | string | No | `""` | Compile-time env vars (e.g., `BASE_URL=https://...`) |
 | `prerelease` | boolean | No | `false` | Select RC mode for an enabled release (adds `-rc.N`) |
 | `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
-| `dry-run` | boolean | No | `false` | Publisher dry run only; version commits and GitHub Releases can still occur |
+| `dry-run` | boolean | No | `false` | Publisher dry run only; version commits, GitHub Releases, and configured Homebrew tap commits and pushes can still occur |
 
 #### Secrets
 
