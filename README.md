@@ -1437,8 +1437,9 @@ but modern stage/promote workflows do not.
 
 On a push or manual run, it paginates the commit's associated pull requests and
 selects the merged result matching that commit and base branch. API errors and
-ambiguous owning matches fail without emitting labels. Other associations
-supply no labels, including a push with no associated pull request.
+ambiguous owning matches fail without emitting the `labels` output. If no merged
+PR matches, the `labels` output includes every requested lowercase key set to
+`false`, including when no pull request is associated with the commit.
 
 #### Inputs
 
