@@ -66,12 +66,15 @@ bypass a failed checker job. A prerelease label/input alone starts only the
 monorepo and Swift chains; single-package TypeScript, Rust, and Go still need R.
 
 The checker's only input, `labels`, accepts arbitrary names and returns only
-the requested lowercase boolean keys. A push or manual run with no associated PR,
-an API failure, an ambiguous owner, or an unlabeled owning PR never produces a
-true label.
+the requested lowercase boolean keys. A push or manual run with no matching
+merged PR returns `false` for every requested label. An owning PR with none of
+the requested labels returns the same results. API failures and multiple merged
+PRs matching the commit and base branch fail the checker without emitting
+`labels`.
 
 Legacy publisher `dry-run` is not a pipeline-wide write prohibition: version
-commits and GitHub Releases can still occur. `no-npm-publish` disables npmjs
+commits and GitHub Releases can still occur. Configured Rust Homebrew updates
+can still commit and push formula changes. `no-npm-publish` disables npmjs
 publication, not version commits or GitHub Releases. Removing a label gate
 without a replacement can enable stable publishing or Jamf delivery on every
 invocation.
