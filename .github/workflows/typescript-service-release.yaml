@@ -57,11 +57,6 @@ on:
         required: false
         default: "npm publish"
         description: "Command used to publish (e.g., 'npm publish', 'bunx clean-publish'). Registry, tag, access, and dry-run flags are appended automatically."
-      labels-to-check:
-        type: string
-        required: false
-        default: '["release", "prerelease"]'
-        description: "JSON array of PR labels to check"
       prerelease:
         type: boolean
         required: false
@@ -128,7 +123,7 @@ jobs:
         id: check
         uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
-          labels: ${{ inputs.labels-to-check }}
+          labels: '["release", "prerelease"]'
 
   release-info:
     needs: check-labels

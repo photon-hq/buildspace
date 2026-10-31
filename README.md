@@ -72,99 +72,44 @@ BuildSpace gives you three layers of CI/CD automation:
 | Container image for Kargo promotion | [`publish-image`](#immutable-image-publisher) | Push to main or a protected hotfix branch, after CI |
 | Internal npm package on GitHub Packages, with any internal Rust crates built beside it | [`package-stage` + `package-promote`](#package-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | Public npm package on npmjs, staged and promoted the same way | [`package-stage` + `package-promote`](#package-stage-and-promote) with `registry: https://registry.npmjs.org` | Push to main; promotion by dispatch and approval |
-| Single Rust binary or library | [`rust-service-release`](#rust-service-release) | PR label `release` |
-| Single TypeScript / JavaScript package | [`typescript-service-release`](#typescript-service-release) | PR label `release` |
-| TypeScript monorepo (multiple packages) | [`typescript-monorepo-release`](#typescript-monorepo-release) | PR label `release` |
-| Go binary | [`go-binary-release`](#go-binary-release) | PR label `release` |
 | Swift macOS `.pkg`, staged on staging Macs and promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | SwiftPM library, released by tags | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `library: true` | Push to main; promotion by dispatch and approval |
-| Swift macOS `.pkg` (release) | [`swift-release`](#swift-release) | PR label `release` or `prerelease` |
-| macOS `.pkg` without binary (payload/scripts only) | [`pkg-release`](#package-release) | PR label `release` |
 | macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
 | Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
 | Any project — update skills docs on release | [`update-skills`](#update-skills) | Release (via caller) |
 
-### Rust Project
+### Stage first, then promote
 
-Create `.github/workflows/release.yaml`:
+For packages, follow [Package Stage and Promote](#package-stage-and-promote),
+including its pack-script contract. For Swift executables and libraries, follow
+[Swift Stage and Promote](#swift-stage-and-promote). Each guide has the staging
+and promotion callers, required permissions, and approval configuration.
 
-```yaml
-name: Release
+Merge to `main` to stage a build. Promote that stored build after approval;
+neither step uses a PR release label or an AI API key. The production candidate
+is prepared during staging, so promotion does not rebuild it.
 
-on:
-  push:
-    branches: [main]
+### Existing direct-release callers
 
-jobs:
-  release:
-    uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@main
-    permissions:
-      contents: write
-      pull-requests: read
-    with:
-      service-name: my-service
-      binary-name: my-binary
-      crates: '["crates/shared", "crates/client"]'
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-```
+The workflows below remain available for compatibility. They still use their
+existing label rules; do not remove a caller's labels before migrating its
+release path. The [rule and caller inventory](docs/release-label-compatibility.md)
+tracks the remaining consumers and removal conditions.
 
-### TypeScript Project
+| Existing release path | Compatibility reference |
+|---|---|
+| Rust binaries and crates.io publishing | [Rust Service Release](#rust-service-release) |
+| Single TypeScript / JavaScript package | [TypeScript Service Release](#typescript-service-release) |
+| Independently versioned TypeScript packages | [TypeScript Monorepo Release](#typescript-monorepo-release) |
+| Go binaries | [Go Binary Release](#go-binary-release) |
+| Swift macOS `.pkg` direct release | [Swift Release](#swift-release) |
+| Payload/scripts-only macOS `.pkg` | [Package Release](#package-release) |
+| GitHub-only releases and Makefile dylibs | [Compatibility rules](docs/release-label-compatibility.md#workflow-rules) |
 
-Create `.github/workflows/release.yaml`:
-
-```yaml
-name: Release
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  release:
-    uses: photon-hq/buildspace/.github/workflows/typescript-service-release.yaml@main
-    permissions:
-      contents: write
-      pull-requests: read
-      # packages: write  # required when publish-github-packages: true
-    with:
-      service-name: my-package
-      build-command: "npm run build"
-      # publish-github-packages: true
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-```
-
-### TypeScript Monorepo
-
-Create `.github/workflows/release.yaml`:
-
-```yaml
-name: Release
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  release:
-    uses: photon-hq/buildspace/.github/workflows/typescript-monorepo-release.yaml@main
-    permissions:
-      contents: write
-      pull-requests: read
-      # packages: write  # required when publish-github-packages: true
-    with:
-      service-name: acme
-      packages: '[{"name":"@acme/app","path":"packages/app"},{"name":"@acme/client","path":"packages/client"}]'
-      root-build-command: "turbo build"
-      # publish-github-packages: true
-    secrets:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-```
+Package stage/promote does not replace standalone Go/Rust binary releases or
+crates.io publishing. Swift stage/promote does not build Makefile dylibs or
+payload-only packages. Those callers need a replacement before retirement.
 
 ### README Update-To-Date Check
 
@@ -183,17 +128,22 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
 
-Then add a `release` label to your PR, merge, and let BuildSpace do the rest.
+This check runs on pull requests independently of release or promotion.
 
 ### Pinning BuildSpace
 
-The examples above use `@main`, which picks up every BuildSpace change the moment it merges. Pin a commit of `main` instead, as the stage and promote examples do:
+Examples using `@main` pick up every BuildSpace change the moment it merges.
+Pin a reviewed commit of `main` instead, as the stage and promote examples do:
 
 ```yaml
-uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@<reviewed-commit-sha>
+uses: photon-hq/buildspace/.github/workflows/package-stage.yml@<reviewed-commit-sha>
 ```
 
 Get the current commit with `git ls-remote https://github.com/photon-hq/buildspace refs/heads/main`. Moving the pin is a pull request in your repository, so each BuildSpace change is reviewed there, and a stage workflow's dry run tests it, before it ships. BuildSpace has no releases or tags of its own: merging to `main` is the release. The old `v1.x` tags and releases were deleted, so a reference to one no longer resolves; pin a commit instead.
+
+Legacy direct-release wrappers still reference nested blocks at `@main`.
+Pinning only a legacy wrapper does not freeze those dependencies; keep the
+compatibility blocks available until their consumers migrate.
 
 ---
 
@@ -201,14 +151,16 @@ Get the current commit with `git ls-remote https://github.com/photon-hq/buildspa
 
 ### Required Secrets
 
-Most release workflows need `OPENAI_API_KEY` for AI-powered versioning and release notes. The `update-docs` and `update-skills` workflows use `ANTHROPIC_API_KEY` instead. Add secrets depending on which workflows you use:
+Package and Swift stage/promote workflows do not use AI API keys. AI checks and
+legacy direct-release workflows use `OPENAI_API_KEY`; `update-docs` and
+`update-skills` use `ANTHROPIC_API_KEY`. Add only the secrets your workflow needs:
 
 | Secret | Needed for | Where to get it |
 |--------|-----------|-----------------|
-| `OPENAI_API_KEY` | Release workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| `OPENAI_API_KEY` | AI checks and legacy direct-release workflows | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | `ANTHROPIC_API_KEY` | Update Documentation, Update Skills | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
-| `NPM_TOKEN` | TypeScript publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
-| `CARGO_REGISTRY_TOKEN` | Rust crate publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
+| `NPM_TOKEN` | Legacy token-based npm publishing; modern npm stage/promote uses trusted publishing | [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens) |
+| `CARGO_REGISTRY_TOKEN` | Legacy crates.io publishing | [crates.io/settings/tokens](https://crates.io/settings/tokens) |
 | `APP_ID` | Update Documentation and Update Skills (required), release workflows (optional, for protected branches) | GitHub App settings |
 | `APP_PRIVATE_KEY` | Update Documentation and Update Skills (required), release workflows (optional, for protected branches) | GitHub App settings |
 
@@ -216,20 +168,24 @@ Add these in your repository's **Settings > Secrets and variables > Actions**, o
 
 GitHub Packages publishing does not need another stored secret. It uses the caller repository's short-lived `GITHUB_TOKEN`; grant the reusable-workflow job `packages: write` when `publish-github-packages` is enabled.
 
-### PR Labels
+### Release policy
 
-Control releases by adding labels to your PR before merging:
+For stage/promote callers, `main` is staging. Production receives an approved
+staging build's stored candidate. The `release` and `prerelease` PR labels are
+not required or consulted by these workflows.
 
-| Label | Effect |
-|-------|--------|
-| `release` | Triggers a full release (GitHub Release + package publish) |
-| `prerelease` | Creates a prerelease with `-rc.N` suffix. npm workflows publish with the `beta` tag; Swift creates a GitHub pre-release and skips Jamf. |
-
-**No label = no release** PRs without labels merge without triggering any release jobs. You can customize your release label with the input 'labels-to-check' in the 'release.yml'. 
+Label authorization remains only in the [compatibility rules](docs/release-label-compatibility.md).
+Those rules differ between workflows and must stay intact for their remaining
+callers. Do not remove GitHub prerelease metadata, registry channels, or
+production-dependency checks when removing an unused PR label.
 
 ### Permissions
 
-Workflows that create releases or push commits need `contents: write`. Workflows that read PR labels need `pull-requests: read`. Workflows that post comments need `pull-requests: write`. GitHub Packages publishing needs `packages: write`. Each workflow section below lists the exact permissions required.
+Workflows that create releases or push commits need `contents: write`.
+Modern version calculation reads PR titles and descriptions and needs
+`pull-requests: read`; legacy label inspection also needs it. Workflows that
+post comments need `pull-requests: write`. GitHub Packages publishing needs
+`packages: write`. Each workflow section below lists its required permissions.
 
 ---
 
@@ -651,6 +607,9 @@ and `node --test .github/blocks/check-production-dependencies/*.test.mjs` (Node 
 
 **File:** `.github/workflows/rust-service-release.yaml`
 
+**Compatibility workflow.** Keep its existing release policy until the caller
+migrates. See the [rules and remaining callers](docs/release-label-compatibility.md).
+
 Complete release pipeline for Rust services: checks PR labels, generates version and release notes with AI, builds binaries for Linux (x86_64), macOS (ARM64), and Windows, syncs version across all workspace crates, publishes to crates.io, and creates a GitHub Release with attached binaries.
 
 #### Inputs
@@ -664,10 +623,9 @@ Complete release pipeline for Rust services: checks PR labels, generates version
 | `binary-path` | string | No | `""` | Path to crate directory (e.g., `crates/client`) |
 | `crates` | string | No | `[]` | JSON array of crate paths to publish in dependency order |
 | `build-env` | string | No | `""` | Compile-time env vars (e.g., `BASE_URL=https://...`) |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | No | `false` | Force prerelease (adds `-rc.N` suffix) |
-| `release` | boolean | No | `false` | Force release (bypasses label check) |
-| `dry-run` | boolean | No | `false` | Test without actually publishing |
+| `prerelease` | boolean | No | `false` | Select RC mode for an enabled release (adds `-rc.N`) |
+| `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
+| `dry-run` | boolean | No | `false` | Publisher dry run only; version commits, GitHub Releases, and configured Homebrew tap commits and pushes can still occur |
 
 #### Secrets
 
@@ -702,6 +660,9 @@ jobs:
 
 **File:** `.github/workflows/typescript-service-release.yaml`
 
+**Compatibility workflow.** New package callers use [Package Stage and Promote](#package-stage-and-promote).
+See the [rules and remaining callers](docs/release-label-compatibility.md) before removing labels.
+
 Complete release pipeline for a single TypeScript/JavaScript package: checks PR labels, generates version and release notes with AI, bumps `package.json`, creates a GitHub Release, publishes to npm, and can optionally publish the same package to GitHub Packages.
 
 #### Inputs
@@ -719,10 +680,9 @@ Complete release pipeline for a single TypeScript/JavaScript package: checks PR 
 | `working-directory` | string | No | `.` | Directory containing `package.json` |
 | `build-command` | string | No | `bun run build` | Build command to run |
 | `publish-command` | string | No | `npm publish` | Publisher command; target-specific registry and publish flags are appended |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | No | `false` | Force prerelease |
-| `release` | boolean | No | `false` | Force release (bypasses label check) |
-| `dry-run` | boolean | No | `false` | Test without actually publishing |
+| `prerelease` | boolean | No | `false` | Select RC mode; see the compatibility entry rules |
+| `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
+| `dry-run` | boolean | No | `false` | Publisher dry run only; version commits and GitHub Releases can still occur |
 | `use-oidc` | boolean | No | `false` | Opt in to npm OIDC Trusted Publishing (requires caller `id-token: write` + a trusted publisher). Falls back to `NPM_TOKEN`. Default keeps least-privilege token publishing |
 
 #### Secrets
@@ -775,6 +735,10 @@ Run `node --test test/source-release.test.mjs` for the exact-source regression t
 
 **File:** `.github/workflows/typescript-monorepo-release.yaml`
 
+**Compatibility workflow.** New package callers use [Package Stage and Promote](#package-stage-and-promote).
+Its shared build version differs from this workflow's independent package versions;
+see the [migration rules](docs/release-label-compatibility.md).
+
 Complete release pipeline for TypeScript/JavaScript monorepos with independently-versioned packages. Detects which packages changed since the last release, topologically sorts them by dependency order, uses a single AI call to determine all versions and generate combined release notes, bumps each `package.json`, creates a GitHub Release with a `release/YYYY-MM-DD.N` tag, publishes all changed packages to npm in dependency order, and can optionally mirror them to GitHub Packages.
 
 #### Inputs
@@ -791,10 +755,9 @@ Complete release pipeline for TypeScript/JavaScript monorepos with independently
 | `build-command` | string | No | `bun run build` | Per-package build command (ignored if `root-build-command` is set) |
 | `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
 | `include-dependents` | boolean | No | `false` | Also release downstream dependents of changed packages |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | No | `false` | Force prerelease |
-| `release` | boolean | No | `false` | Force release (bypasses label check) |
-| `dry-run` | boolean | No | `false` | Test without actually publishing |
+| `prerelease` | boolean | No | `false` | Select RC mode; see the compatibility entry rules |
+| `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
+| `dry-run` | boolean | No | `false` | Publisher dry run only; version commits and GitHub Releases can still occur |
 
 #### Secrets
 
@@ -860,6 +823,9 @@ PR merged with "release" label
 
 **File:** `.github/workflows/go-service-release.yaml`
 
+**Compatibility workflow.** Keep its existing release policy until a binary
+stage/promote path replaces it. See the [rules and remaining callers](docs/release-label-compatibility.md).
+
 Complete release pipeline for Go binaries: checks PR labels, generates version and release notes with AI, cross-compiles for Linux (x64/ARM64), macOS (ARM64), and Windows (x64), and creates a GitHub Release with attached binaries.
 
 #### Inputs
@@ -873,9 +839,8 @@ Complete release pipeline for Go binaries: checks PR labels, generates version a
 | `go-version` | string | No | `stable` | Go version to use |
 | `build-flags` | string | No | `""` | Additional `go build` flags |
 | `ldflags` | string | No | `-s -w` | Linker flags |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger releases |
-| `prerelease` | boolean | No | `false` | Force prerelease |
-| `release` | boolean | No | `false` | Force release (bypasses label check) |
+| `prerelease` | boolean | No | `false` | Select RC mode; see the compatibility entry rules |
+| `release` | boolean | No | `false` | Enable the legacy release; checker failures still stop it |
 
 #### Secrets
 
@@ -1070,6 +1035,9 @@ Local validation: `node --test test/swift-release.test.mjs` (Node 24+, after
 
 **File:** `.github/workflows/swift-release.yml`
 
+**Compatibility workflow.** New Swift callers use [Swift Stage and Promote](#swift-stage-and-promote).
+See the [rules and remaining callers](docs/release-label-compatibility.md) before removing labels.
+
 The label-driven pipeline that Swift Stage and Promote replaces. Complete release pipeline for macOS `.pkg` distribution packages: checks PR labels, generates version and release notes with AI, builds the Swift binary, creates a `.pkg`, creates a GitHub Release, and optionally uploads stable releases to Jamf Pro. A `prerelease` label or input creates an `-rc.N` GitHub pre-release and skips Jamf upload.
 
 #### Inputs
@@ -1083,9 +1051,8 @@ The label-driven pipeline that Swift Stage and Promote replaces. Complete releas
 | `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
 | `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
-| `labels-to-check` | string | No | `["release", "prerelease"]` | PR labels that trigger stable or prerelease releases |
-| `prerelease` | boolean | No | `false` | Force prerelease (adds `-rc.N`, marks GitHub release as prerelease, skips Jamf) |
-| `release` | boolean | No | `false` | Force stable release (bypasses label check) |
+| `prerelease` | boolean | No | `false` | Enable an RC release, mark the GitHub release as prerelease, and skip Jamf |
+| `release` | boolean | No | `false` | Enable the legacy release; a prerelease input or label still selects RC mode |
 | `jamf-url` | string | No | `""` | Jamf Pro instance URL (leave empty to skip Jamf upload) |
 | `jamf-package-priority` | string | No | `""` | Package priority in Jamf Pro |
 | `jamf-package-name` | string | No | `""` | Package name to match in Jamf Pro |
@@ -1120,6 +1087,9 @@ jobs:
 ### Package Release
 
 **File:** `.github/workflows/pkg-release.yml`
+
+**Compatibility workflow.** A payload-only package needs its own replacement;
+Swift stage/promote has no payload-only mode. See the [rules and remaining callers](docs/release-label-compatibility.md).
 
 Release pipeline for macOS `.pkg` distribution packages that don't contain a compiled binary. Packages payload files and scripts into a `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro. Use this instead of `swift-release` when your package only delivers configuration files, LaunchDaemons, scripts, or other non-binary payload.
 
@@ -1398,66 +1368,26 @@ jobs:
 
 ## How Releases Work
 
-### Single-Package Workflows
+Package and Swift staging compute versions from merged changes, without release
+labels or AI version selection. Production receives the stored candidate after
+approval, without rerunning the caller's build.
 
-`rust-service-release`, `typescript-service-release`, `go-binary-release`, and `swift-release` all share the same initial steps then diverge for language-specific publishing:
-
-```
-                        ╔═══════════════════════════════════════════════════╗
-                        ║              SHARED STEPS (all workflows)         ║
-                        ╠═══════════════════════════════════════════════════╣
-                        ║                                                   ║
-                        ║  ┌─────────────┐     ┌───────────────┐            ║
-                        ║  │  PR Merged  │────▶│ Check Labels  │            ║
-                        ║  │ with label  │     │  (release?)   │            ║
-                        ║  └─────────────┘     └───────────────┘            ║
-                        ║                              │                    ║
-                        ║                              ▼                    ║
-                        ║                    ┌──────────────────┐           ║
-                        ║                    │ Generate Version │           ║
-                        ║                    │  + Release Notes │           ║
-                        ║                    │     (AI-powered) │           ║
-                        ║                    └──────────────────┘           ║
-                        ║                              │                    ║
-                        ╚══════════════════════════════╪════════════════════╝
-                                                       │
-                 ┌─────────────────────────────────────┴─────────────────────────────────────┐
-                 │                                                                           │
-                 ▼                                                                           ▼
-╔════════════════════════════════════════╗            ╔════════════════════════════════════════╗
-║   rust-service-release                ║            ║   typescript-service-release            ║
-╠════════════════════════════════════════╣            ╠════════════════════════════════════════╣
-║                                        ║            ║                                        ║
-║   ┌───────────────┐ ┌───────────────┐  ║            ║         ┌─────────────────┐            ║
-║   │ Build Binaries│ │ Sync Versions │  ║            ║         │  Bump Version   │            ║
-║   │ (Linux/macOS/ │ │ (all crates)  │  ║            ║         │ (package.json)  │            ║
-║   │   Windows)    │ └───────────────┘  ║            ║         └─────────────────┘            ║
-║   └───────────────┘         │          ║            ║                   │                    ║
-║           │                 ▼          ║            ║         ┌─────────┴─────────┐          ║
-║           │       ┌─────────────────┐  ║            ║         │                   │          ║
-║           │       │ Publish Crates  │  ║            ║         ▼                   ▼          ║
-║           │       │  (crates.io)    │  ║            ║  ┌──────────────┐   ┌─────────────┐    ║
-║           │       └─────────────────┘  ║            ║  │GitHub Release│   │ npm Publish │    ║
-║           │                 │          ║            ║  └──────────────┘   └─────────────┘    ║
-║           └────────┬────────┘          ║            ║                                        ║
-║                    ▼                   ║            ╚════════════════════════════════════════╝
-║         ┌───────────────────┐          ║
-║         │  GitHub Release   │          ║
-║         │  (with binaries)  │          ║
-║         └───────────────────┘          ║
-║                                        ║
-╚════════════════════════════════════════╝
+```mermaid
+flowchart LR
+  M[Merge to main] --> V[Compute version from merged changes]
+  V --> B[Prepare staging build and production candidate]
+  B --> S[Attest and publish staging build]
+  S --> A[Approve selected staging build]
+  A --> P[Publish stored production candidate]
 ```
 
-### Monorepo Workflow
+For images, [the immutable publisher](#immutable-image-publisher) builds and
+attests the exact commit; Kargo handles promotion separately.
 
-`typescript-monorepo-release` extends the single-package pattern to handle multiple independently-versioned packages:
-
-- **Change detection** — only packages with file changes (and optionally their dependents) are released
-- **Topological ordering** — packages are processed in dependency order so downstream consumers see new versions of their dependencies
-- **Single AI call** — one prompt contains all packages and their scoped commits, producing versions and notes in one shot
-- **Date-based tags** — since there's no single version, releases use `release/YYYY-MM-DD.N` tags
-- **`workspace:*` protocol** — left untouched; Bun/npm resolves these to real versions at pack-time
+The older label-driven workflows still generate versions and publish directly.
+Their [compatibility rules](docs/release-label-compatibility.md) remain in force
+until their callers migrate. Deleting a gate would enable direct publishing;
+it would not turn that workflow into staging and promotion.
 
 ---
 
@@ -1500,27 +1430,28 @@ first-release base is Git's empty tree. Missing tags fail. The diff is capped at
 
 **Path:** `.github/blocks/check-pr-label/action.yaml`
 
-Decides whether a PR should trigger a release based on its labels. Works on both PR events and push events (looks up the merged PR).
+Inspects the requested PR labels and returns boolean flags. The caller decides
+what those flags mean; the block does not publish or authorize a release itself.
+The [compatibility workflows](docs/release-label-compatibility.md) still consume it,
+but modern stage/promote workflows do not.
 
 On a push or manual run, it paginates the commit's associated pull requests and
 selects the merged result matching that commit and base branch. API errors and
-ambiguous owning matches fail without emitting labels. Other associations
-supply no labels, leaving explicit manual release overrides to the caller.
-`default-on-push` applies only when GitHub confirms an empty association list,
-never when lookup fails or the owning pull request has no labels.
+ambiguous owning matches fail without emitting the `labels` output. If no merged
+PR matches, the `labels` output includes every requested lowercase key set to
+`false`, including when no pull request is associated with the commit.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `labels` | string | Yes | — | JSON array of labels to check (e.g., `["release", "prerelease"]`) |
-| `default-on-push` | string | No | `""` | Comma-separated labels to default to `true` on direct push |
+| `labels` | string | Yes | — | JSON array of labels to check (e.g., `["needs-review", "documentation"]`) |
 
 #### Outputs
 
 | Output | Type | Description |
 |--------|------|-------------|
-| `labels` | JSON | Object with boolean results for each label (e.g., `{"release": true, "prerelease": false}`) |
+| `labels` | string | JSON-encoded object with lowercase keys and boolean values (e.g., `{"needs-review": true, "documentation": false}`) |
 
 #### Usage
 
@@ -1528,10 +1459,10 @@ never when lookup fails or the owning pull request has no labels.
 - uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
   id: labels
   with:
-    labels: '["release", "prerelease"]'
+    labels: '["documentation"]'
 
-- if: fromJSON(steps.labels.outputs.labels).release
-  run: echo "Release label found!"
+- if: fromJSON(steps.labels.outputs.labels).documentation
+  run: echo "Documentation label found"
 ```
 
 ---
@@ -2258,7 +2189,7 @@ buildspace/
 ├── .github/
 │   ├── blocks/                        # Composite actions (building blocks)
 │   │   ├── bump-monorepo-versions/    # AI version bump for monorepos
-│   │   ├── check-pr-label/            # PR label detection
+│   │   ├── check-pr-label/            # Generic inspection; retained for compatibility callers
 │   │   ├── check-readme/              # AI README freshness check
 │   │   ├── comment-on-pr/             # Post/update PR comments
 │   │   ├── create-github-release/     # GitHub Release creation
@@ -2293,16 +2224,21 @@ buildspace/
 │   │   ├── git-commit/                # Commit an existing index
 │   │   └── git-push/                  # Push with caller-selected Git policy
 │   │
+│   ├── package-release/              # Stage/promote versioning, manifests, and publishers
 │   └── workflows/                     # Reusable workflows (full pipelines)
 │       ├── check-readme.yaml          # AI README freshness check (PR)
-│       ├── go-service-release.yaml    # Complete Go release pipeline
-│       ├── rust-service-release.yaml  # Complete Rust release pipeline
-│       ├── pkg-release.yml             # .pkg release pipeline (no binary)
+│       ├── package-stage.yml          # Stage packages and their production candidates
+│       ├── package-promote.yml        # Promote stored package candidates after approval
+│       ├── swift-stage.yml            # Stage Swift packages or libraries
+│       ├── swift-promote.yml          # Promote Swift candidates; optional Jamf delivery
+│       ├── go-service-release.yaml    # Compatibility: direct Go releases
+│       ├── rust-service-release.yaml  # Compatibility: direct Rust releases
+│       ├── pkg-release.yml             # Compatibility: payload-only .pkg release
 │       ├── pkg-release-pr.yml         # .pkg PR build (no binary)
 │       ├── swift-pkg-pr.yml           # Swift .pkg build on every PR commit
-│       ├── swift-release.yml          # Swift .pkg release pipeline
-│       ├── typescript-monorepo-release.yaml  # Complete TS monorepo pipeline
-│       ├── typescript-service-release.yaml   # Complete TS release pipeline
+│       ├── swift-release.yml          # Compatibility: direct Swift .pkg releases
+│       ├── typescript-monorepo-release.yaml  # Compatibility: independent package releases
+│       ├── typescript-service-release.yaml   # Compatibility: direct TS releases
 │       ├── update-docs.yaml                  # AI docs update on release
 │       └── update-skills.yaml                # AI skills update on release
 ```
@@ -2315,20 +2251,34 @@ buildspace/
 2. Make your changes
 3. Test locally or in a test repository
 4. Open a PR with a clear description
-5. Add the `release` label when ready to publish
+5. Merge approved changes to `main`; BuildSpace itself requires no release label
 
-To test without publishing, use `dry-run: true`:
+Run the release-workflow tests from the repository root:
+
+```bash
+npm ci --prefix .github/blocks/check-production-dependencies --ignore-scripts --no-audit --no-fund
+npm ci --prefix .github/package-release --ignore-scripts --no-audit --no-fund
+node --test test/*.test.mjs .github/blocks/check-production-dependencies/*.test.mjs
+python3 -m unittest discover -s test
+```
+
+Python tests require PyYAML 6.0.3. To test a package or Swift staging workflow
+without publishing, use its `dry-run: true` mode:
 
 ```yaml
 with:
   dry-run: true
 ```
 
-Or test by pointing to your branch:
+Point the staging call to your branch while testing:
 
 ```yaml
-uses: photon-hq/buildspace/.github/workflows/rust-service-release.yaml@your-branch
+uses: photon-hq/buildspace/.github/workflows/package-stage.yml@your-branch
 ```
+
+Legacy publisher `dry-run` flags do not prevent every write: version commits
+and GitHub Releases can still occur. Do not use them as a substitute for a
+modern staging dry run.
 
 ---
 

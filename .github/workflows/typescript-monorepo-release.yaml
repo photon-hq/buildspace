@@ -51,11 +51,6 @@ on:
         required: false
         default: false
         description: "Also release downstream dependents of changed packages"
-      labels-to-check:
-        type: string
-        required: false
-        default: '["release", "prerelease"]'
-        description: "JSON array of PR labels to check"
       prerelease:
         type: boolean
         required: false
@@ -107,7 +102,7 @@ jobs:
         id: check
         uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
-          labels: ${{ inputs.labels-to-check }}
+          labels: '["release", "prerelease"]'
 
   detect-changes:
     needs: check-labels

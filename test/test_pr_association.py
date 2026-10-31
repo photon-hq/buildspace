@@ -12,7 +12,6 @@ RUNNER = r'''
 const fs = require('node:fs');
 const data = JSON.parse(fs.readFileSync(0, 'utf8'));
 process.env.LABELS_TO_CHECK = data.labels || '["release", "prerelease"]';
-process.env.DEFAULT_ON_PUSH = data.defaults || '';
 const outputs = {}, calls = [], errors = [];
 const association = async () => {};
 const github = {
@@ -75,25 +74,24 @@ class AssociationTests(unittest.TestCase):
 
     def test_open_or_other_base_pr_does_not_supply_release_label(self):
         for candidate in (pr(merged=False), pr(branch='other'), pr(merge='unrelated-commit')):
-            for defaults in ('', 'release'):
-                result = execute(pages=[[candidate]], defaults=defaults)
-                self.assertEqual(result['errors'], [])
-                self.assertFalse(json.loads(result['outputs']['labels'])['release'])
+            result = execute(pages=[[candidate]])
+            self.assertEqual(result['errors'], [])
+            self.assertFalse(json.loads(result['outputs']['labels'])['release'])
 
-    def test_confirmed_no_pr_retains_configured_push_defaults(self):
-        for defaults, expected in (('', False), ('Release', True)):
-            result = execute(defaults=defaults)
-            self.assertEqual(json.loads(result['outputs']['labels'])['release'], expected)
+    def test_push_with_no_associated_pr_has_no_labels(self):
+        result = execute()
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(json.loads(result['outputs']['labels']), {'release': False, 'prerelease': False})
 
-    def test_api_error_never_emits_defaults_or_false_results(self):
+    def test_api_error_never_emits_results(self):
         for error in ('listError', 'getError'):
-            result = execute(pages=[[pr()]], defaults='release', **{error: True})
+            result = execute(pages=[[pr()]], **{error: True})
             self.assertEqual(result['outputs'], {})
             self.assertTrue(result['errors'])
 
-    def test_later_page_failure_never_emits_release_defaults(self):
+    def test_later_page_failure_never_emits_results(self):
         for pages in ([[pr(merged=False)], [pr()]], [[pr()], []]):
-            result = execute(pages=pages, failPage=2, defaults='release')
+            result = execute(pages=pages, failPage=2)
             self.assertTrue(result['errors'])
             self.assertEqual(result['outputs'], {})
 
@@ -103,14 +101,9 @@ class AssociationTests(unittest.TestCase):
         self.assertTrue(result['errors'])
         exact = execute(pages=[[pr(1, merge='a'), pr(2)]])
         self.assertEqual(exact['calls'][-1][1]['pull_number'], 2)
-        duplicated = execute(pages=[[pr(1)], [pr(2)]], defaults='release')
+        duplicated = execute(pages=[[pr(1)], [pr(2)]])
         self.assertEqual(duplicated['outputs'], {})
         self.assertTrue(duplicated['errors'])
-
-    def test_an_unlabeled_owning_pr_never_inherits_push_defaults(self):
-        result = execute(pages=[[pr()]], prLabels=[], defaults='release')
-        self.assertEqual(result['errors'], [])
-        self.assertFalse(json.loads(result['outputs']['labels'])['release'])
 
     def test_labels_keep_case_normalization_and_boolean_json(self):
         result = execute(labels='["ReLeAsE", "Prerelease"]', pages=[[pr()]],
@@ -118,32 +111,42 @@ class AssociationTests(unittest.TestCase):
         self.assertEqual(result['errors'], [])
         self.assertEqual(json.loads(result['outputs']['labels']), {'release': True, 'prerelease': True})
 
-    def test_manual_runs_use_the_same_commit_ownership_and_direct_push_rules(self):
+    def test_generic_labels_do_not_imply_release_policy(self):
+        result = execute(labels='["Needs-Review", "documentation"]', pages=[[pr()]],
+                         prLabels=[{'name': 'NEEDS-REVIEW'}])
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(json.loads(result['outputs']['labels']), {'needs-review': True, 'documentation': False})
+
+    def test_prerelease_spellings_are_distinct_label_names(self):
+        names = ['prerelease', 'pre release', 'pre-release']
+        for name in names:
+            with self.subTest(name=name):
+                result = execute(labels=json.dumps(names), pages=[[pr()]], prLabels=[{'name': name.upper()}])
+                self.assertEqual(result['errors'], [])
+                self.assertEqual(json.loads(result['outputs']['labels']), {key: key == name for key in names})
+
+    def test_manual_runs_use_the_same_commit_ownership_rules(self):
         owned = execute(event='workflow_dispatch', pages=[[pr()]])
         self.assertTrue(json.loads(owned['outputs']['labels'])['release'])
-        direct = execute(event='workflow_dispatch', defaults='release')
-        self.assertTrue(json.loads(direct['outputs']['labels'])['release'])
-        unknown = execute(event='workflow_dispatch', pages=[[pr(merge='other')]], defaults='release')
-        self.assertEqual(unknown['errors'], [])
-        self.assertFalse(json.loads(unknown['outputs']['labels'])['release'])
+        for pages in ([], [[pr(merge='other')]]):
+            result = execute(event='workflow_dispatch', pages=pages)
+            self.assertEqual(result['errors'], [])
+            self.assertFalse(json.loads(result['outputs']['labels'])['release'])
 
     def test_manual_feature_and_tag_refs_do_not_borrow_labels_or_disable_explicit_overrides(self):
         for ref, candidate in (('refs/heads/feature', pr(merged=False)), ('refs/tags/v1.0.0', pr())):
-            result = execute(event='workflow_dispatch', ref=ref, pages=[[candidate]], defaults='release')
+            result = execute(event='workflow_dispatch', ref=ref, pages=[[candidate]])
             self.assertEqual(result['errors'], [])
             self.assertEqual(json.loads(result['outputs']['labels']), {'release': False, 'prerelease': False})
             self.assertEqual([call[0] for call in result['calls']], ['paginate'])
 
-    def test_unlabeled_pull_request_payload_does_not_inherit_defaults(self):
-        result = execute(event='pull_request', payloadLabels=[], defaults='release')
-        self.assertEqual(result['errors'], [])
-        self.assertEqual(result['calls'], [])
-        self.assertFalse(json.loads(result['outputs']['labels'])['release'])
-
     def test_pull_request_payload_keeps_label_behavior(self):
         result = execute(event='pull_request')
         self.assertEqual(result['calls'], [])
-        self.assertTrue(json.loads(result['outputs']['labels'])['prerelease'])
+        self.assertEqual(json.loads(result['outputs']['labels']), {'release': False, 'prerelease': True})
+        unlabeled = execute(event='pull_request', payloadLabels=[])
+        self.assertEqual(unlabeled['calls'], [])
+        self.assertEqual(json.loads(unlabeled['outputs']['labels']), {'release': False, 'prerelease': False})
 
     def test_bad_input_fails_without_api_calls(self):
         for labels in ('{', '{}', '[4]', '[""]'):

@@ -36,11 +36,6 @@ on:
         required: false
         default: '-s -w'
         description: "Linker flags"
-      labels-to-check:
-        type: string
-        required: false
-        default: '["release", "prerelease"]'
-        description: "JSON array of PR labels to check"
       prerelease:
         type: boolean
         required: false
@@ -90,7 +85,7 @@ jobs:
         id: check
         uses: photon-hq/buildspace/.github/blocks/check-pr-label@main
         with:
-          labels: ${{ inputs.labels-to-check }}
+          labels: '["release", "prerelease"]'
 
   release-info:
     needs: check-labels
