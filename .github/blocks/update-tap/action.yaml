@@ -183,7 +183,7 @@ runs:
         cat "$FORMULA"
         echo "--- End ---"
 
-    - name: Commit and push
+    - name: Configure git identity
       shell: bash
       working-directory: _homebrew_tap
       env:
@@ -193,12 +193,21 @@ runs:
         git config user.name "$COMMIT_USER_NAME"
         git config user.email "$COMMIT_USER_EMAIL"
 
-        git add Formula/
+    - name: Stage formula changes
+      uses: $/.github/primitives/git-stage
+      with:
+        working-directory: _homebrew_tap
+        paths: '["Formula/"]'
 
-        if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          git commit -m "Update ${{ inputs.formula-name }} to v${{ inputs.version }}"
-          git push
-          echo "Pushed update to tap"
-        fi
+    - name: Commit formula changes
+      id: commit
+      uses: $/.github/primitives/git-commit
+      with:
+        working-directory: _homebrew_tap
+        message: 'Update ${{ inputs.formula-name }} to v${{ inputs.version }}'
+
+    - name: Push formula changes
+      if: steps.commit.outputs.committed == 'true'
+      uses: $/.github/primitives/git-push
+      with:
+        working-directory: _homebrew_tap

@@ -63,32 +63,48 @@ runs:
 
     - name: Pull latest changes
       shell: bash
-      run: git pull --ff-only origin ${{ github.ref_name }}
+      env:
+        BRANCH: ${{ github.ref_name }}
+      run: git pull --ff-only origin "$BRANCH"
 
     - name: Update package.json version
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        VERSION: ${{ inputs.version }}
       run: |
-        VERSION="${{ inputs.version }}"
         echo "Updating package.json to version ${VERSION}..."
         jq --arg ver "$VERSION" '.version = $ver' package.json > package.json.tmp
         mv package.json.tmp package.json
         echo "Updated to version ${VERSION}"
 
-    - name: Commit and push
+    - name: Configure git identity
       shell: bash
       env:
         COMMIT_USER_NAME: ${{ inputs.commit-user-name }}
         COMMIT_USER_EMAIL: ${{ inputs.commit-user-email }}
       run: |
-        VERSION="${{ inputs.version }}"
         git config user.name "$COMMIT_USER_NAME"
         git config user.email "$COMMIT_USER_EMAIL"
-        git add -A
-        if ! git diff --staged --quiet; then
-          git commit -m "chore: bump version to ${VERSION}"
-          git pull --rebase origin ${{ github.ref_name }}
-          git push
-        else
-          echo "No changes to commit"
-        fi
+
+    - name: Stage version changes
+      uses: $/.github/primitives/git-stage
+      with:
+        paths: '["."]'
+
+    - name: Commit version changes
+      id: commit
+      uses: $/.github/primitives/git-commit
+      with:
+        message: 'chore: bump version to ${{ inputs.version }}'
+
+    - name: Rebase the release commit on the latest branch
+      if: steps.commit.outputs.committed == 'true'
+      shell: bash
+      env:
+        BRANCH: ${{ github.ref_name }}
+      run: git pull --rebase origin "$BRANCH"
+
+    - name: Push version changes
+      if: steps.commit.outputs.committed == 'true'
+      uses: $/.github/primitives/git-push

@@ -184,3 +184,60 @@ jobs:
       - name: Verify registry reads through the runner's real npm launcher
         shell: bash
         run: node --test test/primitive-registry.test.mjs
+      - name: Prepare isolated Git worktree and local bare remote
+        shell: bash
+        run: |
+          git clone --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/primitives/git-source"
+          git init --bare "$RUNNER_TEMP/primitives/git-remote"
+          git -C "$RUNNER_TEMP/primitives/git-source" remote add publish "$RUNNER_TEMP/primitives/git-remote"
+      - name: An unchanged index does not need a commit identity
+        id: noop-commit
+        uses: $/.github/primitives/git-commit
+        with:
+          working-directory: ${{ runner.temp }}/primitives/git-source
+          message: This no-op must not create a commit
+      - name: Prepare an unstaged file without changing HEAD
+        shell: bash
+        run: printf '%s\n' fixture > "$RUNNER_TEMP/primitives/git-source/git-primitive-fixture.txt"
+      - name: Stage the selected file independently
+        uses: $/.github/primitives/git-stage
+        with:
+          working-directory: ${{ runner.temp }}/primitives/git-source
+          paths: '["git-primitive-fixture.txt"]'
+      - name: Push an existing commit without staging or committing implicitly
+        uses: $/.github/primitives/git-push
+        with:
+          working-directory: ${{ runner.temp }}/primitives/git-source
+          remote: publish
+          refspec: HEAD:refs/heads/smoke
+      - name: Configure a forced default refspec in the isolated fixture
+        shell: bash
+        run: git -C "$RUNNER_TEMP/primitives/git-source" config remote.publish.push +HEAD:refs/heads/smoke
+      - name: Reject a forced configured publication before invoking push
+        id: forced-push
+        continue-on-error: true
+        uses: $/.github/primitives/git-push
+        with:
+          working-directory: ${{ runner.temp }}/primitives/git-source
+          remote: publish
+      - name: Verify separate Git operations changed only their intended state
+        shell: bash
+        env:
+          NOOP_COMMITTED: ${{ steps.noop-commit.outputs.committed }}
+          NOOP_SHA: ${{ steps.noop-commit.outputs.commit-sha }}
+          FORCED_PUSH_OUTCOME: ${{ steps.forced-push.outcome }}
+          GIT_FIXTURE_ROOT: ${{ runner.temp }}/primitives
+        run: |
+          node --input-type=module <<'EOF'
+          import { execFileSync } from 'node:child_process';
+          import assert from 'node:assert/strict';
+          import { join } from 'node:path';
+          const source = join(process.env.GIT_FIXTURE_ROOT, 'git-source');
+          const remote = join(process.env.GIT_FIXTURE_ROOT, 'git-remote');
+          const git = (directory, ...args) => execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8'}).trim();
+          assert.equal(process.env.NOOP_COMMITTED, 'false');
+          assert.equal(process.env.NOOP_SHA, '');
+          assert.equal(process.env.FORCED_PUSH_OUTCOME, 'failure');
+          assert.equal(git(source, 'diff', '--cached', '--name-only'), 'git-primitive-fixture.txt');
+          assert.equal(git(remote, 'rev-parse', 'refs/heads/smoke'), git(source, 'rev-parse', 'HEAD'));
+          EOF

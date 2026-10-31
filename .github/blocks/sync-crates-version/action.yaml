@@ -104,21 +104,19 @@ runs:
         echo "Updated crates to version ${VERSION}:"
         cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | "  - \(.name): \(.version)"'
 
-    - name: Commit and push changes
+    - name: Stage version changes
       if: inputs.commit-changes == 'true'
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
-      run: |
-        VERSION="${{ inputs.version }}"
-        
-        # Stage all changed files
-        git add -A
-        
-        # Commit and push
-        if ! git diff --staged --quiet; then
-          git commit -m "chore: bump version to ${VERSION}"
-          git push
-        else
-          echo "No changes to commit"
-        fi
+      uses: $/.github/primitives/git-stage
+      with:
+        paths: '["."]'
+
+    - name: Commit version changes
+      id: commit
+      if: inputs.commit-changes == 'true'
+      uses: $/.github/primitives/git-commit
+      with:
+        message: 'chore: bump version to ${{ inputs.version }}'
+
+    - name: Push version changes
+      if: steps.commit.outputs.committed == 'true'
+      uses: $/.github/primitives/git-push

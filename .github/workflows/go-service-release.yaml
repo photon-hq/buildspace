@@ -169,7 +169,7 @@ jobs:
     runs-on: ${{ inputs.use-blacksmith && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-latest' }}
     steps:
       - name: Update Homebrew Tap
-        uses: photon-hq/buildspace/.github/blocks/update-tap@main
+        uses: $/.github/blocks/update-tap
         with:
           commit-user-name: ${{ inputs.commit-user-name }}
           commit-user-email: ${{ inputs.commit-user-email }}

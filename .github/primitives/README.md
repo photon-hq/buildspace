@@ -101,6 +101,42 @@ Requires npm, Bash, and read authentication configured for the registry, if need
 
 Requires Cargo and registry authentication configured by the caller. `working-directory` defaults to `.`, and `package` defaults to `''` for Cargo's default selection. `dry-run` and `allow-dirty` both default to `'false'`. Executes one `cargo publish` attempt without installing Rust, retrying, or sleeping. The compatibility crates.io recipe retains dependency order, its existing retry policy, and index propagation delays.
 
+## Git operations
+
+These actions require Git and an existing worktree. They inherit Git's configured identity, hooks, remotes, and authentication; they do not configure any of them. `working-directory` defaults to `.` for each action. No operation performs the others implicitly.
+
+### `git-stage`
+
+Input `paths` is a required, nonempty JSON array of nonempty Git pathspec strings. Stages additions, modifications, and deletions through `git add --all -- <pathspecs>`. Paths are relative to `working-directory` and are passed as literal arguments, not expanded by a shell. `paths: '["."]'` stages that entire subtree; use narrower pathspecs when only selected files should enter the index. An empty array fails rather than staging the entire repository.
+
+### `git-commit`
+
+Input `message` is required and passed as literal data to `git commit`. Only already staged changes are committed; unstaged and untracked files remain untouched. The action does not select an author or amend existing commits. Normal Git hooks still run.
+
+If the index has changes, outputs `committed: 'true'` and the new `commit-sha`. If it has no changes, succeeds with `committed: 'false'` and an empty `commit-sha`, including in an unborn repository. An index inspection error or failed commit fails the action without reporting success.
+
+### `git-push`
+
+Input `remote` defaults to `origin`. Optional `refspec` supplies one explicit refspec, such as `<commit-sha>:refs/heads/main`; an empty value leaves ref selection to Git's normal configuration. The action adds `--no-force` and rejects both an explicit forced refspec and any forced configured refspec used by default selection. Mirrored remotes and remote groups are rejected, so one invocation cannot silently become a forced mirror or a multi-remote publication. Normal upstream and branch selection remain configured by the caller. The action never retries, fetches, rebases, or changes credentials. A rejected push fails the action.
+
+For example, after the caller configures its repository, identity, and authentication:
+
+```yaml
+- uses: photon-hq/buildspace/.github/primitives/git-stage@<buildspace-commit-sha>
+  with:
+    paths: '["package.json"]'
+- id: change
+  uses: photon-hq/buildspace/.github/primitives/git-commit@<buildspace-commit-sha>
+  with:
+    message: 'chore: update package metadata'
+- if: steps.change.outputs.committed == 'true'
+  uses: photon-hq/buildspace/.github/primitives/git-push@<buildspace-commit-sha>
+  with:
+    refspec: ${{ steps.change.outputs.commit-sha }}:refs/heads/main
+```
+
+Use the same full SHA for all three actions. The explicit push uses the created commit even if a later step changes the worktree's branch. If the composition rebases the commit first, push the resulting `HEAD` instead of the pre-rebase SHA. Gate rebase and push on `committed` to keep no-op runs free of those side effects.
+
 ## Composition boundaries
 
 The existing build and publication blocks are recipes, not promises of atomic behavior. They keep their inputs and output names for current callers while composing these operations:
@@ -112,7 +148,8 @@ The existing build and publication blocks are recipes, not promises of atomic be
 - Single-package registry recipes retain setup, install/build order, registry scope policy, and OIDC/token selection. They compose package identity, publication, and visibility reads.
 - Monorepo registry recipes call the same internal operations for each package. They build, publish, and verify a dependency before proceeding to its dependent. A root build still suppresses per-package builds. npm monorepo publication now verifies each exact version and rejects swallowed npm errors, matching the single-package path.
 - The crates.io recipe retains ordered publications and retries around the single-attempt `cargo-publish` operation.
+- The npm, Cargo, monorepo, and Homebrew version-update recipes stage, commit, and push as separate operations. Existing identity and credential setup remain in the recipes. Only npm and monorepo retain their existing post-commit rebase policy. No-op commits skip rebase and push; `commit-changes: 'false'` still suppresses all three writes in the Cargo recipe. Homebrew operations stay in its own checkout and keep its configured branch selection.
 
 The existing `package-stage`, `package-promote`, `swift-stage`, `swift-promote`, and image workflows retain their stronger artifact, attestation, and approval checks. Do not replace a verified promotion with a raw publishing primitive. Use custom compositions only when the caller owns those checks and credential boundaries.
 
-`primitives-smoke.yml` runs real Rust/Go builds and npm dry runs on Linux, macOS, and Windows, plus a macOS Swift-to-installer composition. A local registry fixture verifies reads through each runner's real npm launcher without external registry access. The offline tests exercise command arguments, output contracts, dependency order, and publisher failure behavior without registry writes.
+`primitives-smoke.yml` runs real Rust/Go builds, npm dry runs, and isolated Git stage/no-op-commit/local-push compositions on Linux, macOS, and Windows, plus a macOS Swift-to-installer composition. A local registry fixture verifies reads through each runner's real npm launcher without external registry access. The offline tests exercise command arguments, output contracts, dependency order, and publisher failure behavior without registry writes.

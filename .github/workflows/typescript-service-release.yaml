@@ -201,7 +201,7 @@ jobs:
           persist-credentials: false
 
       - name: Bump Version
-        uses: photon-hq/buildspace/.github/blocks/bump-npm-version@main
+        uses: $/.github/blocks/bump-npm-version
         with:
           commit-user-name: ${{ inputs.commit-user-name }}
           commit-user-email: ${{ inputs.commit-user-email }}

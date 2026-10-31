@@ -1,0 +1,17 @@
+name: Commit Git index
+description: Commit an already staged index without staging files, choosing an identity, rebasing, or pushing
+inputs:
+  message:
+    description: Commit message, passed as literal data
+    required: true
+  working-directory:
+    description: Directory in the Git worktree
+    default: '.'
+outputs:
+  committed:
+    description: Whether this action created a commit, true or false
+  commit-sha:
+    description: New commit SHA; empty when the index has no changes
+runs:
+  using: node24
+  main: index.mjs

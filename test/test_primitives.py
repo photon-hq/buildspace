@@ -17,6 +17,10 @@ CONTRACTS = {
     'publish-github-package': (('bun-version', 'node-version', 'working-directory', 'build-command', 'tag', 'dry-run', 'publish-command', 'github-token'), ()),
     'publish-github-packages': (('changed-packages', 'bun-version', 'node-version', 'tag', 'build-command', 'root-build-command', 'dry-run', 'github-token'), ()),
     'publish-crates': (('crates', 'dry-run', 'cargo-registry-token'), ()),
+    'bump-npm-version': (('version', 'working-directory', 'github-token', 'app-id', 'app-private-key', 'commit-user-name', 'commit-user-email'), ()),
+    'sync-crates-version': (('version', 'commit-changes', 'github-token', 'app-id', 'app-private-key', 'commit-user-name', 'commit-user-email'), ('updated-crates',)),
+    'bump-monorepo-versions': (('changed-packages', 'service-name', 'prerelease', 'openai-api-key', 'github-token', 'app-id', 'app-private-key', 'commit-user-name', 'commit-user-email'), ('versions', 'release-notes')),
+    'update-tap': (('formula-name', 'version', 'tap-repo', 'app-id', 'app-private-key', 'commit-user-name', 'commit-user-email'), ()),
 }
 
 
@@ -37,7 +41,7 @@ class PrimitiveContracts(unittest.TestCase):
 
     def test_each_primitive_has_one_native_entrypoint_and_documented_data_contracts(self):
         directories = sorted(path for path in (ROOT / '.github/primitives').iterdir() if path.is_dir())
-        self.assertEqual(len(directories), 9)
+        self.assertEqual(len(directories), 12)
         for directory in directories:
             with self.subTest(primitive=directory.name):
                 primitive = action(directory)
@@ -139,6 +143,34 @@ class PrimitiveContracts(unittest.TestCase):
         verify = next(step for step in steps if step.get('name') == 'Verify publish landed on registry')
         self.assertEqual(verify['env'], {'NODE_AUTH_TOKEN': ''})
         self.assertEqual(verify['with']['registry'], 'https://registry.npmjs.org')
+
+    def test_git_recipes_keep_rebase_and_publication_policy_outside_the_primitives(self):
+        for name in ('bump-npm-version', 'bump-monorepo-versions', 'sync-crates-version', 'update-tap'):
+            with self.subTest(recipe=name):
+                steps = action(ROOT / '.github/blocks' / name)['runs']['steps']
+                stage = next(step for step in steps if step.get('uses') == '$/.github/primitives/git-stage')
+                commit = next(step for step in steps if step.get('uses') == '$/.github/primitives/git-commit')
+                push = next(step for step in steps if step.get('uses') == '$/.github/primitives/git-push')
+                self.assertLess(steps.index(stage), steps.index(commit))
+                self.assertLess(steps.index(commit), steps.index(push))
+                self.assertEqual(commit['id'], 'commit')
+                self.assertEqual(push['if'], "steps.commit.outputs.committed == 'true'")
+                self.assertNotIn('refspec', push.get('with', {}))
+                rebase = [step for step in steps if 'git pull --rebase' in step.get('run', '')]
+                if name in ('bump-npm-version', 'bump-monorepo-versions'):
+                    self.assertEqual(len(rebase), 1)
+                    self.assertEqual(rebase[0]['if'], push['if'])
+                    self.assertLess(steps.index(commit), steps.index(rebase[0]))
+                    self.assertLess(steps.index(rebase[0]), steps.index(push))
+                else:
+                    self.assertEqual(rebase, [])
+                if name == 'sync-crates-version':
+                    for step in (stage, commit):
+                        self.assertEqual(step['if'], "inputs.commit-changes == 'true'")
+                if name == 'update-tap':
+                    self.assertEqual(stage['with']['paths'], '["Formula/"]')
+                    for step in (stage, commit, push):
+                        self.assertEqual(step['with']['working-directory'], '_homebrew_tap')
 
 
 if __name__ == '__main__':

@@ -148,7 +148,7 @@ jobs:
 
       - name: Bump Monorepo Versions
         id: bump
-        uses: photon-hq/buildspace/.github/blocks/bump-monorepo-versions@main
+        uses: $/.github/blocks/bump-monorepo-versions
         with:
           commit-user-name: ${{ inputs.commit-user-name }}
           commit-user-email: ${{ inputs.commit-user-email }}
