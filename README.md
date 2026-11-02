@@ -990,6 +990,9 @@ jobs:
   `private-deps`. The reviewer's summary lists each release it checked: the
   pinned version from `Package.resolved`, or the lowest version
   `Package.swift` requires, which SwiftPM may resolve higher.
+- **CI.** `ci-workflow` is awaited in its own job beside the build, so the
+  macOS runner never idles; only publication waits for it, and a failed or
+  missing CI run leaves the build unpublished.
 - **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
   manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves

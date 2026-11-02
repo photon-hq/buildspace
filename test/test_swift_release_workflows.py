@@ -61,7 +61,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
-        self.assertEqual(publish['needs'], ['version', 'build'])
+        self.assertEqual(publish['needs'], ['version', 'build', 'ci'])
         self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
         self.assertEqual(publish['permissions'], {'contents': 'write', 'attestations': 'write', 'id-token': 'write'})
         names = [s.get('name') for s in publish['steps']]
@@ -69,6 +69,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertLess(names.index(attest['name']), names.index('Publish the staging build and attach its candidate'))
         self.assertEqual(attest['if'], '${{ !inputs.library }}')
         self.assertEqual(publish['concurrency']['cancel-in-progress'], 'false')
+
+    def test_ci_is_awaited_beside_the_build_and_gates_only_publication(self):
+        ci = STAGE['jobs']['ci']
+        self.assertEqual(ci['if'], STAGE['jobs']['publish']['if'])
+        self.assertEqual(ci['needs'], STAGE['jobs']['build']['needs'])
+        self.assertEqual(ci['runs-on'], 'ubuntu-24.04')
+        self.assertEqual(ci['permissions'], {'contents': 'read', 'actions': 'read'})
+        wait = step(ci, 'Require CI to pass on this exact commit')
+        self.assertEqual(wait['if'], "inputs.ci-workflow != ''")
+        self.assertIn('wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"', wait['run'])
+        self.assertEqual(step(ci, "Fetch the release tools of this workflow's commit")['if'], "inputs.ci-workflow != ''")
+        self.assertNotIn('wait-ci', yaml.dump(STAGE['jobs']['build']))
 
     def test_promotion_resolves_read_only_and_releases_behind_the_environment(self):
         resolve = PROMOTE['jobs']['resolve']

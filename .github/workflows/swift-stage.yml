@@ -140,12 +140,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Require CI to pass on this exact commit
-        if: inputs.ci-workflow != '' && !inputs.dry-run
-        env:
-          CI_WORKFLOW: ${{ inputs.ci-workflow }}
-          CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
-        run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
       - name: Read the Swift version the package pins
         id: swift-version
         if: ${{ !inputs.library }}
@@ -238,9 +232,43 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Never runs the caller's code: waits for the caller's CI on this exact commit
+  # beside the build, so only publication waits for it and the macOS runner
+  # never idles. A failed or missing CI run fails this job, and publish with it.
+  ci:
+    needs: version
+    if: github.ref == 'refs/heads/main' && !inputs.dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch the release tools of this workflow's commit
+        if: inputs.ci-workflow != ''
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
+          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - name: Require CI to pass on this exact commit
+        if: inputs.ci-workflow != ''
+        env:
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
+        run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
+
   # Never runs the caller's code: attests the build job's files and publishes them.
   publish:
-    needs: [version, build]
+    needs: [version, build, ci]
     if: github.ref == 'refs/heads/main' && !inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 20
