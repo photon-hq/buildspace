@@ -128,6 +128,19 @@ if (process.argv.includes('--show-bin-path')) console.log(process.env.TEST_ROOT 
   assert.equal(outputs(f.env.GITHUB_OUTPUT)["binary-path"], join(f.root, ".build/platform/release/worker"));
 });
 
+test("Swift build flags are passed as separate arguments without a shell", (t) => {
+  const f = fixture(t);
+  f.stub("swift", `${f.record}
+if (process.argv.includes('--show-bin-path')) console.log(process.env.TEST_ROOT + '/.build/platform/release');`);
+  const result = f.action("swift-build", { product: "worker", "build-flags": " -Xswiftc -Onone\n$(touch pwned) " });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(f.commands().map((call) => call.args), [
+    ["build", "-c", "release", "--product", "worker", "-Xswiftc", "-Onone", "$(touch", "pwned)"],
+    ["build", "-c", "release", "-Xswiftc", "-Onone", "$(touch", "pwned)", "--show-bin-path"],
+  ]);
+  assert.equal(existsSync(join(f.root, "pwned")), false);
+});
+
 test("pkgbuild consumes an existing payload without compiling or signing", (t) => {
   const f = fixture(t);
   f.stub("pkgbuild", f.record);

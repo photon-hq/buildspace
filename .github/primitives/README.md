@@ -46,7 +46,7 @@ Output `binary-path` is absolute. `build-flags` is executable caller configurati
 
 ### `swift-build`
 
-Requires Swift and any dependency authentication already configured by the caller. Input `product` is required; `working-directory` defaults to `.`. Compiles only that executable product in release mode and asks Swift for its output directory. Output `binary-path` is absolute. Signing, environment files, caching, resource collection, and staging remain separate steps.
+Requires Swift and any dependency authentication already configured by the caller. Input `product` is required; `working-directory` defaults to `.`. Optional `build-flags` are split on whitespace and appended as separate `swift build` arguments, never through a shell. Compiles only that executable product in release mode and asks Swift for its output directory. Output `binary-path` is absolute. Signing, environment files, caching, resource collection, and staging remain separate steps.
 
 ## File and installer operations
 

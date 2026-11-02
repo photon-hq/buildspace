@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = {
     'rust-build': (('binary-name', 'binary-path', 'target', 'build-env'), ('artifact-name', 'artifact-path')),
     'go-build': (('binary-name', 'go-version', 'goos', 'goarch', 'build-flags', 'ldflags'), ('artifact-name', 'artifact-path')),
-    'swift-build': (('binary-name', 'compile-env', 'use-cache', 'resource-bundles', 'entitlements', 'github-token'), ('binary-path', 'resource-bundles-path')),
+    'swift-build': (('binary-name', 'compile-env', 'use-cache', 'resource-bundles', 'entitlements', 'github-token', 'build-flags'), ('binary-path', 'resource-bundles-path')),
     'swift-pkg': (('swift-binary-path', 'identifier', 'version', 'package-name', 'developer-id-installer-name', 'allow-unsigned', 'scripts-path', 'payload-path', 'resource-bundles-path'), ()),
     'build-makefile-dylib': (('output-name', 'version'), ()),
     'publish-npm': (('bun-version', 'node-version', 'working-directory', 'build-command', 'tag', 'dry-run', 'publish-command', 'npm-token'), ()),
