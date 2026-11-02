@@ -972,8 +972,11 @@ jobs:
   secrets) when a dependency is one of the owner's private repositories.
 - **Toolchain.** The build installs the Swift toolchain that the package's
   committed `.swift-version` names, or the latest Swift release when it has
-  none. swiftly rewrites `.swift-version` when it selects a toolchain, so the
-  build restores the committed file before building.
+  none. When the runner image already provides the pinned version, nothing is
+  installed, which saves the minute an install takes: pin the image's Swift to
+  opt in. swiftly rewrites `.swift-version` when it selects a toolchain, so the
+  build restores the committed file before building. Swift PR and release
+  builds follow the same rule.
 - **Dependencies.** Production depends only on production. Promotion reads the
   source commit's `Package.resolved` and `Package.swift` from GitHub, never
   running them, and checks every dependency fetched from one of the owner's
@@ -1191,6 +1194,8 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 | `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
 | `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS Swift/package build stays on `macos-26` |
+
+The build installs the latest Swift release, or the version a committed `.swift-version` names; when the runner image already provides that version, nothing is installed.
 
 #### Secrets
 
