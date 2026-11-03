@@ -7,6 +7,9 @@ inputs:
   working-directory:
     description: Swift package directory
     default: '.'
+  build-flags:
+    description: Extra swift build arguments, split on whitespace and never run through a shell (e.g. -Xswiftc -Onone)
+    default: ''
 outputs:
   binary-path:
     description: Absolute path to the executable, before signing or staging

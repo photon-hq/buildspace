@@ -25,6 +25,10 @@ inputs:
     description: "Token with read access to private/internal SPM dependencies. When set, git is configured to use it for github.com clones (so SwiftPM can fetch private deps)."
     required: false
     default: ""
+  build-flags:
+    description: "Extra swift build arguments, split on whitespace (e.g. '-Xswiftc -Onone' to skip optimisation while still compiling non-DEBUG code)"
+    required: false
+    default: ""
 
 outputs:
   binary-path:
@@ -93,6 +97,7 @@ runs:
       uses: $/.github/primitives/swift-build
       with:
         product: ${{ inputs.binary-name }}
+        build-flags: ${{ inputs.build-flags }}
     - name: Sign Swift binary
       if: inputs.entitlements != ''
       shell: bash

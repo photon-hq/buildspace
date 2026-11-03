@@ -34,6 +34,11 @@ on:
         required: false
         default: false
         description: "Mint an app token (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone private/internal org dependencies."
+      build-flags:
+        type: string
+        required: false
+        default: ""
+        description: "Extra swift build arguments for the PR build only, split on whitespace. '-Xswiftc -Onone' skips optimisation but, unlike a debug build, still compiles code under #if !DEBUG."
       use-blacksmith:
         type: boolean
         required: false
@@ -102,6 +107,7 @@ jobs:
             BUILD_ENVIRONMENT=development
             ${{ secrets.SECRET_ENV_VARS }}
           resource-bundles: ${{ inputs.resource-bundles }}
+          build-flags: ${{ inputs.build-flags }}
 
       - name: Swift Package
         uses: $/.github/blocks/swift-pkg
