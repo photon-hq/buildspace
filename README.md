@@ -974,7 +974,8 @@ jobs:
   committed `.swift-version` names, or the latest Swift release when it has
   none. When the runner image already provides the pinned version, nothing is
   installed, which saves the minute an install takes: pin the image's Swift to
-  opt in. swiftly rewrites `.swift-version` when it selects a toolchain, so the
+  opt in. When the pin and the image's Swift differ, the run shows a notice
+  that names both versions. swiftly rewrites `.swift-version` when it selects a toolchain, so the
   build restores the committed file before building. Swift PR and release
   builds follow the same rule.
 - **Dependencies.** Production depends only on production. Promotion reads the

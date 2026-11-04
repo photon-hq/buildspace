@@ -51,7 +51,11 @@ runs:
         if [[ -f .swift-version ]]; then
           version="$(tr -d '[:space:]' < .swift-version)"
           [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || { echo "::error::.swift-version does not name a Swift toolchain" >&2; exit 1; }
-          if [[ "$version" == "$installed" ]]; then version=; fi
+          if [[ "$version" == "$installed" ]]; then
+            version=
+          elif [[ -n "$installed" ]]; then
+            echo "::notice::.swift-version pins Swift $version. The runner image has Swift $installed, so the job installs $version. To skip the install, set .swift-version to $installed."
+          fi
         fi
         echo "Runner Swift ${installed:-unknown}; installing ${version:-nothing}"
         echo "value=$version" >> "$GITHUB_OUTPUT"
