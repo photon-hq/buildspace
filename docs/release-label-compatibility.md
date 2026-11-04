@@ -135,13 +135,18 @@ authorization. They remain intact.
 4. Validate the replacement's dry run, first staged build, stored-candidate
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.
-   Only then remove the caller's obsolete labels if no independent rule uses
-   them.
-5. Recheck every wrapper and direct checker consumer before removing shared
+   Keep unverified publication and approval steps explicit in the rollout record.
+5. Remove obsolete release labels from migration PRs. Delete repository label
+   definitions after the default branch no longer reads them, legacy publishing
+   runs have finished, and no independent automation uses them. Check external
+   label producers too, so a bot does not add them back. Deleting unused labels
+   does not require a production promotion. Retain legacy secrets separately,
+   only while an active consumer or documented rollback needs them.
+6. Recheck every wrapper and direct checker consumer before removing shared
    compatibility code. A historical wrapper SHA is not sufficient isolation:
    all eight wrappers reference `check-pr-label@main`, and their other blocks
    also commonly use `@main`. Third-party consumers need compatibility review.
-6. Retire a wrapper's checker job, label outputs, `needs` edges, conditions,
+7. Retire a wrapper's checker job, label outputs, `needs` edges, conditions,
    mode selection, docs, and tests together. Preserve unrelated success,
    no-change, registry opt-in, source-integrity, reviewer, and Jamf-ordering
    checks. The generic checker can remain a composable utility after release
