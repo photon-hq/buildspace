@@ -749,6 +749,22 @@ test("a branch merged into main without a pull request waits for its merge commi
   assert.match(error.message, new RegExp(`- ${SHA.slice(0, 12)} Merge branch 'side': on staging 50m, minimum 1h\n`));
 });
 
+test("a labelled pull request merged with a merge commit waits for the merge commit's build", async () => {
+  const SIDE = sha("3");
+  const pull = { number: 97, title: "fix: risky side work", labels: ["min-staging-age:3h"] };
+  // The side commit sits before a main commit staged early that doesn't carry it, so its own row starts too early.
+  const { fake } = await soaking({
+    commits: [
+      { sha: SIDE, pull },
+      { sha: C1, pull: { number: 95, title: "fix: drain the queue" } },
+      { sha: SHA, pull },
+    ],
+  });
+  // At minute 200 the side commit's early row has its 3h; the merge commit's build has had only 2h 30m.
+  const error = await soakWith(fake, 200).catch((caught) => caught);
+  assert.match(error.message, /\n- #97 fix: risky side work: on staging 2h 30m, minimum 3h \(PR label\)\n/);
+});
+
 test("a reason gets past anything that would stop the check", async (t) => {
   await t.test("a latest release with nothing to measure from", async () => {
     const { fake } = await soaking({ published: { "v1.26.0": undefined } });

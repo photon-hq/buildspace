@@ -1005,7 +1005,9 @@ jobs:
   latest `vX.Y.Z` count, because publishing it sends GitGate's staging Macs
   back to it until the next main push. A pull request labelled
   `min-staging-age:<age>` holds its change for that age when it is longer;
-  labels never shorten the wait. The reviewer's summary lists each change,
+  labels never shorten the wait. Labels are read when `resolve` runs, so a
+  label added while the promotion waits for approval doesn't count. The
+  reviewer's summary lists each change,
   its time on staging and its minimum. Reading the labels takes
   `pull-requests: read` on the promote job. An empty `minimum-staging-age`
   means the default. `skip-minimum-age-reason` skips the check, for a hotfix;
