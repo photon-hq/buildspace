@@ -89,13 +89,15 @@ runs:
       shell: bash
       env:
         RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
+        # SwiftPM writes resource bundles next to the binary. build-flags can move that directory.
+        BINARY: ${{ steps.build.outputs.binary-path }}
       run: |
         BUNDLES_PATH=""
         if [ -n "$RESOURCE_BUNDLES" ]; then
           BUNDLES_PATH="${RUNNER_TEMP}/resource-bundles"
           mkdir -p "$BUNDLES_PATH"
           for BUNDLE in $RESOURCE_BUNDLES; do
-            SRC=".build/release/${BUNDLE}"
+            SRC="$(dirname "$BINARY")/${BUNDLE}"
             if [ -d "$SRC" ]; then
               cp -R "$SRC" "$BUNDLES_PATH/"
               echo "Collected resource bundle: ${BUNDLE}"

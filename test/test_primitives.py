@@ -1,5 +1,8 @@
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 import yaml
@@ -139,6 +142,29 @@ class PrimitiveContracts(unittest.TestCase):
         ):
             setup_index = next(i for i, reference in enumerate(references) if reference.startswith(setup))
             self.assertLess(setup_index, references.index(primitive))
+
+    def test_swift_resource_bundles_come_from_the_directory_of_the_built_binary(self):
+        # build-flags such as -c debug move the binary out of .build/release; the bundles are next to it.
+        steps = action(ROOT / '.github/blocks/swift-build')['runs']['steps']
+        collect = next(step for step in steps if step.get('id') == 'bundles')
+        self.assertEqual(collect['env']['BINARY'], '${{ steps.build.outputs.binary-path }}')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            built = root / 'package/.build/arm64-apple-macosx/debug'
+            (built / 'Tool_Tool.bundle').mkdir(parents=True)
+            (built / 'Tool_Tool.bundle/data').write_text('debug')
+            (root / 'package/.build/release/Tool_Tool.bundle').mkdir(parents=True)
+            (root / 'runner').mkdir()
+            outputs = root / 'outputs'
+            env = {**os.environ, 'RUNNER_TEMP': str(root / 'runner'), 'GITHUB_OUTPUT': str(outputs), 'BINARY': str(built / 'Tool')}
+            run = lambda bundles: subprocess.run(['bash', '-c', collect['run']], cwd=root / 'package', env={**env, 'RESOURCE_BUNDLES': bundles}, capture_output=True, text=True)
+            result = run('Tool_Tool.bundle')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / 'runner/resource-bundles/Tool_Tool.bundle/data').read_text(), 'debug')
+            self.assertEqual(outputs.read_text(), f"resource-bundles-path={root / 'runner/resource-bundles'}\n")
+            result = run('Missing.bundle')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f'::error::Resource bundle not found: {built}/Missing.bundle', result.stdout)
 
     def test_public_npm_verification_does_not_inherit_a_placeholder_or_unused_token(self):
         steps = action(ROOT / '.github/blocks/publish-npm')['runs']['steps']
