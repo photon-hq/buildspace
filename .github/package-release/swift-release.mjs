@@ -17,6 +17,7 @@ const AGE = /^(0|[1-9]\d*)([mhd])$/;
 const AGE_LABEL = /^min-staging-age:(.+)$/;
 const AGE_UNIT = { m: 60_000, h: 3_600_000, d: 86_400_000 };
 const OVERRIDE = "staging-age-override.json";
+const DEFAULT_MINIMUM_AGE = "2h";
 
 /**
  * GitGate and the Astrolabe self-updater install the first asset ending in
@@ -133,13 +134,7 @@ export function releaseNotes(manifest, channel, override = null) {
       lines.push(`| \`${packageFile(manifest.package)}\`${label} | \`${version}\` | \`${digest}\` |`);
     }
   }
-  if (override)
-    lines.push(
-      "",
-      override.unchecked === undefined
-        ? `Promoted before the minimum time on staging. Reason: ${override.reason}`
-        : `Promoted without a check of the time on staging (${override.unchecked.replace(/\.$/, "")}). Reason: ${override.reason}`
-    );
+  if (override) lines.push("", `Promoted without a check of the time on staging. Reason: ${override.reason}`);
   lines.push("", ...bumpNotes(manifest.bump, manifest.repository));
   return `${lines.join("\n")}\n`;
 }
@@ -353,7 +348,6 @@ export async function resolveCandidate({
   run = exec,
   dependencyRun = run,
 }) {
-  const minimum = minimumAge === undefined || minimumAge === "" ? undefined : parseAge(minimumAge);
   const reason = skipMinimumAge.trim();
   requireReviewers({ repository, environment, approvedBy, run });
   const tags = releaseTags(run, repository);
@@ -412,25 +406,25 @@ export async function resolveCandidate({
   // A library runs on no staging Mac; the packages that pin it wait instead.
   // A build re-released after a rollback is measured from the release before it.
   const previous = latestReleaseTag(tags.filter((name) => name !== manifest.productionTag), "v");
-  // Whatever stops the check, a reason still lets a hotfix through.
+  // An unset minimum (only callers of this function can leave it unset) skips the
+  // check; an empty one, as the workflow passes it, means the default.
+  if (minimumAge === undefined || library) return { manifest, pending: true, dependencies, overridden: false };
+  // A reason skips the check outright, so nothing in it can hold up a hotfix.
+  if (reason) {
+    await writeFile(join(output, OVERRIDE), `${JSON.stringify({ reason }, null, 2)}\n`);
+    return { manifest, pending: true, dependencies, overridden: true };
+  }
   const skip = "To promote now, set skip-minimum-age-reason.";
   let soak;
-  let unchecked;
-  if (minimum !== undefined && !library) {
-    try {
-      soak = stagingSoak({ repository, sourceSha: manifest.sourceSha, latest: previous, minimum, now, run });
-    } catch (error) {
-      if (!reason) throw Object.assign(new Error(`${tag}: cannot check the time on staging. ${error.message}\n${skip}`), { unchecked: error.message });
-      unchecked = error.message;
-    }
+  try {
+    const minimum = parseAge(minimumAge || DEFAULT_MINIMUM_AGE);
+    soak = stagingSoak({ repository, sourceSha: manifest.sourceSha, latest: previous, minimum, now, run });
+  } catch (error) {
+    throw Object.assign(new Error(`${tag}: cannot check the time on staging. ${error.message}\n${skip}`), { unchecked: error.message });
   }
-  const overridden = Boolean(soak?.waiting.length) || unchecked !== undefined;
-  if (overridden) {
-    if (!reason) throw Object.assign(new Error(`${tag}: some changes were on staging for less than the minimum time:\n${soak.waiting.map((change) => `- ${changeLine(change)}`).join("\n")}\n${skip}`), { soak });
-    const waiting = (soak?.waiting ?? []).map(({ sha, pull }) => ({ sha, pull: pull?.number ?? null }));
-    await writeFile(join(output, OVERRIDE), `${JSON.stringify({ reason, waiting, ...(unchecked !== undefined && { unchecked }) }, null, 2)}\n`);
-  }
-  return { manifest, pending: true, dependencies, soak, overridden, unchecked };
+  if (soak.waiting.length)
+    throw Object.assign(new Error(`${tag}: some changes were on staging for less than the minimum time:\n${soak.waiting.map((change) => `- ${changeLine(change)}`).join("\n")}\n${skip}`), { soak });
+  return { manifest, pending: true, dependencies, soak, overridden: false };
 }
 
 /** A duration such as 30m, 2h or 1d, in milliseconds. */
@@ -664,9 +658,9 @@ async function main() {
           ? [
               `### Promote \`${manifest.stagingTag}\` to production`,
               "",
-              releaseNotes(manifest, "production", resolved.overridden ? { reason, unchecked: resolved.unchecked } : null),
+              releaseNotes(manifest, "production", resolved.overridden ? { reason } : null),
               ...released,
-              // The release notes above already give a skip reason and what stopped the check.
+              // With a skip reason there is no table; the release notes above give the reason.
               ...(soak ? soakSummary(soak) : []),
               "Approve the deployment to release this exact build.",
             ].join("\n")

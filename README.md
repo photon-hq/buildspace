@@ -945,7 +945,7 @@ on:
         description: Staging build to promote; blank promotes the newest
         default: ''
       skip-minimum-age-reason:
-        description: Hotfix only; promote before the minimum staging age and say why
+        description: Hotfix only; skip the staging age check and say why
         default: ''
 jobs:
   promote:
@@ -1007,9 +1007,10 @@ jobs:
   `min-staging-age:<age>` holds its change for that age when it is longer;
   labels never shorten the wait. The reviewer's summary lists each change,
   its time on staging and its minimum. Reading the labels takes
-  `pull-requests: read` on the promote job. `skip-minimum-age-reason` lets a
-  hotfix through whatever stops the check; the build still needs approval and
-  the release notes keep the reason. A library, which no staging Mac runs, is
+  `pull-requests: read` on the promote job. An empty `minimum-staging-age`
+  means the default. `skip-minimum-age-reason` skips the check, for a hotfix;
+  the build still needs approval and the release notes keep the reason. A
+  library, which no staging Mac runs, is
   exempt; the packages that pin it wait instead.
 - **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the

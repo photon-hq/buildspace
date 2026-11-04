@@ -16,11 +16,11 @@ on:
         default: ''
         type: string
       minimum-staging-age:
-        description: How long every change the build carries must have run on staging, such as 30m, 2h or 1d; a pull request's min-staging-age:<age> label can only lengthen it, and a library is exempt
+        description: How long every change the build carries must be on staging, such as 30m, 2h or 1d; empty means 2h; a pull request's min-staging-age:<age> label can only lengthen it, and a library is exempt
         default: 2h
         type: string
       skip-minimum-age-reason:
-        description: Promote before the minimum staging age, for a hotfix; the reason is shown to the reviewers and kept in the release notes
+        description: Skip the staging age check, for a hotfix; the release notes keep the reason
         default: ''
         type: string
       environment:

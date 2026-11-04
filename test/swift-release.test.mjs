@@ -55,7 +55,7 @@ const MANIFEST_ONLY = '// swift-tools-version: 6.2\nimport PackageDescription\n\
  * and when each release was published.
  */
 function world({ tags = {}, releases = {}, environment = ["octocat"], attested = true, onMain = true, files = { "Package.swift": MANIFEST_ONLY }, repos = {}, soak = {} } = {}) {
-  const { commits = [], published = {}, forbidden = "" } = soak;
+  const { commits = [], published = {}, forbidden = "", drafts = [], stable = [] } = soak;
   const calls = [];
   const state = { tags, releases };
   const fail = (message) => Object.assign(new Error(message), { stderr: message });
@@ -97,10 +97,11 @@ function world({ tags = {}, releases = {}, environment = ["octocat"], attested =
         return "";
       }
       if (/\/compare\/[a-f0-9]{40}\.\.\.main$/.test(path)) return JSON.stringify({ status: onMain ? "ahead" : "diverged" });
-      const range = /\/compare\/[a-f0-9]{40}\.\.\.([a-f0-9]{40})\?per_page=100&page=(\d+)$/.exec(path);
+      const range = /\/compare\/([a-f0-9]{40})\.\.\.([a-f0-9]{40})\?per_page=100&page=(\d+)$/.exec(path);
       if (range) {
-        const carried = commits.slice(0, commits.findIndex(({ sha }) => sha === range[1]) + 1);
-        const page = carried.slice((Number(range[2]) - 1) * 100, Number(range[2]) * 100);
+        // The commits after the base (all of them for a base before the list) up to the head.
+        const carried = commits.slice(commits.findIndex(({ sha }) => sha === range[1]) + 1, commits.findIndex(({ sha }) => sha === range[2]) + 1);
+        const page = carried.slice((Number(range[3]) - 1) * 100, Number(range[3]) * 100);
         return JSON.stringify({ total_commits: carried.length, commits: page.map(({ sha, message = "" }) => ({ sha, commit: { message } })) });
       }
       const single = /\/commits\/([a-f0-9]{40})$/.exec(path);
@@ -119,8 +120,8 @@ function world({ tags = {}, releases = {}, environment = ["octocat"], attested =
       const released = /\/releases\/tags\/(.+)$/.exec(path)?.[1];
       if (released) {
         if (!state.releases[released] && !(released in published)) throw missing();
-        const prerelease = state.releases[released]?.prerelease ?? released.includes("-");
-        return JSON.stringify({ tag_name: released, draft: false, prerelease, published_at: published[released] ?? null });
+        const prerelease = !stable.includes(released) && (state.releases[released]?.prerelease ?? released.includes("-"));
+        return JSON.stringify({ tag_name: released, draft: drafts.includes(released), prerelease, published_at: published[released] ?? null });
       }
     }
     if (command === "gh" && first === "release") {
@@ -580,25 +581,30 @@ test("a change's clock starts with the first staging release that carries it", a
   });
 });
 
-test("a reason promotes before the minimum age, and the release notes keep it", async () => {
+const SKIP_NOTE = "Promoted without a check of the time on staging.";
+/** The GitHub reads only the staging age check makes. */
+const soakReads = (calls) => calls.filter((call) => call.some((arg) => /\/pulls$|\?per_page=100&page=|\/releases\/tags\//.test(arg)));
+
+test("a reason skips the check without reading GitHub for it, and the release notes keep the reason", async () => {
   const { fake } = await soaking();
   const reason = "hotfix for a crash";
-  const { pending, overridden } = await soakWith(fake, 60, { skipMinimumAge: `  ${reason}  ` });
+  const { pending, overridden, soak } = await soakWith(fake, 60, { skipMinimumAge: `  ${reason}  ` });
   assert.equal(pending, true);
   assert.equal(overridden, true);
-  const override = JSON.parse(readFileSync(join(root, "candidate", "staging-age-override.json"), "utf8"));
-  assert.deepEqual(override, { reason, waiting: [{ sha: SHA, pull: 96 }] });
+  assert.equal(soak, undefined);
+  assert.deepEqual(soakReads(fake.calls), []);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, "candidate", "staging-age-override.json"), "utf8")), { reason });
   await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined });
-  assert.ok(fake.state.releases["v1.27.0"].notes.includes(`Promoted before the minimum time on staging. Reason: ${reason}`));
+  const notes = fake.state.releases["v1.27.0"].notes;
+  assert.equal(notes.split(`${SKIP_NOTE} Reason: ${reason}`).length, 2);
 });
 
-test("a reason given when nothing waits records no override", async () => {
+test("without a reason, the release notes say nothing about a skip", async () => {
   const { fake } = await soaking();
-  const { overridden } = await soakWith(fake, 200, { skipMinimumAge: "just in case" });
-  assert.equal(overridden, false);
+  assert.equal((await soakWith(fake, 200)).overridden, false);
   assert.throws(() => readFileSync(join(root, "candidate", "staging-age-override.json")), { code: "ENOENT" });
   await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined });
-  assert.ok(!fake.state.releases["v1.27.0"].notes.includes("minimum staging age"));
+  assert.ok(!fake.state.releases["v1.27.0"].notes.includes(SKIP_NOTE));
 });
 
 test("a library, and a caller that sets no minimum, skip the staging age", async () => {
@@ -674,16 +680,75 @@ test("promotion refuses when the latest release has no publish time to measure f
   );
 });
 
-test("whatever stops the staging age check, a reason still promotes and the notes say the check did not run", async () => {
-  const { fake } = await soaking({ published: { "v1.26.0": undefined } });
-  const { pending, overridden, unchecked } = await soakWith(fake, 600, { skipMinimumAge: "hotfix after deleting the bad release" });
+test("only published staging prereleases after the latest release start a clock", async (t) => {
+  const clocks = async (soak) => {
+    const { fake } = await soaking(soak);
+    return (await soakWith(fake, 200)).soak.changes.map(({ since }) => (since - T0) / 60_000);
+  };
+  await t.test("a draft", async () => assert.deepEqual(await clocks({ drafts: [EARLIER] }), [50, 50]));
+  await t.test("a release that is not a prerelease", async () => assert.deepEqual(await clocks({ stable: [EARLIER] }), [50, 50]));
+  await t.test("a release published at the same moment as the latest release", async () =>
+    assert.deepEqual(await clocks({ published: { "v1.26.0": at(0) } }), [50, 50]));
+  await t.test("a published prerelease after the latest release", async () => assert.deepEqual(await clocks({}), [0, 50]));
+});
+
+test("a change that has been on staging exactly the minimum is ready", async () => {
+  const { fake } = await soaking();
+  // #96 reached staging at minute 50; the minimum is 1h.
+  assert.equal((await soakWith(fake, 110)).soak.waiting.length, 0);
+  await assert.rejects(soakWith(fake, 109), /- #96 feat: stage every main push: on staging 59m, minimum 1h\n/);
+});
+
+test("every page of a long range of commits is checked", async () => {
+  const many = Array.from({ length: 149 }, (_, index) => ({ sha: `c${index.toString(16)}`.padStart(40, "0"), message: `fix: change ${index}` }));
+  const { fake } = await soaking({ commits: [...many, { sha: SHA, message: "feat: stage every main push" }] });
+  const { soak } = await soakWith(fake, 200);
+  assert.equal(soak.changes.length, 150);
+  assert.equal(fake.calls.filter((call) => call.some((arg) => /\?per_page=100&page=2$/.test(arg))).length, 1);
+});
+
+test("a pull request that was never merged declares nothing", async () => {
+  const { fake } = await soaking({
+    commits: [
+      { sha: C1, otherPulls: [{ number: 90, title: "wip", merged_at: null, labels: ["min-staging-age:3h"] }], pull: { number: 95, title: "fix: drain the queue" } },
+      { sha: SHA, pull: { number: 96, title: "feat: stage every main push" } },
+    ],
+  });
+  assert.deepEqual((await soakWith(fake, 200)).soak.changes.map(({ pull, required }) => [pull.number, required / 60_000]), [[95, 60], [96, 60]]);
+});
+
+test("a build released again after a rollback is measured from the release before it", async () => {
+  const { fake } = await soaking();
+  // v1.27.0 was released from this build, then rolled back by marking it a prerelease.
+  fake.state.tags["v1.27.0"] = SHA;
+  fake.state.releases["v1.27.0"] = { prerelease: true, assets: [] };
+  const { pending, soak } = await soakWith(fake, 200);
   assert.equal(pending, true);
-  assert.equal(overridden, true);
-  assert.match(unchecked, /v1\.26\.0 has no published GitHub release/);
-  const override = JSON.parse(readFileSync(join(root, "candidate", "staging-age-override.json"), "utf8"));
-  assert.deepEqual({ ...override, unchecked: undefined }, { reason: "hotfix after deleting the bad release", waiting: [], unchecked: undefined });
-  await publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined });
-  assert.ok(fake.state.releases["v1.27.0"].notes.includes("Promoted without a check of the time on staging (v1.26.0 has no published GitHub release). Reason: hotfix after deleting the bad release"));
+  assert.deepEqual(soak.changes.map(({ sha }) => sha), [C1, SHA]);
+});
+
+test("a reason gets past anything that would stop the check", async (t) => {
+  await t.test("a latest release with nothing to measure from", async () => {
+    const { fake } = await soaking({ published: { "v1.26.0": undefined } });
+    assert.equal((await soakWith(fake, 600, { skipMinimumAge: "hotfix" })).overridden, true);
+  });
+  await t.test("an invalid minimum", async () => {
+    const { fake } = await soaking();
+    await assert.rejects(soakWith(fake, 600, { minimumAge: "2 hours" }), /cannot check the time on staging\. Invalid minimum staging age "2 hours".*\nTo promote now, set skip-minimum-age-reason\./s);
+    assert.equal((await soakWith(fake, 600, { minimumAge: "2 hours", skipMinimumAge: "hotfix" })).overridden, true);
+  });
+  await t.test("a refused pull request read", async () => {
+    const { fake } = await soaking({ forbidden: "gh: Resource not accessible by integration (HTTP 403)" });
+    assert.equal((await soakWith(fake, 600, { skipMinimumAge: "hotfix" })).overridden, true);
+  });
+});
+
+test("an empty minimum, as the workflow passes it, means the 2h default", async () => {
+  const { fake } = await soaking();
+  // #96 has 70m on staging: enough for a 1h minimum, not for 2h.
+  assert.equal((await soakWith(fake, 120)).overridden, false);
+  const error = await soakWith(fake, 120, { minimumAge: "" }).catch((caught) => caught);
+  assert.match(error.message, /- #96 feat: stage every main push: on staging 1h 10m, minimum 2h\n/);
 });
 
 test("only the pull request that merged a change into main declares its age", async () => {
