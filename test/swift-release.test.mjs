@@ -727,6 +727,28 @@ test("a build released again after a rollback is measured from the release befor
   assert.deepEqual(soak.changes.map(({ sha }) => sha), [C1, SHA]);
 });
 
+test("a staging tag whose release was never published is skipped", async () => {
+  // A stage run that failed between tagging and releasing leaves a tag with no release.
+  const { fake } = await soaking();
+  fake.state.tags["v1.27.0-staging.860.1"] = C1;
+  const { soak } = await soakWith(fake, 200);
+  assert.deepEqual(soak.changes.map(({ since }) => (since - T0) / 60_000), [0, 50]);
+});
+
+test("a branch merged into main without a pull request waits for its merge commit's build", async () => {
+  const SIDE = sha("3");
+  // Listed by date, the side commit sits before a main commit that was staged early but doesn't carry it.
+  const { fake } = await soaking({
+    commits: [
+      { sha: SIDE, message: "fix: side work" },
+      { sha: C1, pull: { number: 95, title: "fix: drain the queue" } },
+      { sha: SHA, message: "Merge branch 'side'" },
+    ],
+  });
+  const error = await soakWith(fake, 100).catch((caught) => caught);
+  assert.match(error.message, new RegExp(`- ${SHA.slice(0, 12)} Merge branch 'side': on staging 50m, minimum 1h\n`));
+});
+
 test("a reason gets past anything that would stop the check", async (t) => {
   await t.test("a latest release with nothing to measure from", async () => {
     const { fake } = await soaking({ published: { "v1.26.0": undefined } });

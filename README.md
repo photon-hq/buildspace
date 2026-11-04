@@ -1011,7 +1011,8 @@ jobs:
   means the default. `skip-minimum-age-reason` skips the check, for a hotfix;
   the build still needs approval and the release notes keep the reason. A
   library, which no staging Mac runs, is
-  exempt; the packages that pin it wait instead.
+  exempt; the packages that pin it wait instead. A library's promote job
+  still needs `pull-requests: read`, or GitHub refuses the run at startup.
 - **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
   manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves
