@@ -149,26 +149,16 @@ jobs:
       - name: Read the Swift version the package pins
         id: swift-version
         if: ${{ !inputs.library }}
-        # Without .swift-version the latest Swift release is installed, as before.
-        # A committed .swift-version is installed, unless the image already
-        # provides that version, which skips the minute an install takes.
         run: |
           set -euo pipefail
-          installed="$(swift --version 2>&1 | sed -nE 's/.*Swift version ([0-9][0-9A-Za-z._-]*).*/\1/p' | head -n 1 || true)"
           version=latest
           if [[ -f .swift-version ]]; then
             version="$(tr -d '[:space:]' < .swift-version)"
             [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]] || { echo "::error::.swift-version does not name a Swift toolchain" >&2; exit 1; }
-            if [[ "$version" == "$installed" ]]; then
-              version=
-            elif [[ -n "$installed" ]]; then
-              echo "::notice::.swift-version pins Swift $version. The runner image has Swift $installed, so the job installs $version. To skip the install, set .swift-version to $installed."
-            fi
           fi
-          echo "Runner Swift ${installed:-unknown}; installing ${version:-nothing}"
           echo "value=$version" >> "$GITHUB_OUTPUT"
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
-        if: ${{ !inputs.library && steps.swift-version.outputs.value != '' }}
+        if: ${{ !inputs.library }}
         with:
           swift-version: ${{ steps.swift-version.outputs.value }}
       # swiftly rewrites a tracked .swift-version with the toolchain it selected.

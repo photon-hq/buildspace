@@ -972,12 +972,8 @@ jobs:
   secrets) when a dependency is one of the owner's private repositories.
 - **Toolchain.** The build installs the Swift toolchain that the package's
   committed `.swift-version` names, or the latest Swift release when it has
-  none. When the runner image already provides the pinned version, nothing is
-  installed, which saves the minute an install takes: pin the image's Swift to
-  opt in. When the pin and the image's Swift differ, the run shows a notice
-  that names both versions. swiftly rewrites `.swift-version` when it selects a toolchain, so the
-  build restores the committed file before building. Swift PR and release
-  builds follow the same rule.
+  none. swiftly rewrites `.swift-version` when it selects a toolchain, so the
+  build restores the committed file before building.
 - **Dependencies.** Production depends only on production. Promotion reads the
   source commit's `Package.resolved` and `Package.swift` from GitHub, never
   running them, and checks every dependency fetched from one of the owner's
@@ -1196,7 +1192,7 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
 | `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS Swift/package build stays on `macos-26` |
 
-The build installs the latest Swift release, or the version a committed `.swift-version` names; when the runner image already provides that version, nothing is installed.
+The build installs the Swift toolchain that a committed `.swift-version` names, or the latest Swift release if the package has no `.swift-version`. If the runner image already has the pinned version, the build installs nothing, which saves the minute that an install takes: pin the image's Swift to opt in. If the pin and the image's Swift are different, the run shows a notice that names the two versions. [Swift Release](#swift-release) uses the same build.
 
 #### Secrets
 

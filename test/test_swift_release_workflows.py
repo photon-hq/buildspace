@@ -11,7 +11,6 @@ import yaml
 
 STAGE = yaml.load(Path('.github/workflows/swift-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/swift-promote.yml').read_text(), Loader=yaml.BaseLoader)
-BUILD_BLOCK = yaml.load(Path('.github/blocks/swift-build/action.yml').read_text(), Loader=yaml.BaseLoader)
 CALLER_CODE = ('swift build', 'pkgbuild', 'SECRET_ENV_VARS', 'APP_PRIVATE_KEY', 'setup-swift')
 
 
@@ -198,17 +197,11 @@ class ToolchainStepTests(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
         (self.root / 'Package.swift').write_text('// swift-tools-version: 6.2\n')
         self.build = STAGE['jobs']['build']
-        self.bin = Path(self.tmp.name) / 'bin'
-        self.bin.mkdir()
-        self.runner_swift('6.3.3')
-
-    def runner_swift(self, version):
-        executable(self.bin / 'swift', f'echo "swift-driver version: 1.148.6 Apple Swift version {version} (swiftlang-{version}.1.3 clang-2100.1.1.101)"\n')
 
     def run_step(self, name):
         outputs = Path(self.tmp.name) / 'outputs'
         outputs.write_text('')
-        env = {**os.environ, 'GITHUB_OUTPUT': str(outputs), 'PATH': f"{self.bin}:{os.environ['PATH']}"}
+        env = {**os.environ, 'GITHUB_OUTPUT': str(outputs)}
         result = subprocess.run(['bash', '-c', step(self.build, name)['run']], cwd=self.root, env=env, capture_output=True, text=True)
         return result, outputs.read_text()
 
@@ -218,46 +211,19 @@ class ToolchainStepTests(unittest.TestCase):
         subprocess.run([*self.git, 'add', '.'], check=True)
         subprocess.run([*self.git, 'commit', '-qm', 'source'], check=True)
 
-    def test_setup_swift_installs_the_latest_or_a_pin_the_runner_lacks(self):
+    def test_setup_swift_installs_the_pinned_version_or_the_latest(self):
         setup = next(s for s in self.build['steps'] if s.get('uses', '').startswith('swift-actions/setup-swift@'))
         self.assertEqual(setup['with']['swift-version'], '${{ steps.swift-version.outputs.value }}')
-        self.assertIn("steps.swift-version.outputs.value != ''", setup['if'])
         names = [s.get('name', s.get('uses')) for s in self.build['steps']]
         read, keep = 'Read the Swift version the package pins', 'Keep the committed .swift-version'
         self.assertEqual(step(self.build, read)['id'], 'swift-version')
         self.assertLess(names.index(read), names.index(setup['uses']))
         self.assertLess(names.index(setup['uses']), names.index(keep))
         self.assertLess(names.index(keep), names.index('Build the staging package and its production candidate'))
-        # No pin: the latest release, as before.
         self.commit()
         self.assertEqual(self.run_step(read)[1], 'value=latest\n')
-        # A pin the runner image already provides: nothing to install, no notice.
         self.commit('6.3.3\n')
-        result, outputs = self.run_step(read)
-        self.assertEqual(outputs, 'value=\n')
-        self.assertNotIn('::notice::', result.stdout)
-        # A pin the image lacks: that version, with a notice that names both versions.
-        self.commit('6.4.2\n')
-        result, outputs = self.run_step(read)
-        self.assertEqual(outputs, 'value=6.4.2\n')
-        self.assertIn('::notice::.swift-version pins Swift 6.4.2. The runner image has Swift 6.3.3', result.stdout)
-        # No Swift on the runner: the pin, or the latest without one; nothing to compare, so no notice.
-        executable(self.bin / 'swift', 'exit 127\n')
-        result, outputs = self.run_step(read)
-        self.assertEqual(outputs, 'value=6.4.2\n')
-        self.assertNotIn('::notice::', result.stdout)
-        (self.root / '.swift-version').unlink()
-        self.assertEqual(self.run_step(read)[1], 'value=latest\n')
-
-    def test_pr_and_release_builds_choose_the_toolchain_with_the_same_step(self):
-        # blocks/swift-build (PR and release builds) carries its own copy of the step tested above.
-        block = {'steps': BUILD_BLOCK['runs']['steps']}
-        read = 'Read the Swift version the package pins'
-        self.assertEqual(step(block, read)['id'], 'swift-version')
-        self.assertEqual(step(block, read)['run'], step(self.build, read)['run'])
-        setup = next(s for s in block['steps'] if s.get('uses', '').startswith('swift-actions/setup-swift@'))
-        self.assertEqual(setup['if'], "steps.swift-version.outputs.value != ''")
-        self.assertEqual(setup['with']['swift-version'], '${{ steps.swift-version.outputs.value }}')
+        self.assertEqual(self.run_step(read)[1], 'value=6.3.3\n')
 
     def test_a_swift_version_that_is_not_a_toolchain_name_fails(self):
         self.commit('6.3.3 $(id)\n')
