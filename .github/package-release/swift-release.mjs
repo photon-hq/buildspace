@@ -13,6 +13,11 @@ const SHA = /^[a-f0-9]{40}$/;
 const STAGING_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-staging\.(\d+)\.(\d+)$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const LITERAL = /"((?:[^"\\\n]|\\.)*)"/g;
+const AGE = /^(0|[1-9]\d*)([mhd])$/;
+const AGE_LABEL = /^min-staging-age:(.+)$/;
+const AGE_UNIT = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+const OVERRIDE = "staging-age-override.json";
+const DEFAULT_MINIMUM_AGE = "2h";
 
 /**
  * GitGate and the Astrolabe self-updater install the first asset ending in
@@ -108,7 +113,7 @@ export async function verifyManifest(directory, manifest, { repository, sourceSh
       throw new Error(`${manifest.pkg[channel].file} does not match the release manifest`);
 }
 
-export function releaseNotes(manifest, channel) {
+export function releaseNotes(manifest, channel, override = null) {
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
   const source = `[\`${manifest.sourceSha.slice(0, 12)}\`](${server}/${manifest.repository}/commit/${manifest.sourceSha})`;
   const staging = manifest.pkg?.staging.version ?? manifest.stagingTag.slice(1);
@@ -129,6 +134,7 @@ export function releaseNotes(manifest, channel) {
       lines.push(`| \`${packageFile(manifest.package)}\`${label} | \`${version}\` | \`${digest}\` |`);
     }
   }
+  if (override) lines.push("", `Promoted without a check of the time on staging. Reason: ${override.reason}`);
   lines.push("", ...bumpNotes(manifest.bump, manifest.repository));
   return `${lines.join("\n")}\n`;
 }
@@ -163,9 +169,19 @@ export async function publish({ directory, channel, repository, sourceSha, packa
     tag,
     title: `${packageName} ${tag}`,
     files: [...files, MANIFEST],
-    notes: releaseNotes(manifest, channel),
+    notes: releaseNotes(manifest, channel, channel === "production" ? await readOverride(directory) : null),
   });
   return { manifest, tag };
+}
+
+/** The minimum-age override resolution recorded beside the candidate, if any. */
+async function readOverride(directory) {
+  try {
+    return JSON.parse(await readFile(join(directory, OVERRIDE), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 /** Tags under `v`, read from GitHub; matching-refs returns every match in one response. */
@@ -317,7 +333,22 @@ export function dependencyFindings({ repository, sourceSha, library = false, run
  * release, and depending only on the owner's production releases. `pending`
  * is false when that release already is this build.
  */
-export async function resolveCandidate({ repository, packageName, library = false, version: requested = "", approvedBy = "", environment, signerWorkflow, output, run = exec, dependencyRun = run }) {
+export async function resolveCandidate({
+  repository,
+  packageName,
+  library = false,
+  version: requested = "",
+  approvedBy = "",
+  environment,
+  signerWorkflow,
+  output,
+  minimumAge,
+  skipMinimumAge = "",
+  now = Date.now(),
+  run = exec,
+  dependencyRun = run,
+}) {
+  const reason = skipMinimumAge.trim();
   requireReviewers({ repository, environment, approvedBy, run });
   const tags = releaseTags(run, repository);
   const newest = tags
@@ -372,7 +403,159 @@ export async function resolveCandidate({ repository, packageName, library = fals
   const { dependencies, findings } = dependencyFindings({ repository, sourceSha: manifest.sourceSha, library, run, dependencyRun });
   if (findings.length)
     throw new Error(`${tag} cannot be promoted until its dependencies are production releases:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
-  return { manifest, pending: true, dependencies };
+  // A library runs on no staging Mac; the packages that pin it wait instead.
+  // A build re-released after a rollback is measured from the release before it.
+  const previous = latestReleaseTag(tags.filter((name) => name !== manifest.productionTag), "v");
+  // An unset minimum (only callers of this function can leave it unset) skips the
+  // check; an empty one, as the workflow passes it, means the default.
+  if (minimumAge === undefined || library) return { manifest, pending: true, dependencies, overridden: false };
+  // A reason skips the check outright, so nothing in it can hold up a hotfix.
+  if (reason) {
+    await writeFile(join(output, OVERRIDE), `${JSON.stringify({ reason }, null, 2)}\n`);
+    return { manifest, pending: true, dependencies, overridden: true };
+  }
+  const skip = "To promote now, set skip-minimum-age-reason.";
+  let soak;
+  try {
+    const minimum = parseAge(minimumAge || DEFAULT_MINIMUM_AGE);
+    soak = stagingSoak({ repository, sourceSha: manifest.sourceSha, latest: previous, minimum, now, run });
+  } catch (error) {
+    throw Object.assign(new Error(`${tag}: cannot check the time on staging. ${error.message}\n${skip}`), { unchecked: error.message });
+  }
+  if (soak.waiting.length)
+    throw Object.assign(new Error(`${tag}: some changes were on staging for less than the minimum time:\n${soak.waiting.map((change) => `- ${changeLine(change)}`).join("\n")}\n${skip}`), { soak });
+  return { manifest, pending: true, dependencies, soak, overridden: false };
+}
+
+/** A duration such as 30m, 2h or 1d, in milliseconds. */
+export function parseAge(text) {
+  const match = AGE.exec(String(text).trim());
+  if (!match) throw new Error(`Invalid minimum staging age "${text}". Use minutes, hours or days, for example 30m, 2h or 1d.`);
+  return Number(match[1]) * AGE_UNIT[match[2]];
+}
+
+/** A duration for people, in whole minutes rounded with `round`. */
+export function formatAge(milliseconds, round = Math.floor) {
+  const minutes = Math.max(0, round(milliseconds / 60_000));
+  const parts = [[Math.floor(minutes / 1440), "d"], [Math.floor((minutes % 1440) / 60), "h"], [minutes % 60, "m"]].filter(([count]) => count);
+  return parts.length ? parts.map(([count, unit]) => `${count}${unit}`).join(" ") : "0m";
+}
+
+const changeName = ({ sha, pull, subject }) => (pull ? `#${pull.number} ${pull.title}` : `${sha.slice(0, 12)} ${subject}`);
+const onStaging = (change) => (change.since === undefined ? "none" : formatAge(change.age));
+const minimumOf = (change) => `${formatAge(change.required)}${change.declared ? " (PR label)" : ""}`;
+const changeLine = (change) => `${changeName(change)}: on staging ${onStaging(change)}, minimum ${minimumOf(change)}`;
+
+/**
+ * How long each change the build carries, since the latest release, has run
+ * on staging. Staging Macs install the newest staging release and every later
+ * build on main still carries a change, so a change's clock starts with the
+ * first staging release that carries it. Publishing a release sends GitGate's
+ * staging Macs back to it until the next main push, so only staging releases
+ * published after the latest release count. Each change needs `minimum`, or
+ * the longer age its pull request's min-staging-age:<age> label declares;
+ * labels only ever lengthen the wait. The build waits for every change.
+ */
+export function stagingSoak({ repository, sourceSha, latest, minimum, now = Date.now(), run = exec }) {
+  const api = (path) => JSON.parse(run("gh", ["api", path]));
+  const release = (tag) => {
+    try {
+      return api(`repos/${repository}/releases/tags/${tag}`);
+    } catch (error) {
+      if (notFound(error)) return undefined;
+      throw error;
+    }
+  };
+  // With no release yet, the build's own commit is the only change.
+  let commits = [api(`repos/${repository}/commits/${sourceSha}`)];
+  let after = -Infinity;
+  if (latest) {
+    const base = tagCommit(run, repository, latest);
+    if (!base) throw new Error(`${latest} does not point to a commit.`);
+    // Without the release's publish time there is no telling which staging
+    // builds came after it, so refuse rather than count them all.
+    after = Date.parse(release(latest)?.published_at ?? "");
+    if (!Number.isFinite(after))
+      throw new Error(`${latest} has no published GitHub release.`);
+    commits = [];
+    for (let page = 1; ; page++) {
+      const { total_commits: total, commits: batch } = api(`repos/${repository}/compare/${base}...${sourceSha}?per_page=100&page=${page}`);
+      commits.push(...batch);
+      if (!batch.length || commits.length >= total) break;
+    }
+  }
+  const position = new Map(commits.map(({ sha }, index) => [sha, index]));
+  // The earliest counted staging release built at each commit of the range.
+  const firstAt = new Array(commits.length).fill(Infinity);
+  for (const { ref, object } of JSON.parse(run("gh", ["api", `repos/${repository}/git/matching-refs/tags/v`]))) {
+    const tag = ref.slice("refs/tags/".length);
+    if (!STAGING_TAG.test(tag)) continue;
+    const index = position.get(object.type === "commit" ? object.sha : tagCommit(run, repository, tag));
+    if (index === undefined) continue;
+    const staged = release(tag);
+    const published = Date.parse(staged?.published_at ?? "");
+    if (!staged?.prerelease || staged.draft || !(published > after)) continue;
+    firstAt[index] = Math.min(firstAt[index], published);
+  }
+  // A change rides in the builds at its own commit and every later one.
+  const since = new Array(commits.length);
+  for (let index = commits.length - 1, earliest = Infinity; index >= 0; index--) {
+    earliest = Math.min(earliest, firstAt[index]);
+    since[index] = Number.isFinite(earliest) ? earliest : undefined;
+  }
+  const changes = commits.map(({ sha, commit }, index) => {
+    let pulls;
+    try {
+      pulls = api(`repos/${repository}/commits/${sha}/pulls`);
+    } catch (error) {
+      // GitHub answers 403 both for a missing permission and for rate limiting; any other 403 is passed on as is.
+      const stderr = String(error?.stderr ?? "");
+      if (/Resource not accessible by integration/i.test(stderr))
+        throw new Error(`GitHub refused access to the pull requests of ${repository}. Give the promote job pull-requests: read.`);
+      if (/rate limit/i.test(stderr)) throw new Error(`The GitHub API rate limit stopped access to the pull requests of ${repository}. Try again later.`);
+      throw error;
+    }
+    // Only the pull request that merged the change into main declares its age.
+    const pull = pulls.find((candidate) => candidate.merged_at && candidate.base?.ref === "main") ?? null;
+    let required = minimum;
+    let declared = null;
+    for (const { name } of pull?.labels ?? []) {
+      const label = AGE_LABEL.exec(name);
+      if (!label) continue;
+      const age = parseAge(label[1]);
+      if (age > required) [required, declared] = [age, name];
+    }
+    const age = since[index] === undefined ? 0 : now - since[index];
+    return {
+      sha,
+      subject: (commit?.message ?? "").split("\n")[0],
+      pull: pull && { number: pull.number, title: pull.title },
+      required,
+      declared,
+      since: since[index],
+      age,
+      remaining: required - age,
+    };
+  });
+  // A pull request merged with its own commits is one change: its last commit's wait.
+  const byPull = new Map();
+  for (const change of changes) {
+    const key = change.pull ? `#${change.pull.number}` : change.sha;
+    if (!byPull.has(key) || change.remaining > byPull.get(key).remaining) byPull.set(key, change);
+  }
+  const merged = [...byPull.values()];
+  return { minimum, changes: merged, waiting: merged.filter(({ remaining }) => remaining > 0) };
+}
+
+/** The reviewer's section on time on staging: an optional note, then each change. */
+export function soakSummary(soak, note = "") {
+  const lines = ["### Time on staging", ""];
+  if (note) lines.push(note, "");
+  if (soak) {
+    const rows = soak.changes.map((change) => `| ${changeName(change).replaceAll("|", "\\|")} | ${onStaging(change)} | ${minimumOf(change)} |`);
+    lines.push("| Change | On staging | Minimum |", "| --- | --- | --- |", ...rows, "");
+  }
+  return lines;
 }
 
 function productionReleaseExists(run, manifest) {
@@ -394,10 +577,12 @@ async function main() {
       directory: { type: "string" },
       environment: { type: "string" },
       library: { type: "string", default: "false" },
+      "minimum-age": { type: "string", default: "" },
       output: { type: "string" },
       package: { type: "string" },
       production: { type: "string" },
       "signer-workflow": { type: "string" },
+      "skip-minimum-age-reason": { type: "string", default: "" },
       staging: { type: "string" },
       suffix: { type: "string" },
       version: { type: "string", default: "" },
@@ -442,23 +627,43 @@ async function main() {
       return;
     }
     case "resolve": {
-      const { manifest, pending, dependencies } = await resolveCandidate({
-        repository,
-        packageName: values.package,
-        library,
-        version: values.version,
-        approvedBy: values["approved-by"],
-        environment: values.environment,
-        signerWorkflow: values["signer-workflow"],
-        output: resolve(values.output),
-        dependencyRun: env.DEPENDENCY_TOKEN ? (command, args) => exec(command, args, { ...env, GH_TOKEN: env.DEPENDENCY_TOKEN }) : exec,
-      });
+      const reason = values["skip-minimum-age-reason"].trim();
+      let resolved;
+      try {
+        resolved = await resolveCandidate({
+          repository,
+          packageName: values.package,
+          library,
+          version: values.version,
+          approvedBy: values["approved-by"],
+          environment: values.environment,
+          signerWorkflow: values["signer-workflow"],
+          output: resolve(values.output),
+          minimumAge: values["minimum-age"],
+          skipMinimumAge: reason,
+          dependencyRun: env.DEPENDENCY_TOKEN ? (command, args) => exec(command, args, { ...env, GH_TOKEN: env.DEPENDENCY_TOKEN }) : exec,
+        });
+      } catch (error) {
+        const skip = "To promote now, set `skip-minimum-age-reason`.";
+        if (error.soak) await summarize(soakSummary(error.soak, `Some changes were on staging for less than the minimum time. ${skip}`).join("\n"));
+        if (error.unchecked !== undefined) await summarize(soakSummary(undefined, `Cannot check the time on staging. ${error.unchecked} ${skip}`).join("\n"));
+        throw error;
+      }
+      const { manifest, pending, dependencies, soak } = resolved;
       const released = dependencies.length
         ? ["Its internal dependencies are production releases:", "", "| Dependency | Version |", "| --- | --- |", ...dependencies.map(({ dependency, version }) => `| ${dependency} | \`${version}\` |`), ""]
         : [];
       await summarize(
         pending
-          ? [`### Promote \`${manifest.stagingTag}\` to production`, "", releaseNotes(manifest, "production"), ...released, "Approve the deployment to release this exact build."].join("\n")
+          ? [
+              `### Promote \`${manifest.stagingTag}\` to production`,
+              "",
+              releaseNotes(manifest, "production", resolved.overridden ? { reason } : null),
+              ...released,
+              // With a skip reason there is no table; the release notes above give the reason.
+              ...(soak ? soakSummary(soak) : []),
+              "Approve the deployment to release this exact build.",
+            ].join("\n")
           : `### \`${manifest.stagingTag}\` is already released as \`${manifest.productionTag}\`\n\nNothing to publish.`
       );
       await outputs({ pending, version: manifest.bump.version });

@@ -957,6 +957,9 @@ on:
       staging-version:
         description: Staging build to promote; blank promotes the newest
         default: ''
+      skip-minimum-age-reason:
+        description: Hotfix only; skip the staging age check and say why
+        default: ''
 jobs:
   promote:
     uses: photon-hq/buildspace/.github/workflows/swift-promote.yml@<reviewed-commit-sha>
@@ -964,9 +967,12 @@ jobs:
       contents: write
       actions: read
       attestations: read
+      pull-requests: read
     with:
       package-name: macrocosm-astrolabe
       staging-version: ${{ inputs.staging-version }}
+      skip-minimum-age-reason: ${{ inputs.skip-minimum-age-reason }}
+      minimum-staging-age: 2h # optional; 2h is the default
       jamf-url: ${{ vars.JAMF_URL }} # optional
       private-deps: true # optional: a dependency is one of the owner's private repositories
     secrets:
@@ -1003,6 +1009,25 @@ jobs:
   `private-deps`. The reviewer's summary lists each release it checked: the
   pinned version from `Package.resolved`, or the lowest version
   `Package.swift` requires, which SwiftPM may resolve higher.
+- **Staging age.** Promotion waits until every change the build carries
+  since the latest `vX.Y.Z` has been on staging for `minimum-staging-age`
+  (default `2h`; minutes, hours or days such as `30m`, `2h`, `1d`). The time
+  counts from the publish time of the first staging release that carries the
+  change, its own or a later one, so a commit whose stage published nothing
+  starts with the next build. Only staging releases published after the
+  latest `vX.Y.Z` count, because publishing it sends GitGate's staging Macs
+  back to it until the next main push. A pull request labelled
+  `min-staging-age:<age>` holds its change for that age when it is longer;
+  labels never shorten the wait. Labels are read when `resolve` runs, so a
+  label added while the promotion waits for approval doesn't count. The
+  reviewer's summary lists each change,
+  its time on staging and its minimum. Reading the labels takes
+  `pull-requests: read` on the promote job. An empty `minimum-staging-age`
+  means the default. `skip-minimum-age-reason` skips the check, for a hotfix;
+  the build still needs approval and the release notes keep the reason. A
+  library, which no staging Mac runs, is
+  exempt; the packages that pin it wait instead. A library's promote job
+  still needs `pull-requests: read`, or GitHub refuses the run at startup.
 - **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
   manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves
@@ -1024,7 +1049,9 @@ jobs:
   the caller repository, `refs/heads/main` and the source commit), whose
   version is not newer than the latest `vX.Y.Z`, or that depends on the
   owner's repositories other than through production releases (see
-  **Dependencies**), and it refuses unless the
+  **Dependencies**), or whose changes have not run on staging for their
+  minimum age without a `skip-minimum-age-reason` (see **Staging age**), and
+  it refuses unless the
   `production` environment requires a reviewer. A build already released as
   `vX.Y.Z` from the same commit has nothing to publish.
 - **Trust boundaries.** Only the build job runs caller code, and it can read but

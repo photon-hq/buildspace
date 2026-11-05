@@ -15,6 +15,14 @@ on:
         description: Staging version of the build to promote, such as 1.4.0-staging.123456789.1; defaults to the newest staging build
         default: ''
         type: string
+      minimum-staging-age:
+        description: How long every change the build carries must be on staging, such as 30m, 2h or 1d; empty means 2h; a pull request's min-staging-age:<age> label can only lengthen it, and a library is exempt
+        default: 2h
+        type: string
+      skip-minimum-age-reason:
+        description: Skip the staging age check, for a hotfix; the release notes keep the reason
+        default: ''
+        type: string
       environment:
         description: Environment whose required reviewers approve the promotion
         default: production
@@ -65,6 +73,7 @@ jobs:
       contents: read
       actions: read
       attestations: read
+      pull-requests: read
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       pending: ${{ steps.resolve.outputs.pending }}
@@ -108,10 +117,13 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/swift-stage.yml
           DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
+          MINIMUM_AGE: ${{ inputs.minimum-staging-age }}
+          SKIP_MINIMUM_AGE_REASON: ${{ inputs.skip-minimum-age-reason }}
         run: |
           node "$RELEASE_TOOLS/swift-release.mjs" resolve --version "$STAGING_VERSION" \
             --package "$PACKAGE_NAME" --library "$LIBRARY" --environment "$ENVIRONMENT" \
-            --signer-workflow "$SIGNER_WORKFLOW" --output "$RUNNER_TEMP/swift-release"
+            --signer-workflow "$SIGNER_WORKFLOW" --output "$RUNNER_TEMP/swift-release" \
+            --minimum-age="$MINIMUM_AGE" --skip-minimum-age-reason="$SKIP_MINIMUM_AGE_REASON"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.resolve.outputs.pending == 'true'
         with:
