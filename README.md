@@ -354,6 +354,14 @@ moving off the old names changes both `uses:` lines and pins in one commit; its
 next main push stages a build that `package-promote.yml` can promote, since builds
 signed by the old stage workflow can't be.
 
+**Set up release environments before the first promotion.** With `gh`, `jq` and a repository administrator's `gh auth login`, run this once per repository without cloning BuildSpace:
+
+```bash
+gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main' | bash -s -- photon-hq/your-repo
+```
+
+The [setup script](scripts/setup-release-environments.sh) creates `production` and `staging`, both restricted to the `main` branch. Production requires a reviewer from the first CODEOWNERS file on `main` (`.github/`, root, then `docs/`); append `@username @org/team` to choose up to six instead. Add `--dry-run` to preview API writes without changing GitHub. Each run replaces production's reviewer list with those arguments or CODEOWNERS. Reruns reuse existing `main` policies and keep wait timers, self-review and administrator-bypass settings; other custom branch/tag or protected-branch policies stop the script for manual review. Environment setup needs administration access and cannot use a workflow's `GITHUB_TOKEN`.
+
 To promote, run the promote workflow from `main` (Actions, or
 `gh workflow run promote.yml -f staging-version=1.4.0-staging.123456789.1`). Its
 first job shows what will be published, its version and the changes that version
@@ -867,6 +875,8 @@ jobs:
 ---
 
 ### Swift Stage and Promote
+
+Run the [release environment setup](#package-stage-and-promote) once per repository before the first promotion; Swift promotion also requires the `production` environment's reviewers.
 
 `.github/workflows/swift-stage.yml` and `.github/workflows/swift-promote.yml` release
 Swift macOS `.pkg` packages, and SwiftPM libraries, the way
