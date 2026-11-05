@@ -22,6 +22,7 @@ import { bumpNotes, releaseBump, releaseChanges } from "./release-version.mjs";
 const GITHUB_PACKAGES = "https://npm.pkg.github.com";
 const NPMJS = "https://registry.npmjs.org";
 const SCOPED_NAME = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
+const UNSCOPED_NAME = /^[a-z0-9][a-z0-9._-]{0,213}$/;
 const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUFFIX = /^-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
@@ -41,7 +42,9 @@ export const sha256 = (buffer) =>
 export const integrity = (buffer) =>
   `sha512-${createHash("sha512").update(buffer).digest("base64")}`;
 const fileName = (name, version) =>
-  `${name.slice(1).replace("/", "-")}-${version}.tgz`;
+  `${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`;
+const matchesPackage = (name, selection) =>
+  typeof name === "string" && (selection.endsWith("/") ? name.startsWith(selection) : name === selection);
 const crateFile = (name, version) => `${name}-${version}.crate`;
 const sorted = (values) => JSON.stringify([...values].sort());
 
@@ -195,7 +198,7 @@ export function publishOrder(manifests) {
  * A repository whose `vX.Y.Z` tags already name something else, such as the
  * releases of a service, gives its packages a production tag prefix of their
  * own: `<name>-v`. GitHub Packages holds the owner's scope; a public package
- * on npmjs names its own.
+ * on npmjs names its own scope, or only itself when unscoped.
  */
 export function releaseNames(repository, packageInput = "", tagPrefix = "", productionTagPrefix = "", registryUrl = GITHUB_PACKAGES) {
   const [owner, repo] = repository.split("/");
@@ -203,18 +206,19 @@ export function releaseNames(repository, packageInput = "", tagPrefix = "", prod
     throw new Error(`Invalid production tag prefix ${productionTagPrefix}: use v or <name>-v`);
   if (![GITHUB_PACKAGES, NPMJS].includes(registryUrl))
     throw new Error(`Unsupported registry ${registryUrl}: use ${GITHUB_PACKAGES} or ${NPMJS}`);
-  if (registryUrl === NPMJS && !SCOPED_NAME.test(packageInput))
-    throw new Error("A package on npmjs is named by the package input, @scope/name");
+  const unscoped = typeof packageInput === "string" && UNSCOPED_NAME.test(packageInput) && !["node_modules", "favicon.ico"].includes(packageInput);
+  if (registryUrl === NPMJS && !SCOPED_NAME.test(packageInput) && !unscoped)
+    throw new Error("A package on npmjs is named by the package input, @scope/name or name");
   return {
     registryUrl,
-    scope: registryUrl === NPMJS ? `${packageInput.split("/")[0]}/` : `@${owner}/`,
+    scope: registryUrl === NPMJS ? (unscoped ? null : `${packageInput.split("/")[0]}/`) : `@${owner}/`,
     primary: packageInput || `@${owner}/${repo}`,
     tagPrefix: tagPrefix || `${repo}-staging-`,
     productionTagPrefix: productionTagPrefix || "v",
   };
 }
 
-async function readPacked(directory, scope) {
+async function readPacked(directory, selection) {
   const files = (await readdir(directory)).filter((file) => file.endsWith(".tgz")).sort();
   if (!files.length)
     throw new Error(`The pack command wrote no .tgz file to ${directory}`);
@@ -222,8 +226,10 @@ async function readPacked(directory, scope) {
   for (const file of files) {
     const path = join(directory, file);
     const manifest = readTarballManifest(path);
-    if (typeof manifest.name !== "string" || !manifest.name.startsWith(scope))
-      throw new Error(`${file}: the package name must use the ${scope} scope`);
+    if (!matchesPackage(manifest.name, selection))
+      throw new Error(selection.endsWith("/")
+        ? `${file}: the package name must use the ${selection} scope`
+        : `${file}: the package name must be ${selection}`);
     if (packed.has(manifest.name))
       throw new Error(`${manifest.name} was packed more than once`);
     packed.set(manifest.name, { path, manifest });
@@ -278,8 +284,8 @@ export async function collect({
   // Cargo pins an internal crate by the vX.Y.Z tag of its release.
   if (crates.length && names.productionTagPrefix !== "v")
     throw new Error("Crates are released under vX.Y.Z tags; a build with crates cannot use another production tag prefix");
-  const staging = await readPacked(stagingDirectory, names.scope);
-  const production = await readPacked(productionDirectory, names.scope);
+  const staging = await readPacked(stagingDirectory, names.scope ?? names.primary);
+  const production = await readPacked(productionDirectory, names.scope ?? names.primary);
   const packaged = await readCrates(crateDirectory, crates, sourceSha);
   const packed = [...production.keys()].sort();
   if (JSON.stringify(packed) !== JSON.stringify([...staging.keys()].sort()))
@@ -392,7 +398,7 @@ export async function verifyManifest(
   if (bump && JSON.stringify(manifest.bump) !== JSON.stringify(bump)) fail("bump, which is not the version this run computed");
   const seen = new Set();
   for (const pkg of manifest.packages) {
-    if (typeof pkg.name !== "string" || !pkg.name.startsWith(names.scope) || seen.has(pkg.name))
+    if (!matchesPackage(pkg.name, names.scope ?? names.primary) || seen.has(pkg.name))
       fail(`package ${pkg.name}`);
     seen.add(pkg.name);
     if (
@@ -750,13 +756,13 @@ export async function publish({
 }
 
 /** Findings that keep a candidate from production: internal dependencies on unreleased builds. */
-export async function dependencyFindings(candidates, scope, registry) {
+export async function dependencyFindings(candidates, selection, registry) {
   const promoted = new Map(candidates.map(({ name, version }) => [name, version]));
   const findings = [];
   for (const { name, manifest } of candidates) {
     for (const field of DEPENDENCY_FIELDS)
       for (const [dependency, spec] of Object.entries(manifest[field] ?? {})) {
-        if (!dependency.startsWith(scope)) continue;
+        if (!matchesPackage(dependency, selection)) continue;
         if (!STABLE.test(spec)) {
           findings.push(`${name} ${field}: ${dependency}@${spec} is not an exact stable version`);
           continue;
@@ -771,7 +777,7 @@ export async function dependencyFindings(candidates, scope, registry) {
         else if (release.deprecated) findings.push(`${name} ${field}: ${dependency}@${spec} is deprecated`);
       }
     for (const [dependency, range] of Object.entries(manifest.peerDependencies ?? {})) {
-      if (!dependency.startsWith(scope)) continue;
+      if (!matchesPackage(dependency, selection)) continue;
       if (!semver.validRange(range)) {
         findings.push(`${name} peerDependencies: ${dependency}@${range} is not a version range`);
         continue;
@@ -1055,7 +1061,7 @@ export async function resolveCandidate({
     version: pkg.production.version,
     manifest: readTarballManifest(join(output, pkg.production.file)),
   }));
-  const findings = await dependencyFindings(candidates, names.scope, lookup);
+  const findings = await dependencyFindings(candidates, names.scope ?? names.primary, lookup);
   const restage = manifest.bump
     ? "stage a newer build, from a change inside the build's paths or a Release-As"
     : "bump the version and stage again";
