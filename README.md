@@ -1193,6 +1193,8 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 | `build-flags` | string | No | `""` | Extra `swift build` arguments for the PR build only, split on whitespace. `-Xswiftc -Onone` skips optimisation (about a third less compile time) yet, unlike a debug build, still compiles code under `#if !DEBUG`; the PR `.pkg` is then unoptimised |
 | `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS Swift/package build stays on `macos-26` |
 
+The build installs the Swift toolchain that a committed `.swift-version` names, or the latest Swift release if the package has no `.swift-version`. If the runner image already has the pinned version, the build installs nothing, which saves the minute that an install takes: pin the image's Swift to opt in. If the pin and the image's Swift are different, the run shows a notice that names the two versions. [Swift Release](#swift-release) uses the same build.
+
 #### Secrets
 
 | Secret | Required | Description |
