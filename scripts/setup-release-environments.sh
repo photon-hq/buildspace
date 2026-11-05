@@ -155,9 +155,13 @@ for environment in production staging; do
   } end' <<<"$entry")
   printf '%s before: %s\n' "$environment" "$before_summary"
   printf '%s after: main branch only; %s\n' "$environment" "$(jq -c '.after' <<<"$entry")"
-  write_api PUT "repos/$repository/environments/$environment" "$(jq -c '.after' <<<"$entry")"
+  write_api PUT "repos/$repository/environments/$environment" "$(jq -c '.after' <<<"$entry")" ||
+    die "Could not configure $environment; check the API error above and your GitHub plan. Required reviewers in private repositories need GitHub Enterprise."
   if ! jq -e '.policies | any(.[]; .name == "main" and (.type // "branch") == "branch")' <<<"$entry" >/dev/null; then
     if ! write_api POST "repos/$repository/environments/$environment/deployment-branch-policies" '{"name":"main","type":"branch"}'; then
+      if jq -e '.before == null' <<<"$entry" >/dev/null; then
+        die "Could not add the main policy for $environment. The new environment keeps its empty custom branch policy, so no deployments are allowed. Add the main policy manually or rerun setup."
+      fi
       printf 'Error: Could not add the main policy for %s; restoring its saved branch policy.\n' "$environment" >&2
       write_api PUT "repos/$repository/environments/$environment" "$(jq -c '.after + {deployment_branch_policy: .before.deployment_branch_policy}' <<<"$entry")" ||
         die "Could not restore $environment's branch policy; resolve it manually before rerunning."
