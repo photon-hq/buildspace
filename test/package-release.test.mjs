@@ -16,7 +16,9 @@ import {
   readCrate,
   readManifest,
   registryMetadata,
+  releaseNames,
   resolveCandidate,
+  verifyManifest,
   waitForCi,
   workspaceManifest,
 } from "../.github/package-release/package-release.mjs";
@@ -38,7 +40,7 @@ function pack(directory, manifest) {
   mkdirSync(join(source, "package"));
   writeFileSync(join(source, "package/package.json"), JSON.stringify(manifest));
   mkdirSync(directory, { recursive: true });
-  const file = join(directory, `${manifest.name.slice(1).replace("/", "-")}-${manifest.version}.tgz`);
+  const file = join(directory, `${manifest.name.replace(/^@/, "").replace("/", "-")}-${manifest.version}.tgz`);
   execFileSync("tar", ["-czf", file, "-C", source, "package"]);
   return file;
 }
@@ -484,6 +486,63 @@ test("a public package is named by the package input and keeps to its scope on n
   pack(join(root, "staging"), { name: "@photon-hq/adapter", version: `1.0.0${SUFFIX}` });
   pack(join(root, "production"), { name: "@photon-hq/adapter", version: "1.0.0" });
   await assert.rejects(collectBoth(PUBLIC), /must use the @photon-ai\/ scope/);
+});
+
+test("npmjs accepts an unscoped package input and still rejects invalid names", () => {
+  assert.deepEqual(releaseNames(REPOSITORY, "dsh-imessage", "", "", NPMJS), {
+    registryUrl: NPMJS, scope: null, primary: "dsh-imessage", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+  });
+  assert.deepEqual(releaseNames(REPOSITORY, PUBLIC.packageInput, "", "", NPMJS), {
+    registryUrl: NPMJS, scope: "@photon-ai/", primary: "@photon-ai/otel", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+  });
+  assert.deepEqual(releaseNames(REPOSITORY), {
+    registryUrl: "https://npm.pkg.github.com", scope: "@photon-hq/", primary: "@photon-hq/adapter", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+  });
+  assert.equal(releaseNames(REPOSITORY, "a".repeat(214), "", "", NPMJS).primary.length, 214);
+  for (const name of ["", "@scope", "@scope/", "@scope/pkg/extra", "Uppercase", "bad name", ".hidden", "_hidden", "-hidden", "pkg%2fother", "a".repeat(215), "node_modules", "favicon.ico"])
+    assert.throws(() => releaseNames(REPOSITORY, name, "", "", NPMJS), /named by the package input/);
+});
+
+test("an unscoped npmjs build stages and promotes exactly its named package", async () => {
+  const options = { ...PUBLIC, packageInput: "dsh-imessage" };
+  for (const [directory, version] of [["staging", PUBLIC_STAGING], ["production", "3.9.0"]])
+    pack(join(root, directory), { name: options.packageInput, version, dependencies: { "dsh-imessage-helper": "^1.0.0" } });
+  const manifest = await collectBoth(options);
+  assert.deepEqual(manifest.packages.map(({ name }) => name), [options.packageInput]);
+  assert.equal(manifest.packages[0].staging.file, `dsh-imessage-${PUBLIC_STAGING}.tgz`);
+  assert.equal(manifest.packages[0].production.file, "dsh-imessage-3.9.0.tgz");
+  await assert.rejects(verifyManifest(join(root, "release"), {
+    ...manifest, packages: [{ ...manifest.packages[0], name: "dsh-imessage-helper" }],
+  }, { repository: REPOSITORY, ...options, channels: ["staging", "production"] }), /package dsh-imessage-helper/);
+
+  const fake = world();
+  await publishWith(fake, options);
+  const { manifest: resolved } = await resolveWith(fake, { ...options, version: PUBLIC_STAGING });
+  assert.deepEqual(resolved, manifest);
+  const [attestation] = commands(fake.calls, "gh", "attestation");
+  assert.equal(attestation[3], join(root, "candidate/dsh-imessage-3.9.0.tgz"));
+  for (const [flag, value] of [["--repo", REPOSITORY], ["--signer-workflow", "photon-hq/buildspace/.github/workflows/package-stage.yml"], ["--source-digest", SHA], ["--source-ref", "refs/heads/main"]])
+    assert.equal(attestation[attestation.indexOf(flag) + 1], value);
+  await publishWith(fake, { ...options, directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
+  assert.deepEqual(Object.keys(fake.state.published).sort(), [`dsh-imessage@${PUBLIC_STAGING}`, "dsh-imessage@3.9.0"].sort());
+  assert.ok(commands(fake.calls, "npm", "publish").every((call) => call.includes("--provenance") && call.includes(`--registry=${NPMJS}`)));
+  assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call.slice(3)), [
+    [`dsh-imessage@${PUBLIC_STAGING}`, "staging", `--registry=${NPMJS}`],
+    ["dsh-imessage@3.9.0", "latest", `--registry=${NPMJS}`],
+  ]);
+  assert.deepEqual(fake.state.releases["v3.9.0"].assets.sort(), ["dsh-imessage-3.9.0.tgz", "release-manifest.json"]);
+});
+
+test("an unscoped npmjs pack refuses other packages, including a matching name prefix", async () => {
+  const options = { ...PUBLIC, packageInput: "dsh-imessage" };
+  for (const [directory, version] of [["staging", PUBLIC_STAGING], ["production", "3.9.0"]])
+    pack(join(root, directory), { name: options.packageInput, version });
+  for (const name of ["dsh-imessage-helper", "@photon-ai/otel"]) {
+    const extra = pack(join(root, "staging"), { name, version: PUBLIC_STAGING });
+    await assert.rejects(collectBoth(options), /the package name must be dsh-imessage/);
+    rmSync(extra);
+  }
+  await assert.rejects(collectBoth({ packageInput: "dsh-imessage" }), /must use the @photon-hq\/ scope/);
 });
 
 test("npmjs is read without credentials and past its CDN", async (t) => {
