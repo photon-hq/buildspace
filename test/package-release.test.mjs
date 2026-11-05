@@ -490,13 +490,13 @@ test("a public package is named by the package input and keeps to its scope on n
 
 test("npmjs accepts an unscoped package input and still rejects invalid names", () => {
   assert.deepEqual(releaseNames(REPOSITORY, "dsh-imessage", "", "", NPMJS), {
-    registryUrl: NPMJS, scope: null, primary: "dsh-imessage", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+    registryUrl: NPMJS, selection: "dsh-imessage", primary: "dsh-imessage", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
   });
   assert.deepEqual(releaseNames(REPOSITORY, PUBLIC.packageInput, "", "", NPMJS), {
-    registryUrl: NPMJS, scope: "@photon-ai/", primary: "@photon-ai/otel", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+    registryUrl: NPMJS, selection: "@photon-ai/", primary: "@photon-ai/otel", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
   });
   assert.deepEqual(releaseNames(REPOSITORY), {
-    registryUrl: "https://npm.pkg.github.com", scope: "@photon-hq/", primary: "@photon-hq/adapter", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+    registryUrl: "https://npm.pkg.github.com", selection: "@photon-hq/", primary: "@photon-hq/adapter", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
   });
   assert.equal(releaseNames(REPOSITORY, "a".repeat(214), "", "", NPMJS).primary.length, 214);
   for (const name of ["", "@scope", "@scope/", "@scope/pkg/extra", "Uppercase", "bad name", ".hidden", "_hidden", "-hidden", "pkg%2fother", "a".repeat(215), "node_modules", "favicon.ico"])

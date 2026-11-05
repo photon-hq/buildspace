@@ -211,7 +211,7 @@ export function releaseNames(repository, packageInput = "", tagPrefix = "", prod
     throw new Error("A package on npmjs is named by the package input, @scope/name or name");
   return {
     registryUrl,
-    scope: registryUrl === NPMJS ? (unscoped ? null : `${packageInput.split("/")[0]}/`) : `@${owner}/`,
+    selection: registryUrl === NPMJS ? (unscoped ? packageInput : `${packageInput.split("/")[0]}/`) : `@${owner}/`,
     primary: packageInput || `@${owner}/${repo}`,
     tagPrefix: tagPrefix || `${repo}-staging-`,
     productionTagPrefix: productionTagPrefix || "v",
@@ -284,8 +284,8 @@ export async function collect({
   // Cargo pins an internal crate by the vX.Y.Z tag of its release.
   if (crates.length && names.productionTagPrefix !== "v")
     throw new Error("Crates are released under vX.Y.Z tags; a build with crates cannot use another production tag prefix");
-  const staging = await readPacked(stagingDirectory, names.scope ?? names.primary);
-  const production = await readPacked(productionDirectory, names.scope ?? names.primary);
+  const staging = await readPacked(stagingDirectory, names.selection);
+  const production = await readPacked(productionDirectory, names.selection);
   const packaged = await readCrates(crateDirectory, crates, sourceSha);
   const packed = [...production.keys()].sort();
   if (JSON.stringify(packed) !== JSON.stringify([...staging.keys()].sort()))
@@ -398,7 +398,7 @@ export async function verifyManifest(
   if (bump && JSON.stringify(manifest.bump) !== JSON.stringify(bump)) fail("bump, which is not the version this run computed");
   const seen = new Set();
   for (const pkg of manifest.packages) {
-    if (!matchesPackage(pkg.name, names.scope ?? names.primary) || seen.has(pkg.name))
+    if (!matchesPackage(pkg.name, names.selection) || seen.has(pkg.name))
       fail(`package ${pkg.name}`);
     seen.add(pkg.name);
     if (
@@ -1061,7 +1061,7 @@ export async function resolveCandidate({
     version: pkg.production.version,
     manifest: readTarballManifest(join(output, pkg.production.file)),
   }));
-  const findings = await dependencyFindings(candidates, names.scope ?? names.primary, lookup);
+  const findings = await dependencyFindings(candidates, names.selection, lookup);
   const restage = manifest.bump
     ? "stage a newer build, from a change inside the build's paths or a Release-As"
     : "bump the version and stage again";

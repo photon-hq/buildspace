@@ -441,9 +441,8 @@ source commit, and moves `latest`.
   gated by people, and keep its token scoped to the repository.
 - **A public package on npmjs** sets `registry: https://registry.npmjs.org` and
   `package`, its scoped or unscoped name such as `@acme/app` or `app`, in both callers, and grants
-  `id-token: write` to both calls. The staging build and the promoted candidates
-  include only that named package when it is unscoped. They
-  are published through npm trusted publishing, with provenance and no token,
+  `id-token: write` to both calls. An unscoped input selects exactly that package.
+  The staging build and its production candidates are published through npm trusted publishing, with provenance and no token,
   by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
   the package a trusted publisher for each caller workflow file, for example
   `publish.yml` with environment `staging` and `promote.yml` with environment
