@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Show supported arguments and the protections preserved by the command.
 usage() {
   cat <<'EOF'
 Usage: setup-release-environments.sh [--dry-run] OWNER/REPO [@USER | @ORG/TEAM ...]
@@ -15,12 +16,15 @@ Reruns replace production's reviewer list with the arguments or CODEOWNERS.
 EOF
 }
 
+# Report a failure and stop without continuing to the next environment.
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
+# Call GitHub.com using the pinned REST API version.
 api() {
   gh api --hostname github.com -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
 }
 
+# Represent missing resources as null; propagate other API failures.
 optional_get() {
   local response
   if response=$(api --method GET "$@" 2>&1); then
@@ -33,6 +37,7 @@ optional_get() {
   fi
 }
 
+# Print the planned write, applying it only outside dry-run mode.
 write_api() {
   local method=$1 endpoint=$2 body=$3
   printf '%s %s %s\n' "$method" "$endpoint" "$body"
@@ -102,7 +107,7 @@ while IFS= read -r spec; do
 done <<<"$reviewer_specs"
 if ! jq -e 'length >= 1 and length <= 6' <<<"$reviewers" >/dev/null; then
   printf 'Reviewers found:\n%s\n' "$reviewer_specs" >&2
-  printf "Example with the first six entries (adjust your selection):\n  gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main' | bash -s --" >&2
+  printf "Example with the first six entries (adjust your selection):\n  script=\$(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main') && bash -s --" >&2
   [[ $dry_run == false ]] || printf ' --dry-run' >&2
   printf ' %q' "$repository" >&2
   count=0
@@ -112,7 +117,7 @@ if ! jq -e 'length >= 1 and length <= 6' <<<"$reviewers" >/dev/null; then
     count=$((count + 1))
     [[ $count -lt 6 ]] || break
   done <<<"$reviewer_specs"
-  printf '\n' >&2
+  printf ' <<<"$script"\n' >&2
   die 'GitHub allows one to six reviewers; rerun with an explicit list.'
 fi
 
@@ -152,7 +157,12 @@ for environment in production staging; do
   printf '%s after: main branch only; %s\n' "$environment" "$(jq -c '.after' <<<"$entry")"
   write_api PUT "repos/$repository/environments/$environment" "$(jq -c '.after' <<<"$entry")"
   if ! jq -e '.policies | any(.[]; .name == "main" and (.type // "branch") == "branch")' <<<"$entry" >/dev/null; then
-    write_api POST "repos/$repository/environments/$environment/deployment-branch-policies" '{"name":"main","type":"branch"}'
+    if ! write_api POST "repos/$repository/environments/$environment/deployment-branch-policies" '{"name":"main","type":"branch"}'; then
+      printf 'Error: Could not add the main policy for %s; restoring its saved branch policy.\n' "$environment" >&2
+      write_api PUT "repos/$repository/environments/$environment" "$(jq -c '.after + {deployment_branch_policy: .before.deployment_branch_policy}' <<<"$entry")" ||
+        die "Could not restore $environment's branch policy; resolve it manually before rerunning."
+      die "Could not add the main policy for $environment; its saved branch policy was restored. The environment and other applied settings remain."
+    fi
   fi
 done
 

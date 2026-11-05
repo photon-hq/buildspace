@@ -357,10 +357,10 @@ signed by the old stage workflow can't be.
 **Set up release environments before the first promotion.** With `gh`, `jq` and a repository administrator's `gh auth login`, run this once per repository without cloning BuildSpace:
 
 ```bash
-gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main' | bash -s -- photon-hq/your-repo
+script=$(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main') && bash -s -- photon-hq/your-repo <<<"$script"
 ```
 
-The [setup script](scripts/setup-release-environments.sh) creates `production` and `staging`, both restricted to the `main` branch. Production requires a reviewer from the first CODEOWNERS file on `main` (`.github/`, root, then `docs/`); append `@username @org/team` to choose up to six instead. Add `--dry-run` to preview API writes without changing GitHub. Each run replaces production's reviewer list with those arguments or CODEOWNERS. Reruns reuse existing `main` policies and keep wait timers, self-review and administrator-bypass settings; other custom branch/tag or protected-branch policies stop the script for manual review. Environment setup needs administration access and cannot use a workflow's `GITHUB_TOKEN`.
+The [setup script](scripts/setup-release-environments.sh) creates `production` and `staging`, both restricted to the `main` branch. Production requires a reviewer from the first CODEOWNERS file on `main` (`.github/`, root, then `docs/`); append `@username @org/team` to choose up to six instead. Reviewers must have at least read access to the repository. Add `--dry-run` to preview API writes without changing GitHub. Each run replaces production's reviewer list with those arguments or CODEOWNERS. Reruns reuse existing `main` policies and keep wait timers, self-review and administrator-bypass settings; other custom branch/tag or protected-branch policies stop the script for manual review. If adding the `main` policy fails, the script attempts to restore the saved branch policy and exits with an error; the environment and its other applied settings remain. Environment setup needs administration access and cannot use a workflow's `GITHUB_TOKEN`.
 
 To promote, run the promote workflow from `main` (Actions, or
 `gh workflow run promote.yml -f staging-version=1.4.0-staging.123456789.1`). Its
