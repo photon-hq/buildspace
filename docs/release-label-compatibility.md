@@ -136,12 +136,7 @@ authorization. They remain intact.
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.
    Keep unverified publication and approval steps explicit in the rollout record.
-5. Remove obsolete release labels from migration PRs. Delete repository label
-   definitions after the default branch no longer reads them, legacy publishing
-   runs have finished, and no independent automation uses them. Check external
-   label producers too, so a bot does not add them back. Deleting unused labels
-   does not require a production promotion. Retain legacy secrets separately,
-   only while an active consumer or documented rollback needs them.
+5. Remove obsolete release labels from migration PRs only after queued or active legacy publishing runs that could read them have finished and independent automation no longer needs them. Delete repository label definitions after the default branch no longer reads them, legacy publishing runs have finished, and no independent automation uses them. Disable or update any external producer that recreates a retired label before deleting its definition. Deleting unused labels does not require a production promotion. Retain legacy secrets separately, only while an active consumer or documented rollback needs them.
 6. Recheck every wrapper and direct checker consumer before removing shared
    compatibility code. A historical wrapper SHA is not sufficient isolation:
    all eight wrappers reference `check-pr-label@main`, and their other blocks
