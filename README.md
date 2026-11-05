@@ -440,10 +440,13 @@ source commit, and moves `latest`.
   for the environment's reviewers as before. Set it only where that actor's dispatches are already
   gated by people, and keep its token scoped to the repository.
 - **A public package on npmjs** sets `registry: https://registry.npmjs.org` and
-  `package`, its scoped or unscoped name such as `@acme/app` or `app`, in both callers, and grants
-  `id-token: write` to both calls. An unscoped input selects exactly that package.
-  The staging build and its production candidates are published through npm trusted publishing, with provenance and no token,
-  by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
+  `package`, its scoped name such as `@acme/app` or its unscoped name such as
+  `app`, in both callers, and grants `id-token: write` to both calls. A scoped
+  name releases every package its `pack` script writes under that scope; an
+  unscoped name releases only that package, so its `pack` script must write no
+  other tarball, or the build fails. The staging build and the promoted
+  candidates are published through npm trusted publishing, with provenance and
+  no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
   the package a trusted publisher for each caller workflow file, for example
   `publish.yml` with environment `staging` and `promote.yml` with environment
   `production`, and allow both `npm publish` and `npm dist-tag` on each. Leave the
