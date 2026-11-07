@@ -1202,8 +1202,9 @@ async function main() {
           warnings.push(`${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Merge a change inside the build's paths, or a Release-As, and stage again.`);
       }
       const crateHistory = releasedCrates({ repository, latest: (await lookup(manifest.package))["dist-tags"].latest });
-      for (const finding of await crateVersionFindings(manifest, resolve(values.output), crateHistory))
-        warnings.push(`This build cannot be promoted: ${finding}.`);
+      const findings = await crateVersionFindings(manifest, resolve(values.output), crateHistory);
+      if (findings.length)
+        throw new Error(`This build cannot be staged:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
       for (const warning of warnings) console.log(`::warning::${warning}`);
       const primary = manifest.packages.find(({ name }) => name === manifest.package);
       await summarize(
