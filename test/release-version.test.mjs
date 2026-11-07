@@ -188,6 +188,42 @@ test("a line without a release reads its whole history, and commits are looked u
   assert.throws(() => releaseChanges({ repository: REPOSITORY, prefix: "v", head: "main", directory, exec: github({}) }), /exact source commit/);
 });
 
+test("a pull request's run counts the pull request as merged when it touches the paths", () => {
+  const directory = join(root, "repository");
+  mkdirSync(directory);
+  const git = (...args) => execFileSync("git", ["-C", directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { encoding: "utf8" }).trim();
+  const commit = (path, message) => {
+    mkdirSync(join(directory, path, ".."), { recursive: true });
+    writeFileSync(join(directory, path), `${message}\n`);
+    git("add", ".");
+    git("commit", "-qm", message);
+    return git("rev-parse", "HEAD");
+  };
+  // GitHub tests a pull request as the merge of its branch into main.
+  const merge = (path) => {
+    git("checkout", "-qB", "pull", "main");
+    commit(path, "wip");
+    git("checkout", "-q", "main");
+    git("merge", "-q", "--no-ff", "pull", "-m", "Merge pull into main");
+    const sha = git("rev-parse", "HEAD");
+    git("reset", "-q", "--hard", "HEAD^");
+    return sha;
+  };
+  git("init", "-q", "-b", "main");
+  commit("crate/src/lib.rs", "feat: start");
+  git("tag", "v0.1.0");
+  const fix = commit("crate/src/lib.rs", "fix: order versions (#7)");
+  const pulls = { [fix]: [merged(7, "fix: order versions", fix)] };
+  const pending = { number: 8, title: "feat: add a field", body: "" };
+  const bump = (head, paths) => releaseBump(releaseChanges({ repository: REPOSITORY, prefix: "v", paths, head, pending, directory, exec: github(pulls) }));
+
+  const inside = bump(merge("crate/src/field.rs"), ["crate"]);
+  assert.deepEqual([inside.version, inside.level], ["0.2.0", "minor"]);
+  assert.deepEqual(inside.changes.map(({ number }) => number), [7, 8]);
+  const outside = bump(merge("docs/field.md"), ["crate"]);
+  assert.deepEqual([outside.version, outside.level], ["0.1.1", "patch"]);
+});
+
 test("a bump lists the newest changes and how the version was reached", () => {
   const changes = Array.from({ length: 205 }, (_, index) => change(`fix: ${index}`, "", index + 1));
   const bump = releaseBump({ from: "v1.0.0", base: "1.0.0", changes });

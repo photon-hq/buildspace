@@ -102,9 +102,12 @@ export function mergedPullRequests({ repository, shas, branch, exec = run }) {
  * merged pull request, read from its title and description, and one per commit
  * that reached the branch without one. Only first-parent commits that touch
  * `paths` count, so packages released separately from one repository, or
- * beside a service, are versioned by their own changes.
+ * beside a service, are versioned by their own changes. A pull request's run
+ * builds the merge commit GitHub tests it as, `head`; the `pending` pull
+ * request stands for that commit, by its title and description, as it will
+ * once merged.
  */
-export function releaseChanges({ repository, prefix, paths = [], head, branch = "main", directory = ".", exec = run }) {
+export function releaseChanges({ repository, prefix, paths = [], head, branch = "main", directory = ".", pending, exec = run }) {
   if (!SHA.test(head)) throw new Error("An exact source commit is required");
   const git = (...args) => exec("git", ["-C", directory, ...args]);
   const from = latestReleaseTag(git("tag", "--list", `${prefix}*`).split("\n").filter(Boolean), prefix);
@@ -121,7 +124,7 @@ export function releaseChanges({ repository, prefix, paths = [], head, branch = 
   const counted = new Set();
   const changes = [];
   for (const { sha, subject, body } of commits) {
-    const pull = pulls.get(sha);
+    const pull = pending && sha === head ? pending : pulls.get(sha);
     if (!pull) {
       changes.push({ sha, title: subject, ...classify({ title: subject, body }) });
       continue;

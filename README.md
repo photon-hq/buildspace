@@ -475,10 +475,12 @@ source commit, and moves `latest`.
   1.87+, clean checkout); the `.crate` records its source commit and is attested
   and attached to both releases. Cargo reads a crate's version from its source at
   the tag, so the version stays the one in `Cargo.toml`; the build's bump says
-  how far it must move. Promotion refuses a crate whose packaged files changed
-  since the latest production release unless its version rose by at least the
-  bump's level (a patch when no change counted), for example `0.4.0` after
-  `0.3.2` for a minor bump. It also refuses one whose normal or build
+  how far it must move. A crate whose packaged files changed since the latest
+  production release must rise by at least the bump's level (a patch when no
+  change counted), for example `0.4.0` after `0.3.2` for a minor bump. Staging
+  fails before publishing anything when one does not, naming the version to
+  set, and promotion checks again; a pull request can run the same check (see
+  **Checking a pull request**). Promotion also refuses a crate whose normal or build
   dependencies from the owner's GitHub repositories, inherited ones included,
   are not pinned to a `vX.Y.Z` tag with an exact `=X.Y.Z` version. An npm package still names each release, and the job
   token reads only the calling repository, so a crate whose build fetches another
@@ -524,6 +526,29 @@ source commit, and moves `latest`.
   push run on the exact commit to succeed. `dry-run: true` verifies and packs
   without publishing and is the only mode allowed outside `main`, so a pull
   request branch can dispatch it.
+- **Checking a pull request.** Run the stage call as a dry run on
+  `pull_request` to find on the pull request what staging would refuse after
+  it merges. The run builds the merge commit GitHub tests, and the version job
+  counts the pull request by its title and description, as staging will once
+  it is merged, when it touches `paths`. A crate it changes must already carry
+  the version the merged build needs: a crate released as `0.1.0` that a
+  `feat:` pull request changes must be `0.2.0`. The publish job never runs outside `main`, so the
+  write permissions the call grants are not used. Add `edited` to re-check
+  when the title changes. A workflow with a concurrency group gives pull
+  request runs one of their own, so they never queue with staging.
+  ```yaml
+  on:
+    push:
+      branches: [main]
+    pull_request:
+      types: [opened, synchronize, reopened, edited]
+  jobs:
+    stage:
+      uses: photon-hq/buildspace/.github/workflows/package-stage.yml@<reviewed-commit-sha>
+      with:
+        dry-run: ${{ github.event_name == 'pull_request' }}
+        # the rest of the call as above
+  ```
 - `downstream` repositories receive an `internal-package-published` dispatch after
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
