@@ -1168,7 +1168,10 @@ async function main() {
     case "version": {
       const { productionTagPrefix: prefix } = releaseNames(repository, "", "", values["production-tag-prefix"]);
       const paths = values.paths.split(/\s+/).filter(Boolean);
-      const bump = releaseBump(releaseChanges({ repository, prefix, paths, head: env.GITHUB_SHA }));
+      const pending = env.GITHUB_EVENT_NAME === "pull_request"
+        ? JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8")).pull_request
+        : undefined;
+      const bump = releaseBump(releaseChanges({ repository, prefix, paths, head: env.GITHUB_SHA, pending }));
       for (const warning of bump.warnings) console.log(`::warning::${warning}`);
       await summarize(bumpNotes(bump, repository).join("\n"));
       await outputs({ version: bump.version, bump: JSON.stringify(bump) });
@@ -1203,9 +1206,9 @@ async function main() {
       }
       const crateHistory = releasedCrates({ repository, latest: (await lookup(manifest.package))["dist-tags"].latest });
       const findings = await crateVersionFindings(manifest, resolve(values.output), crateHistory);
+      for (const warning of warnings) console.log(`::warning::${warning}`);
       if (findings.length)
         throw new Error(`This build cannot be staged:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
-      for (const warning of warnings) console.log(`::warning::${warning}`);
       const primary = manifest.packages.find(({ name }) => name === manifest.package);
       await summarize(
         [
