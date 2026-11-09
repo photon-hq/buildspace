@@ -145,7 +145,8 @@ authorization. They remain intact.
    Maven artifacts, and Makefile dylibs before retiring their workflows.
    Modern package staging requires npm packages, and its optional Rust crates
    are released by Git tag. Swift staging with `kind: payload` replaces
-   `pkg-release.yml` for payload/scripts-only packages.
+   `pkg-release.yml` for packages with a `payload-path`. Scripts-only callers
+   without a `payload-path` keep the compatibility workflow.
 4. Configure and verify main-only staging and registry permissions before
    enabling the new caller: its first main push publishes to staging. A missing
    environment referenced by a job can be created without protection rules;

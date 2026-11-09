@@ -74,7 +74,7 @@ BuildSpace gives you three layers of CI/CD automation:
 | Public npm package on npmjs, staged and promoted the same way | [`package-stage` + `package-promote`](#package-stage-and-promote) with `registry: https://registry.npmjs.org` | Push to main; promotion by dispatch and approval |
 | Swift macOS `.pkg`, staged on staging Macs and promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | SwiftPM library, released by tags | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `kind: library` | Push to main; promotion by dispatch and approval |
-| Payload/scripts-only macOS `.pkg` (no binary), promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `kind: payload` | Push to main; promotion by dispatch and approval |
+| Payload macOS `.pkg` with a `payload-path` (no binary), promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `kind: payload` | Push to main; promotion by dispatch and approval |
 | macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
 | Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
@@ -110,8 +110,8 @@ tracks the remaining consumers and removal conditions.
 
 Package stage/promote does not replace standalone Go/Rust binary releases or
 crates.io publishing. Swift stage/promote does not build Makefile dylibs; it
-packages payload/scripts-only installers with `kind: payload`. Callers without a
-replacement keep their compatibility workflow until one exists.
+packages installers with `kind: payload` and a required `payload-path`. Callers
+without a replacement keep their compatibility workflow until one exists.
 
 ### README Update-To-Date Check
 
@@ -1195,8 +1195,9 @@ jobs:
 
 **File:** `.github/workflows/pkg-release.yml`
 
-**Compatibility workflow.** New payload/scripts-only callers use [Swift Stage and Promote](#swift-stage-and-promote)
-with `kind: payload`. See the [rules and remaining callers](docs/release-label-compatibility.md).
+**Compatibility workflow.** New callers with a `payload-path` use [Swift Stage and Promote](#swift-stage-and-promote)
+with `kind: payload`. Scripts-only callers without a `payload-path` keep this workflow.
+See the [rules and remaining callers](docs/release-label-compatibility.md).
 
 Release pipeline for macOS `.pkg` distribution packages that don't contain a compiled binary. Packages payload files and scripts into a `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro. Use this instead of `swift-release` when your package only delivers configuration files, LaunchDaemons, scripts, or other non-binary payload.
 
