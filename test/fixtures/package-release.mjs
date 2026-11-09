@@ -221,7 +221,7 @@ const resolveWith = (fake, overrides = {}) =>
 
 function asLegacy() {
   const path = join(root, "release/release-manifest.json");
-  const { bump: _, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
+  const { bump: _bump, selection: _selection, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
   writeFileSync(path, JSON.stringify({ ...manifest, formatVersion: 2 }));
 }
 
