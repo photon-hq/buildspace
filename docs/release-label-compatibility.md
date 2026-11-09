@@ -125,14 +125,25 @@ authorization. They remain intact.
    consumers, label objects, and open issues/PRs before deleting a label.
 2. Move supported npm packages to `package-stage.yml`/`package-promote.yml`,
    preserving package scope, registry, outputs, and dependency requirements.
+   An unscoped npm primary selects only that package; a scoped primary selects
+   its scope. Neither selection supports a pack mixing scoped and unscoped
+   packages. Preserve the package set instead of renaming or dropping packages
+   to pass validation.
    Move supported Swift executables/libraries to
    `swift-stage.yml`/`swift-promote.yml`. The monorepo workflow's independent
    versions differ from modern shared build versions.
 3. Design replacements for standalone Go/Rust binaries, crates.io publishing,
-   Makefile dylibs, and payload-only packages before retiring their workflows.
+   Maven artifacts, Makefile dylibs, and payload-only packages before retiring
+   their workflows.
    Modern package staging requires npm packages, and its optional Rust crates
    are released by Git tag. Swift staging has no payload-only package mode.
-4. Validate the replacement's dry run, first staged build, stored-candidate
+4. Configure and verify release environments and registry permissions before
+   enabling the new caller: its first main push publishes to staging. A missing
+   environment referenced by a job can be created without protection rules;
+   its existence alone does not prove setup is complete. For npm trusted
+   publishing, allow both publication and dist-tag management for each caller
+   workflow and its environment.
+   Validate the replacement's dry run, first staged build, stored-candidate
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.
    Keep unverified publication and approval steps explicit in the rollout record.
