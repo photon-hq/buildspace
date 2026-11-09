@@ -131,9 +131,12 @@ authorization. They remain intact.
    consumers, label objects, and open issues/PRs before deleting a label.
 2. Move supported npm packages to `package-stage.yml`/`package-promote.yml`,
    preserving package scope, registry, outputs, and dependency requirements.
-   By default, an unscoped npm primary selects only that package; a scoped
-   primary selects its scope. A build mixing scoped and unscoped packages sets
-   `package-selection` in both callers. Preserve the package set instead of
+   On npmjs, an unscoped primary selects only that package; a scoped primary
+   selects its scope by default. A build mixing scoped and unscoped packages on
+   npmjs sets `package-selection` in both callers. GitHub Packages selects the
+   repository owner's scope, requires the primary to belong to that scope, and
+   rejects a nonempty `package-selection`. Builds outside that scope must keep
+   their existing release path until supported. Preserve the package set instead of
    renaming or dropping packages to pass validation.
    Move supported Swift executables/libraries to
    `swift-stage.yml`/`swift-promote.yml`. The monorepo workflow's independent
