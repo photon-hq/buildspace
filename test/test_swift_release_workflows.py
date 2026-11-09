@@ -87,6 +87,23 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('--channel production', step(publish, 'Release the candidate')['run'])
         self.assertNotEqual(STAGE['jobs']['publish']['concurrency']['group'], publish['concurrency']['group'])
 
+    def test_promotion_measures_staging_age_read_only(self):
+        resolve = PROMOTE['jobs']['resolve']
+        self.assertEqual(resolve['permissions'], {'contents': 'read', 'actions': 'read', 'attestations': 'read', 'pull-requests': 'read'})
+        # Publishing checks again, reading labels, when a release came out after resolution.
+        self.assertEqual(PROMOTE['jobs']['publish']['permissions'], {'contents': 'write', 'pull-requests': 'read'})
+        inputs = PROMOTE['on']['workflow_call']['inputs']
+        self.assertEqual(inputs['minimum-staging-age']['default'], '2h')
+        self.assertEqual(inputs['skip-minimum-age-reason']['default'], '')
+        resolving = step(resolve, 'Resolve and verify the candidate')
+        self.assertEqual(resolving['env']['MINIMUM_AGE'], '${{ inputs.minimum-staging-age }}')
+        self.assertEqual(resolving['env']['SKIP_MINIMUM_AGE_REASON'], '${{ inputs.skip-minimum-age-reason }}')
+        # Joined with =, so a reason that starts with - is a value, not an option.
+        self.assertIn('--minimum-age="$MINIMUM_AGE" --skip-minimum-age-reason="$SKIP_MINIMUM_AGE_REASON"', resolving['run'])
+        for name, job in PROMOTE['jobs'].items():
+            if name != 'resolve':
+                self.assertNotIn('skip-minimum-age-reason', yaml.dump(job), name)
+
     def test_promotion_reads_private_dependencies_with_a_read_only_token(self):
         resolve = PROMOTE['jobs']['resolve']
         token = step(resolve, 'Mint a token to read private dependencies')
