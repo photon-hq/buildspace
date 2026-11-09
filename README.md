@@ -354,7 +354,7 @@ moving off the old names changes both `uses:` lines and pins in one commit; its
 next main push stages a build that `package-promote.yml` can promote, since builds
 signed by the old stage workflow can't be.
 
-**Set up release environments before enabling staging publication.** Run setup before merging a caller migration: its first main push publishes to staging. Do not wait until the first production promotion. With `gh`, `jq` and a repository administrator's `gh auth login`, run this once per repository without cloning BuildSpace:
+**Configure main-only staging before enabling staging publication.** A caller migration's first main push publishes to staging, so do not defer its setup until production promotion. Production's reviewers must be configured before promotion; they are not a prerequisite for retiring unused labels. The helper below configures both environments. With `gh`, `jq` and a repository administrator's `gh auth login`, run it once per repository without cloning BuildSpace:
 
 ```bash
 script=$(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main') && bash -s -- photon-hq/your-repo <<<"$script"
@@ -913,7 +913,7 @@ jobs:
 
 ### Swift Stage and Promote
 
-Run the [release environment setup](#package-stage-and-promote) once per repository before enabling staging publication, including before merging a caller migration; Swift promotion also requires the `production` environment's reviewers.
+Configure main-only staging before enabling staging publication, including before merging a caller migration; Swift promotion requires the `production` environment's reviewers before promotion. The [release environment setup](#package-stage-and-promote) helper configures both.
 
 `.github/workflows/swift-stage.yml` and `.github/workflows/swift-promote.yml` release
 Swift macOS `.pkg` packages, and SwiftPM libraries, the way

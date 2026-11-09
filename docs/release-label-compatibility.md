@@ -137,12 +137,13 @@ authorization. They remain intact.
    their workflows.
    Modern package staging requires npm packages, and its optional Rust crates
    are released by Git tag. Swift staging has no payload-only package mode.
-4. Configure and verify release environments and registry permissions before
+4. Configure and verify main-only staging and registry permissions before
    enabling the new caller: its first main push publishes to staging. A missing
    environment referenced by a job can be created without protection rules;
    its existence alone does not prove setup is complete. For npm trusted
    publishing, allow both publication and dist-tag management for each caller
-   workflow and its environment.
+   workflow and its environment. Configure production's approval rules before
+   promotion; they are not a prerequisite for retiring unused labels.
    Validate the replacement's dry run, first staged build, stored-candidate
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.
