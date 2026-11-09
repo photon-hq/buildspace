@@ -16,7 +16,7 @@ on:
         default: ''
         type: string
       package-selection:
-        description: Space-separated @scope/ prefixes and exact names of the packages an npmjs build releases, such as app @app/; replaces the selection the package input implies and must include it
+        description: Space-separated exact package names (all required) and @scope/ prefixes for an npmjs build; must include package and select the same names and prefixes in stage and promote
         default: ''
         type: string
       tag-prefix:

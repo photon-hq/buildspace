@@ -356,7 +356,7 @@ moving off the old names changes both `uses:` lines and pins in one commit; its
 next main push stages a build that `package-promote.yml` can promote, since builds
 signed by the old stage workflow can't be.
 
-**Set up release environments before the first promotion.** With `gh`, `jq` and a repository administrator's `gh auth login`, run this once per repository without cloning BuildSpace:
+**Configure main-only staging before enabling staging publication.** A caller migration's first main push publishes to staging, so do not defer its setup until production promotion. Production's reviewers must be configured before promotion; they are not a prerequisite for retiring unused labels. The helper below configures both environments. With `gh`, `jq` and a repository administrator's `gh auth login`, run it once per repository without cloning BuildSpace:
 
 ```bash
 script=$(gh api -H 'Accept: application/vnd.github.raw+json' 'repos/photon-hq/buildspace/contents/scripts/setup-release-environments.sh?ref=main') && bash -s -- photon-hq/your-repo <<<"$script"
@@ -449,10 +449,16 @@ source commit, and moves `latest`.
   other tarball, or the build fails. A build that mixes both kinds sets
   `package-selection` in both callers to its exact names and `@scope/` prefixes,
   such as `app @app/`; the selection must include `package`, which still names
-  the build. The staging build and the promoted
+  the build. Every exact name must be packed; a scope prefix may match any
+  number of packages. The effective selection is recorded in the manifest and
+  must match at promotion, ignoring order and duplicate entries. Older manifests
+  without it retain the selection derived from their package and registry.
+  Names that map to one release filename, such as `@app/core` and `app-core`,
+  are rejected before collection writes any files. The staging build and the promoted
   candidates are published through npm trusted publishing, with provenance and
   no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
-  the package a trusted publisher for each caller workflow file, for example
+  the package a trusted publisher for each caller workflow file before enabling
+  staging publication, for example
   `publish.yml` with environment `staging` and `promote.yml` with environment
   `production`, and allow both `npm publish` and `npm dist-tag` on each. Leave the
   environment off the promote publisher if a `trusted-actor` promotes, since its
@@ -461,6 +467,14 @@ source commit, and moves `latest`.
   checks its integrity and moves a tag. The dependency rules below apply to the
   package's own scope, or to its `package-selection`, and a build staged for one
   registry is refused under the other.
+- **A failed npm publish job can leave a published version.** If `npm dist-tag`
+  reports `This trusted publisher cannot manage dist-tags`, a package maintainer
+  must enable **Allow npm dist-tag** for that publisher. Check the registry's
+  immutable version, integrity, `candidate-<run>-<attempt>` tag and channel tag,
+  and the stored candidate's manifest and attestation before choosing recovery.
+  A candidate tag alone is not a successful staging release. Do not delete or
+  republish the version, promote it to repair staging, or assume a rerun uses
+  the same files and version.
 - **A Bun repository** sets `bun-version` in the stage caller, which sets up Bun
   in place of pnpm, and its own `install`, such as `bun install --frozen-lockfile`.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already
@@ -557,7 +571,7 @@ source commit, and moves `latest`.
 - `downstream` repositories receive an `internal-package-published` dispatch after
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
-Local validation: `node --test test/package-release.test.mjs test/release-version.test.mjs` (after
+Local validation: `node --test test/package-*.test.mjs test/release-version.test.mjs` (after
 `npm ci --prefix .github/package-release`) and `python3 -m unittest discover -s test`
 (the crate packaging test runs when `cargo` is installed).
 
@@ -909,7 +923,7 @@ jobs:
 
 ### Swift Stage and Promote
 
-Run the [release environment setup](#package-stage-and-promote) once per repository before the first promotion; Swift promotion also requires the `production` environment's reviewers.
+Configure main-only staging before enabling staging publication, including before merging a caller migration; Swift promotion requires the `production` environment's reviewers before promotion. The [release environment setup](#package-stage-and-promote) helper configures both.
 
 `.github/workflows/swift-stage.yml` and `.github/workflows/swift-promote.yml` release
 Swift macOS `.pkg` packages, and SwiftPM libraries, the way

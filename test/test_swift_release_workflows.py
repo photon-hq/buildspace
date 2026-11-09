@@ -25,14 +25,16 @@ def step(job, name):
 
 class WorkflowTests(unittest.TestCase):
     def test_actions_are_pinned_and_inputs_never_reach_a_shell_directly(self):
+        steps = list(PACKAGE['runs']['steps'])
         for workflow in (STAGE, PROMOTE):
             for job in workflow['jobs'].values():
                 if 'uses' in job:
                     self.assertRegex(job['uses'], r'@[a-f0-9]{40}$')
-                for s in [*job.get('steps', []), *PACKAGE['runs']['steps']]:
-                    if 'uses' in s and not s['uses'].startswith('$/'):
-                        self.assertRegex(s['uses'], r'@[a-f0-9]{40}$')
-                    self.assertNotIn('${{', s.get('run', ''))
+                steps.extend(job.get('steps', []))
+        for s in steps:
+            if 'uses' in s and not s['uses'].startswith('$/'):
+                self.assertRegex(s['uses'], r'@[a-f0-9]{40}$')
+            self.assertNotIn('${{', s.get('run', ''))
 
     def test_the_version_is_computed_read_only_under_v_tags(self):
         version = STAGE['jobs']['version']
