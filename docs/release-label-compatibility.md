@@ -20,6 +20,12 @@ Its only autonomous workflow is PR CI; the other workflows are reusable entry
 points, not buildspace's own release pipeline. Merging to `main` publishes
 buildspace without a release label.
 
+Revalidation on 2026-11-09 found `release` registered again. PR timelines show
+CodeRabbit applying it on #138, #145 and #147. These events identify automatic
+PR-label assignment, not who recreated the repository label definition. Stop
+the observed producer before repeating deletion; its effective configuration
+and organization-wide retirement clearance have not been established.
+
 This does not remove a calling repository's labels. The checker reads
 `context.repo`, which is the caller. Caller label objects and executable
 release gates remain unchanged in this cleanup.
