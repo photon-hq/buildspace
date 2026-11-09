@@ -447,8 +447,8 @@ source commit, and moves `latest`.
   other tarball, or the build fails. The staging build and the promoted
   candidates are published through npm trusted publishing, with provenance and
   no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
-  the package a trusted publisher for each caller workflow file before enabling
-  staging publication, for example
+  every selected package a trusted publisher for each caller workflow file before
+  enabling staging publication, for example
   `publish.yml` with environment `staging` and `promote.yml` with environment
   `production`, and allow both `npm publish` and `npm dist-tag` on each. Leave the
   environment off the promote publisher if a `trusted-actor` promotes, since its
@@ -459,9 +459,10 @@ source commit, and moves `latest`.
   other.
 - **A failed npm publish job can leave a published version.** If `npm dist-tag`
   reports `This trusted publisher cannot manage dist-tags`, a package maintainer
-  must enable **Allow npm dist-tag** for that publisher. Check the registry's
-  immutable version, integrity, `candidate-<run>-<attempt>` tag and channel tag,
-  and the stored candidate's manifest and attestation before choosing recovery.
+  must enable **Allow npm dist-tag** for that publisher. For every package in the
+  manifest, check the registry's immutable version, integrity,
+  `candidate-<run>-<attempt>` tag and channel tag. Check the stored candidate's
+  manifest and attestation before choosing recovery.
   A candidate tag alone is not a successful staging release. Do not delete or
   republish the version, promote it to repair staging, or assume a rerun uses
   the same files and version.
