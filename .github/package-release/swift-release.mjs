@@ -308,9 +308,9 @@ function releaseProblem(run, dependency, version, revision) {
  * by the pins of its committed Package.resolved, which its build resolved from
  * and could not change. A library, whose consumers resolve its requirements
  * themselves, and a package without Package.resolved are checked by the
- * requirements in Package.swift, whose lowest version must be released. Staging
- * compiles nothing without Package.swift, so a package from a commit that has
- * none is payload-only and has no SwiftPM dependencies.
+ * requirements in Package.swift, whose lowest version must be released. A
+ * payload with neither Package.resolved nor Package.swift has no SwiftPM
+ * dependencies to check.
  */
 export function dependencyFindings({ repository, sourceSha, library = false, run = exec, dependencyRun = run }) {
   const owner = repository.split("/")[0];

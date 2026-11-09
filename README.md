@@ -1049,9 +1049,9 @@ jobs:
   install root `/` with `scripts-path`, `identifier` and the version, unsigned.
   `resource-bundles`, `entitlements` and `private-deps` are
   refused. Versions, attestation, the staging prerelease, approval and Jamf
-  work as for any package. Promotion takes no extra input: a commit with no
-  `Package.swift` has no SwiftPM dependencies to check, while one that has it
-  is checked as usual.
+  work as for any package. Payload promotion checks `Package.resolved` when
+  present, otherwise `Package.swift`. It skips SwiftPM dependency checks only
+  when both files are absent.
 - **Toolchain.** The build installs the Swift toolchain that the package's
   committed `.swift-version` names, or the latest Swift release when it has
   none. swiftly rewrites `.swift-version` when it selects a toolchain, so the
