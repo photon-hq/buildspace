@@ -444,7 +444,10 @@ source commit, and moves `latest`.
   `app`, in both callers, and grants `id-token: write` to both calls. A scoped
   name releases every package its `pack` script writes under that scope; an
   unscoped name releases only that package, so its `pack` script must write no
-  other tarball, or the build fails. The staging build and the promoted
+  other tarball, or the build fails. A build that mixes both kinds sets
+  `package-selection` in both callers to its exact names and `@scope/` prefixes,
+  such as `app @app/`; the selection must include `package`, which still names
+  the build. The staging build and the promoted
   candidates are published through npm trusted publishing, with provenance and
   no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
   the package a trusted publisher for each caller workflow file, for example
@@ -454,8 +457,8 @@ source commit, and moves `latest`.
   runs have none. npm scans a new version for a few minutes before it serves it,
   so each publish waits up to 30 minutes for the version to appear before it
   checks its integrity and moves a tag. The dependency rules below apply to the
-  package's own scope, and a build staged for one registry is refused under the
-  other.
+  package's own scope, or to its `package-selection`, and a build staged for one
+  registry is refused under the other.
 - **A Bun repository** sets `bun-version` in the stage caller, which sets up Bun
   in place of pnpm, and its own `install`, such as `bun install --frozen-lockfile`.
 - **Promotion refuses** a candidate that is not newer than `latest` or is already

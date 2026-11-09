@@ -129,9 +129,10 @@ class WorkflowTests(unittest.TestCase):
         # Its declaration and the two expressions above: nothing else decides on it.
         self.assertEqual(yaml.dump(PROMOTE).count('trusted-actor'), 7)
 
-    def test_every_release_script_uses_the_registry_the_caller_names(self):
+    def test_every_release_script_uses_the_registry_and_selection_the_caller_names(self):
         for workflow in (STAGE, PROMOTE):
             self.assertEqual(workflow['on']['workflow_call']['inputs']['registry']['default'], 'https://npm.pkg.github.com')
+            self.assertEqual(workflow['on']['workflow_call']['inputs']['package-selection']['default'], '')
         scripts = [
             (STAGE['jobs']['build'], 'Collect'),
             (STAGE['jobs']['publish'], 'Publish the staging build and attach its candidates'),
@@ -139,8 +140,9 @@ class WorkflowTests(unittest.TestCase):
             (PROMOTE['jobs']['publish'], 'Publish the candidates under latest'),
         ]
         for job, name in scripts:
-            self.assertEqual(step(job, name)['env']['REGISTRY'], '${{ inputs.registry }}', name)
-            self.assertIn('--registry "$REGISTRY"', step(job, name)['run'], name)
+            for env, input_name, flag in (('REGISTRY', 'registry', '--registry'), ('PACKAGE_SELECTION', 'package-selection', '--package-selection')):
+                self.assertEqual(step(job, name)['env'][env], '${{ inputs.%s }}' % input_name, name)
+                self.assertIn('%s "$%s"' % (flag, env), step(job, name)['run'], name)
 
     def test_npmjs_is_reached_through_trusted_publishing(self):
         for workflow, publish_step in ((STAGE, 'Publish the staging build and attach its candidates'), (PROMOTE, 'Publish the candidates under latest')):

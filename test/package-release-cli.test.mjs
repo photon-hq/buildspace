@@ -144,7 +144,7 @@ function collect({ crateVersion = "0.1.0", lib = "pub fn changed() {}", warning 
   writeFileSync(join(released, "release-manifest.json"), JSON.stringify({ formatVersion: 2, packages: [], crates: [previous] }));
   return command([
     "collect", "--staging", staging, "--production", production, "--crate-directory", crates,
-    "--crates", "adapter", `--suffix=${SUFFIX}`, "--package", "adapter", "--registry", "https://registry.npmjs.org",
+    "--crates", "adapter", `--suffix=${SUFFIX}`, "--package", "adapter", "--package-selection", "", "--registry", "https://registry.npmjs.org",
     "--output", join(root, "release"), "--bump", JSON.stringify({
       version: "0.2.0", from: "v0.1.0", level: "minor", total: 1,
       changes: [{ number: 8, title: "feat: add a field", level: "minor" }], warnings: [],

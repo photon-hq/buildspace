@@ -127,7 +127,8 @@ authorization. They remain intact.
    preserving package scope, registry, outputs, and dependency requirements.
    Move supported Swift executables/libraries to
    `swift-stage.yml`/`swift-promote.yml`. The monorepo workflow's independent
-   versions differ from modern shared build versions.
+   versions differ from modern shared build versions. An npm build that mixes
+   scoped and unscoped packages keeps its package set with `package-selection`.
 3. Design replacements for standalone Go/Rust binaries, crates.io publishing,
    Makefile dylibs, and payload-only packages before retiring their workflows.
    Modern package staging requires npm packages, and its optional Rust crates

@@ -73,6 +73,7 @@ async function main() {
       "image-tag": { type: "string", default: "" },
       output: { type: "string" },
       package: { type: "string", default: "" },
+      "package-selection": { type: "string", default: "" },
       paths: { type: "string", default: "" },
       production: { type: "string" },
       "signer-workflow": { type: "string" },
@@ -101,7 +102,7 @@ async function main() {
       console.log(`${values.workflow} passed on ${env.GITHUB_SHA}`);
       return;
     case "version": {
-      const { productionTagPrefix: prefix } = releaseNames(repository, "", "", values["production-tag-prefix"]);
+      const { productionTagPrefix: prefix } = releaseNames({ repository, productionTagPrefix: values["production-tag-prefix"] });
       const paths = values.paths.split(/\s+/).filter(Boolean);
       const pending = env.GITHUB_EVENT_NAME === "pull_request"
         ? JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8")).pull_request
@@ -123,6 +124,7 @@ async function main() {
         sourceSha: env.GITHUB_SHA,
         repository,
         packageInput: values.package,
+        packageSelection: values["package-selection"],
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
         registryUrl: values.registry,
@@ -166,6 +168,7 @@ async function main() {
         repository,
         sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
         packageInput: values.package,
+        packageSelection: values["package-selection"],
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
         registryUrl: values.registry,
@@ -181,6 +184,7 @@ async function main() {
       const { manifest, changes, pending } = await resolveCandidate({
         repository,
         packageInput: values.package,
+        packageSelection: values["package-selection"],
         tagPrefix: values["tag-prefix"],
         productionTagPrefix: values["production-tag-prefix"],
         registryUrl: values.registry,

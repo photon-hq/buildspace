@@ -485,22 +485,22 @@ test("a public package is named by the package input and keeps to its scope on n
   await assert.rejects(collectBoth({ ...PUBLIC, registryUrl: "https://registry.example.com" }), /Unsupported registry/);
   pack(join(root, "staging"), { name: "@photon-hq/adapter", version: `1.0.0${SUFFIX}` });
   pack(join(root, "production"), { name: "@photon-hq/adapter", version: "1.0.0" });
-  await assert.rejects(collectBoth(PUBLIC), /must use the @photon-ai\/ scope/);
+  await assert.rejects(collectBoth(PUBLIC), /not in the release selection @photon-ai\//);
 });
 
 test("npmjs accepts an unscoped package input and still rejects invalid names", () => {
-  assert.deepEqual(releaseNames(REPOSITORY, "dsh-imessage", "", "", NPMJS), {
-    registryUrl: NPMJS, selection: "dsh-imessage", primary: "dsh-imessage", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+  assert.deepEqual(releaseNames({ repository: REPOSITORY, packageInput: "dsh-imessage", registryUrl: NPMJS }), {
+    registryUrl: NPMJS, selection: ["dsh-imessage"], primary: "dsh-imessage", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
   });
-  assert.deepEqual(releaseNames(REPOSITORY, PUBLIC.packageInput, "", "", NPMJS), {
-    registryUrl: NPMJS, selection: "@photon-ai/", primary: "@photon-ai/otel", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+  assert.deepEqual(releaseNames({ repository: REPOSITORY, packageInput: PUBLIC.packageInput, registryUrl: NPMJS }), {
+    registryUrl: NPMJS, selection: ["@photon-ai/"], primary: "@photon-ai/otel", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
   });
-  assert.deepEqual(releaseNames(REPOSITORY), {
-    registryUrl: "https://npm.pkg.github.com", selection: "@photon-hq/", primary: "@photon-hq/adapter", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
+  assert.deepEqual(releaseNames({ repository: REPOSITORY }), {
+    registryUrl: "https://npm.pkg.github.com", selection: ["@photon-hq/"], primary: "@photon-hq/adapter", tagPrefix: "adapter-staging-", productionTagPrefix: "v",
   });
-  assert.equal(releaseNames(REPOSITORY, "a".repeat(214), "", "", NPMJS).primary.length, 214);
+  assert.equal(releaseNames({ repository: REPOSITORY, packageInput: "a".repeat(214), registryUrl: NPMJS }).primary.length, 214);
   for (const name of ["", "@scope", "@scope/", "@scope/pkg/extra", "Uppercase", "bad name", ".hidden", "_hidden", "-hidden", "pkg%2fother", "a".repeat(215), "node_modules", "favicon.ico"])
-    assert.throws(() => releaseNames(REPOSITORY, name, "", "", NPMJS), /named by the package input/);
+    assert.throws(() => releaseNames({ repository: REPOSITORY, packageInput: name, registryUrl: NPMJS }), /named by the package input/);
 });
 
 test("an unscoped npmjs build stages and promotes exactly its named package", async () => {
@@ -539,10 +539,28 @@ test("an unscoped npmjs pack refuses other packages, including a matching name p
     pack(join(root, directory), { name: options.packageInput, version });
   for (const name of ["dsh-imessage-helper", "@photon-ai/otel"]) {
     const extra = pack(join(root, "staging"), { name, version: PUBLIC_STAGING });
-    await assert.rejects(collectBoth(options), /the package name must be dsh-imessage/);
+    await assert.rejects(collectBoth(options), /not in the release selection dsh-imessage$/);
     rmSync(extra);
   }
-  await assert.rejects(collectBoth({ packageInput: "dsh-imessage" }), /must use the @photon-hq\/ scope/);
+  await assert.rejects(collectBoth({ packageInput: "dsh-imessage" }), /not in the release selection @photon-hq\//);
+});
+
+test("a mixed npmjs build releases exactly the names and scopes its package selection lists", async () => {
+  const options = { ...PUBLIC, packageInput: "app", packageSelection: "app @app/" };
+  for (const [directory, version] of [["staging", PUBLIC_STAGING], ["production", "3.9.0"]]) {
+    pack(join(root, directory), { name: "app", version, dependencies: { "@app/core": version } });
+    pack(join(root, directory), { name: "@app/core", version });
+  }
+  const manifest = await collectBoth(options);
+  assert.deepEqual(manifest.packages.map(({ name }) => name), ["@app/core", "app"]);
+  const fake = world();
+  await publishWith(fake, options);
+  const { manifest: resolved } = await resolveWith(fake, { ...options, version: PUBLIC_STAGING });
+  assert.deepEqual(resolved, manifest);
+
+  pack(join(root, "staging"), { name: "app-helper", version: PUBLIC_STAGING });
+  await assert.rejects(collectBoth(options), /app-helper is not in the release selection app @app\//);
+  assert.throws(() => releaseNames({ repository: REPOSITORY, packageInput: "app", packageSelection: "@app/", registryUrl: NPMJS }), /must include the package input app/);
 });
 
 test("npmjs is read without credentials and past its CDN", async (t) => {
@@ -648,7 +666,7 @@ test("dependency findings require released internal dependencies", async () => {
       },
     },
   ];
-  assert.deepEqual(await dependencyFindings(candidates, "@photon-hq/", fake.registry), []);
+  assert.deepEqual(await dependencyFindings(candidates, ["@photon-hq/"], fake.registry), []);
   const blocked = [
     { name: "@photon-hq/adapter-core", version: "0.3.0", manifest: { peerDependencies: { "@photon-hq/contracts": "0.25.0-staging.39.1", "@photon-hq/missing": "^1" } } },
     {
@@ -660,7 +678,7 @@ test("dependency findings require released internal dependencies", async () => {
       },
     },
   ];
-  const findings = await dependencyFindings(blocked, "@photon-hq/", fake.registry);
+  const findings = await dependencyFindings(blocked, ["@photon-hq/"], fake.registry);
   assert.equal(findings.length, 6, findings.join("\n"));
   assert.ok(findings.some((finding) => finding.includes("@photon-hq/contracts@0.25.0-staging.39.1 is not an exact stable version")));
   assert.ok(findings.some((finding) => finding.includes("no published stable @photon-hq/contracts satisfies 0.25.0-staging.39.1")));
