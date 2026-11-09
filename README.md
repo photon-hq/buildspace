@@ -1006,7 +1006,10 @@ jobs:
   back to it until the next main push. A pull request labelled
   `min-staging-age:<age>` holds its change for that age when it is longer;
   labels never shorten the wait. Labels are read when `resolve` runs, so a
-  label added while the promotion waits for approval doesn't count. The
+  label added while the promotion waits for approval doesn't count. If a
+  `vX.Y.Z` comes out while the promotion waits for approval, publishing
+  checks again from that release, because it sent staging Macs back to it;
+  a skip reason given at resolution still applies. The
   reviewer's summary lists each change,
   its time on staging and its minimum. Reading the labels takes
   `pull-requests: read` on the promote job. An empty `minimum-staging-age`

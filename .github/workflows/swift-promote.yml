@@ -141,6 +141,8 @@ jobs:
     environment: ${{ inputs.environment }}
     permissions:
       contents: write
+      # Reads pull request labels when a release since resolution makes it check the time on staging again.
+      pull-requests: read
     concurrency:
       group: swift-production-${{ github.repository }}
       cancel-in-progress: false

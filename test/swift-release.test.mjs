@@ -607,6 +607,49 @@ test("without a reason, the release notes say nothing about a skip", async () =>
   assert.ok(!fake.state.releases["v1.27.0"].notes.includes(SKIP_NOTE));
 });
 
+/** v1.26.1 released at minute 120, between resolution and approval; LATER restages the candidate at minute 130. */
+const LATER = "v1.27.0-staging.950.1";
+const publishedLater = { "v1.26.1": at(120), [LATER]: at(130) };
+const promoteWith = (fake, minutes) =>
+  publishWith(fake, { directory: join(root, "candidate"), channel: "production", sourceSha: undefined, now: T0 + minutes * 60_000 });
+
+test("a release between resolution and approval makes publishing check the time on staging again", async () => {
+  const { fake } = await soaking({ published: publishedLater });
+  assert.equal((await soakWith(fake, 111)).overridden, false);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, "candidate", "staging-age-check.json"), "utf8")), { baseline: "v1.26.0", minimum: 3_600_000 });
+  fake.state.tags["v1.26.1"] = OTHER;
+  const error = await promoteWith(fake, 150).catch((caught) => caught);
+  assert.match(error.message, /the time on staging was measured from v1\.26\.0, and v1\.26\.1 has been released since, so it was checked again from v1\.26\.1\./);
+  assert.match(error.message, /\n- #95 fix: drain the queue: on staging none, minimum 1h\n- #96 feat: stage every main push: on staging none, minimum 1h\n/);
+  assert.match(error.message, /To promote now, run the promotion again with skip-minimum-age-reason\.$/);
+  assert.equal(fake.state.tags["v1.27.0"], undefined);
+  assert.equal(fake.state.releases["v1.27.0"], undefined);
+
+  // A later staging build carries both changes; their time counts from it.
+  fake.state.tags[LATER] = SHA;
+  await assert.rejects(promoteWith(fake, 189), /- #96 feat: stage every main push: on staging 59m, minimum 1h\n/);
+  await promoteWith(fake, 190);
+  assert.equal(fake.state.tags["v1.27.0"], SHA);
+});
+
+test("publishing reads no pull requests while the release resolution measured from is still the latest", async () => {
+  const { fake } = await soaking();
+  await soakWith(fake, 111);
+  fake.calls.length = 0;
+  await promoteWith(fake, 112);
+  assert.deepEqual(soakReads(fake.calls), []);
+  assert.equal(fake.state.tags["v1.27.0"], SHA);
+});
+
+test("a skip reason recorded at resolution also covers a release between resolution and approval", async () => {
+  const { fake } = await soaking({ published: publishedLater });
+  await soakWith(fake, 60, { skipMinimumAge: "hotfix" });
+  assert.throws(() => readFileSync(join(root, "candidate", "staging-age-check.json")), { code: "ENOENT" });
+  fake.state.tags["v1.26.1"] = OTHER;
+  await promoteWith(fake, 150);
+  assert.ok(fake.state.releases["v1.27.0"].notes.includes(`${SKIP_NOTE} Reason: hotfix`));
+});
+
 test("a library, and a caller that sets no minimum, skip the staging age", async () => {
   const { fake } = await soaking();
   await resolveWith(fake);

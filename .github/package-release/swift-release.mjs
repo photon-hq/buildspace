@@ -17,6 +17,7 @@ const AGE = /^(0|[1-9]\d*)([mhd])$/;
 const AGE_LABEL = /^min-staging-age:(.+)$/;
 const AGE_UNIT = { m: 60_000, h: 3_600_000, d: 86_400_000 };
 const OVERRIDE = "staging-age-override.json";
+const CHECKED = "staging-age-check.json";
 const DEFAULT_MINIMUM_AGE = "2h";
 
 /**
@@ -144,16 +145,20 @@ export function releaseNotes(manifest, channel, override = null) {
  * its release. Every step can be retried; an existing tag on the same commit
  * and an existing release are accepted.
  */
-export async function publish({ directory, channel, repository, sourceSha, packageName, library = false, runId, bump, run = exec }) {
+export async function publish({ directory, channel, repository, sourceSha, packageName, library = false, runId, bump, now = Date.now(), run = exec }) {
   const manifest = await readManifest(directory);
   const channels = channel === "staging" ? ["staging", "production"] : ["production"];
   await verifyManifest(directory, manifest, { repository, sourceSha, runId: channel === "staging" ? runId : undefined, packageName, library, channels, bump });
   const tag = channel === "staging" ? manifest.stagingTag : manifest.productionTag;
   // Approval can come long after resolution; a newer release in between makes this build stale.
+  const override = channel === "production" ? await readRecord(directory, OVERRIDE) : null;
   if (channel === "production") {
-    const latest = latestReleaseTag(releaseTags(run, repository), "v")?.slice(1);
+    const tags = releaseTags(run, repository);
+    const latest = latestReleaseTag(tags, "v")?.slice(1);
     if (behind(manifest.bump.version, latest))
       throw new Error(`${manifest.stagingTag} cannot be released: ${manifest.bump.version} is not newer than the latest release ${latest}; stage a newer build`);
+    const checked = await readRecord(directory, CHECKED);
+    if (checked && !override) recheckSoak({ repository, manifest, checked, baseline: baselineOf(tags, manifest), now, run });
   }
   let files = [];
   if (manifest.pkg && channel === "staging") files = [manifest.pkg.staging.file, manifest.pkg.production.file];
@@ -169,19 +174,48 @@ export async function publish({ directory, channel, repository, sourceSha, packa
     tag,
     title: `${packageName} ${tag}`,
     files: [...files, MANIFEST],
-    notes: releaseNotes(manifest, channel, channel === "production" ? await readOverride(directory) : null),
+    notes: releaseNotes(manifest, channel, override),
   });
   return { manifest, tag };
 }
 
-/** The minimum-age override resolution recorded beside the candidate, if any. */
-async function readOverride(directory) {
+/**
+ * A record resolution left beside the candidate, if any: the skip reason
+ * (OVERRIDE) or the baseline and minimum the staging age was checked with (CHECKED).
+ */
+async function readRecord(directory, name) {
   try {
-    return JSON.parse(await readFile(join(directory, OVERRIDE), "utf8"));
+    return JSON.parse(await readFile(join(directory, name), "utf8"));
   } catch (error) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+/**
+ * The release a build's time on staging counts from: the latest `vX.Y.Z`
+ * other than its own, so a build released again after a rollback is measured
+ * from the release before it.
+ */
+const baselineOf = (tags, manifest) => latestReleaseTag(tags.filter((name) => name !== manifest.productionTag), "v") ?? null;
+
+/**
+ * Check the time on staging again when a release came out between resolution
+ * and approval. That release sends staging Macs back to it, so the time the
+ * build's changes spent on staging before it no longer counts.
+ */
+function recheckSoak({ repository, manifest, checked, baseline, now, run }) {
+  if (baseline === checked.baseline) return;
+  const why = `the time on staging was measured from ${checked.baseline ?? "no release"}, and ${baseline} has been released since, so it was checked again from ${baseline}`;
+  const skip = "To promote now, run the promotion again with skip-minimum-age-reason.";
+  let soak;
+  try {
+    soak = stagingSoak({ repository, sourceSha: manifest.sourceSha, latest: baseline, minimum: checked.minimum, now, run });
+  } catch (error) {
+    throw Object.assign(new Error(`${manifest.stagingTag}: ${why}, and it cannot be checked. ${error.message}\n${skip}`), { unchecked: error.message });
+  }
+  if (soak.waiting.length)
+    throw Object.assign(new Error(`${manifest.stagingTag}: ${why}. Some changes were on staging for less than the minimum time since then:\n${soak.waiting.map((change) => `- ${changeLine(change)}`).join("\n")}\n${skip}`), { soak });
 }
 
 /** Tags under `v`, read from GitHub; matching-refs returns every match in one response. */
@@ -405,7 +439,7 @@ export async function resolveCandidate({
     throw new Error(`${tag} cannot be promoted until its dependencies are production releases:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
   // A library runs on no staging Mac; the packages that pin it wait instead.
   // A build re-released after a rollback is measured from the release before it.
-  const previous = latestReleaseTag(tags.filter((name) => name !== manifest.productionTag), "v");
+  const previous = baselineOf(tags, manifest);
   // An unset minimum (only callers of this function can leave it unset) skips the
   // check; an empty one, as the workflow passes it, means the default.
   if (minimumAge === undefined || library) return { manifest, pending: true, dependencies, overridden: false };
@@ -416,14 +450,17 @@ export async function resolveCandidate({
   }
   const skip = "To promote now, set skip-minimum-age-reason.";
   let soak;
+  let minimum;
   try {
-    const minimum = parseAge(minimumAge || DEFAULT_MINIMUM_AGE);
+    minimum = parseAge(minimumAge || DEFAULT_MINIMUM_AGE);
     soak = stagingSoak({ repository, sourceSha: manifest.sourceSha, latest: previous, minimum, now, run });
   } catch (error) {
     throw Object.assign(new Error(`${tag}: cannot check the time on staging. ${error.message}\n${skip}`), { unchecked: error.message });
   }
   if (soak.waiting.length)
     throw Object.assign(new Error(`${tag}: some changes were on staging for less than the minimum time:\n${soak.waiting.map((change) => `- ${changeLine(change)}`).join("\n")}\n${skip}`), { soak });
+  // Publishing checks again if a release comes out before approval.
+  await writeFile(join(output, CHECKED), `${JSON.stringify({ baseline: previous, minimum }, null, 2)}\n`);
   return { manifest, pending: true, dependencies, soak, overridden: false };
 }
 
@@ -613,16 +650,25 @@ async function main() {
       return;
     }
     case "publish": {
-      const { tag } = await publish({
-        directory: resolve(values.directory),
-        channel: values.channel,
-        repository,
-        sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
-        packageName: values.package,
-        library,
-        runId: env.GITHUB_RUN_ID,
-        bump: values.bump && JSON.parse(values.bump),
-      });
+      let published;
+      try {
+        published = await publish({
+          directory: resolve(values.directory),
+          channel: values.channel,
+          repository,
+          sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
+          packageName: values.package,
+          library,
+          runId: env.GITHUB_RUN_ID,
+          bump: values.bump && JSON.parse(values.bump),
+        });
+      } catch (error) {
+        const skip = "A release came out after this build was resolved. To promote now, run the promotion again with `skip-minimum-age-reason`.";
+        if (error.soak) await summarize(soakSummary(error.soak, `Some changes were on staging for less than the minimum time since then. ${skip}`).join("\n"));
+        if (error.unchecked !== undefined) await summarize(soakSummary(undefined, `Cannot check the time on staging again. ${error.unchecked} ${skip}`).join("\n"));
+        throw error;
+      }
+      const { tag } = published;
       await summarize(`Published ${values.channel} release [\`${tag}\`](${env.GITHUB_SERVER_URL}/${repository}/releases/tag/${tag}).`);
       return;
     }

@@ -90,6 +90,8 @@ class WorkflowTests(unittest.TestCase):
     def test_promotion_measures_staging_age_read_only(self):
         resolve = PROMOTE['jobs']['resolve']
         self.assertEqual(resolve['permissions'], {'contents': 'read', 'actions': 'read', 'attestations': 'read', 'pull-requests': 'read'})
+        # Publishing checks again, reading labels, when a release came out after resolution.
+        self.assertEqual(PROMOTE['jobs']['publish']['permissions'], {'contents': 'write', 'pull-requests': 'read'})
         inputs = PROMOTE['on']['workflow_call']['inputs']
         self.assertEqual(inputs['minimum-staging-age']['default'], '2h')
         self.assertEqual(inputs['skip-minimum-age-reason']['default'], '')
