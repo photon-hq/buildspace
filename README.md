@@ -456,11 +456,16 @@ source commit, and moves `latest`.
   Names that map to one release filename, such as `@app/core` and `app-core`,
   are rejected before collection writes any files. The staging build and the promoted
   candidates are published through npm trusted publishing, with provenance and
-  no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
-  every selected package a trusted publisher for each caller workflow file before
-  enabling staging publication, for example
-  `publish.yml` with environment `staging` and `promote.yml` with environment
-  `production`, and allow both `npm publish` and `npm dist-tag` on each. Leave the
+  no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0.
+  Before enabling staging publication, give every selected package a trusted
+  publisher for the staging caller, for example `publish.yml` with environment
+  `staging`. Configure each package's promotion publisher shortly before its
+  first promotion, for example `promote.yml` with environment `production`.
+  [New publishers expire](https://docs.npmjs.com/trusted-publishers/#trusted-publisher-configuration-expiry)
+  unless their first successful publish occurs within two days of creation;
+  staging does not validate the separate promotion publisher. Delete and recreate
+  an expired publisher before use; keep production approval requirements in place.
+  Allow both `npm publish` and `npm dist-tag` on each publisher. Leave the
   environment off the promote publisher if a `trusted-actor` promotes, since its
   runs have none. npm scans a new version for a few minutes before it serves it,
   so each publish waits up to 30 minutes for the version to appear before it
