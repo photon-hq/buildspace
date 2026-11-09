@@ -64,7 +64,7 @@ runs:
         RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
         BIN_PATH: ${{ steps.build.outputs.bin-path }}
       run: |
-        if [[ -n "$PAYLOAD_PATH" ]]; then cp -R "$PAYLOAD_PATH/" "$ROOT/"; fi
+        if [[ -n "$PAYLOAD_PATH" ]]; then cp -R "$PAYLOAD_PATH/." "$ROOT/"; fi
         for bundle in $RESOURCE_BUNDLES; do cp -R "$BIN_PATH/$bundle" "$ROOT/usr/local/bin/"; done
     - name: Package
       uses: $/.github/primitives/pkgbuild
