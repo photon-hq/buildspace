@@ -237,6 +237,7 @@ test("the publishing job trusts no manifest claim the files and run do not suppo
     "another release version": [(m) => { m.bump.version = "1.3.0"; }, /bump, which is not the version this run computed/],
     "bump dropped": [(m) => { delete m.bump; }, /bump version undefined/],
     "file outside the release": [(m) => { m.packages[0].staging.file = "../escape.tgz"; }, /file/],
+    "forged npm integrity": [(m) => { m.packages[0].production.integrity = "sha512-forged"; }, /does not match the release manifest/],
     "another package name": [(m) => { m.packages[0].name = "@photon-hq/other"; }, /holds|publish order|file/],
   };
   for (const [name, [edit, error]] of Object.entries(cases))

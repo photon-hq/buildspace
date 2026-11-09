@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { registryMetadata, releaseNames, verifyManifest } from "../.github/package-release/package-release.mjs";
@@ -107,10 +107,27 @@ test("a mixed npmjs build releases exactly the names and scopes its package sele
   await publishWith(fake, options);
   const { manifest: resolved } = await resolveWith(fake, { ...options, version: PUBLIC_STAGING });
   assert.deepEqual(resolved, manifest);
+  await publishWith(fake, { ...options, directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
+  assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call.slice(3, 5)), [
+    [`@app/core@${PUBLIC_STAGING}`, "staging"], [`app@${PUBLIC_STAGING}`, "staging"],
+    ["@app/core@3.9.0", "latest"], ["app@3.9.0", "latest"],
+  ]);
 
   pack(join(root, "staging"), { name: "app-helper", version: PUBLIC_STAGING });
   await assert.rejects(collectBoth(options), /app-helper is not in the release selection app @app\//);
   assert.throws(() => releaseNames({ repository: REPOSITORY, packageInput: "app", packageSelection: "@app/", registryUrl: NPMJS }), /must include the package input app/);
+});
+
+test("collect refuses package names that would overwrite one release artifact", async () => {
+  for (const [channel, version] of [["staging", PUBLIC_STAGING], ["production", "3.9.0"]]) {
+    const directory = join(root, channel);
+    renameSync(pack(directory, { name: "@app/core", version }), join(directory, "scoped.tgz"));
+    pack(directory, { name: "app-core", version });
+  }
+  await assert.rejects(
+    collectBoth({ ...PUBLIC, packageInput: "app-core", packageSelection: "app-core @app/" }),
+    /app-core-3\.9\.0\.tgz: multiple packages map to the same release filename/
+  );
 });
 
 test("npmjs is read without credentials and past its CDN", async (t) => {
