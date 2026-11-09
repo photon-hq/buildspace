@@ -151,9 +151,12 @@ authorization. They remain intact.
    enabling the new caller: its first main push publishes to staging. A missing
    environment referenced by a job can be created without protection rules;
    its existence alone does not prove setup is complete. For npm trusted
-   publishing, allow both publication and dist-tag management for each caller
-   workflow and its environment. Configure production's approval rules before
-   promotion; they are not a prerequisite for retiring unused labels.
+   publishing, configure every selected package's staging publisher before
+   staging and its promotion publisher shortly before its first promotion.
+   Follow the [publisher setup and expiry rules](../README.md#package-stage-and-promote),
+   including permission for both publication and dist-tag management.
+   Configure production's approval rules before promotion; they are not a
+   prerequisite for retiring unused labels.
    Validate the replacement's dry run, first staged build, stored-candidate
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.
