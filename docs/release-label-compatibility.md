@@ -130,9 +130,10 @@ authorization. They remain intact.
    versions differ from modern shared build versions. An npm build that mixes
    scoped and unscoped packages keeps its package set with `package-selection`.
 3. Design replacements for standalone Go/Rust binaries, crates.io publishing,
-   Makefile dylibs, and payload-only packages before retiring their workflows.
+   and Makefile dylibs before retiring their workflows.
    Modern package staging requires npm packages, and its optional Rust crates
-   are released by Git tag. Swift staging has no payload-only package mode.
+   are released by Git tag. Swift staging with `kind: payload` replaces
+   `pkg-release.yml` for payload/scripts-only packages.
 4. Validate the replacement's dry run, first staged build, stored-candidate
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.

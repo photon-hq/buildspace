@@ -7,10 +7,10 @@ on:
         description: The package-name the build was staged with
         required: true
         type: string
-      library:
-        description: The build is a SwiftPM library, released by its tag alone
-        default: false
-        type: boolean
+      kind:
+        description: The kind the build was staged with, executable, payload or library; only library changes promotion, which releases it by its tag alone
+        default: executable
+        type: string
       staging-version:
         description: Staging version of the build to promote, such as 1.4.0-staging.123456789.1; defaults to the newest staging build
         default: ''
@@ -86,6 +86,12 @@ jobs:
             echo "::error::Promote from main; this run is on $GITHUB_REF" >&2
             exit 1
           fi
+      - name: Check the kind
+        env:
+          KIND: ${{ inputs.kind }}
+        run: |
+          [[ "$KIND" =~ ^(executable|payload|library)$ ]] ||
+            { echo "::error::kind must be executable, payload or library, not $KIND" >&2; exit 1; }
       - name: Fetch the release tools of this workflow's commit
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -113,7 +119,7 @@ jobs:
         env:
           STAGING_VERSION: ${{ inputs.staging-version }}
           PACKAGE_NAME: ${{ inputs.package-name }}
-          LIBRARY: ${{ inputs.library }}
+          LIBRARY: ${{ inputs.kind == 'library' }}
           ENVIRONMENT: ${{ inputs.environment }}
           SIGNER_WORKFLOW: ${{ job.workflow_repository }}/.github/workflows/swift-stage.yml
           DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
@@ -168,7 +174,7 @@ jobs:
       - name: Release the candidate
         env:
           PACKAGE_NAME: ${{ inputs.package-name }}
-          LIBRARY: ${{ inputs.library }}
+          LIBRARY: ${{ inputs.kind == 'library' }}
         run: |
           node "$RELEASE_TOOLS/swift-release.mjs" publish --channel production --directory "$RUNNER_TEMP/swift-release" \
             --package "$PACKAGE_NAME" --library "$LIBRARY"
@@ -176,7 +182,7 @@ jobs:
   # The artifact holds one .pkg, the released candidate, which Jamf updates its record with.
   jamf-upload:
     needs: [resolve, publish]
-    if: inputs.jamf-url != '' && !inputs.library
+    if: inputs.jamf-url != '' && inputs.kind != 'library'
     permissions:
       contents: read
     uses: photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@5e46776e677d87ce10daa134ce171484e5952e90

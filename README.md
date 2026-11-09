@@ -73,7 +73,8 @@ BuildSpace gives you three layers of CI/CD automation:
 | Internal npm package on GitHub Packages, with any internal Rust crates built beside it | [`package-stage` + `package-promote`](#package-stage-and-promote) | Push to main; promotion by dispatch and approval |
 | Public npm package on npmjs, staged and promoted the same way | [`package-stage` + `package-promote`](#package-stage-and-promote) with `registry: https://registry.npmjs.org` | Push to main; promotion by dispatch and approval |
 | Swift macOS `.pkg`, staged on staging Macs and promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) | Push to main; promotion by dispatch and approval |
-| SwiftPM library, released by tags | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `library: true` | Push to main; promotion by dispatch and approval |
+| SwiftPM library, released by tags | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `kind: library` | Push to main; promotion by dispatch and approval |
+| Payload/scripts-only macOS `.pkg` (no binary), promoted to production and Jamf | [`swift-stage` + `swift-promote`](#swift-stage-and-promote) with `kind: payload` | Push to main; promotion by dispatch and approval |
 | macOS `.pkg` PR build (no binary) | [`pkg-release-pr`](#package-pr-build) | Every PR commit |
 | Swift macOS `.pkg` (PR build previews) | [`swift-pkg-pr`](#swift-package-pr-build) | Every PR commit |
 | Any project — check if README is current | [`check-readme`](#check-readme) | Every PR |
@@ -108,8 +109,9 @@ tracks the remaining consumers and removal conditions.
 | GitHub-only releases and Makefile dylibs | [Compatibility rules](docs/release-label-compatibility.md#workflow-rules) |
 
 Package stage/promote does not replace standalone Go/Rust binary releases or
-crates.io publishing. Swift stage/promote does not build Makefile dylibs or
-payload-only packages. Those callers need a replacement before retirement.
+crates.io publishing. Swift stage/promote does not build Makefile dylibs; it
+packages payload/scripts-only installers with `kind: payload`. Callers without a
+replacement keep their compatibility workflow until one exists.
 
 ### README Update-To-Date Check
 
@@ -1010,13 +1012,26 @@ jobs:
       JAMF_CLIENT_SECRET: ${{ secrets.JAMF_CLIENT_SECRET }}
 ```
 
-- **Inputs.** `package-name`, `identifier`, `scripts-path`, `payload-path`,
+- **Inputs.** `kind` is `executable` (the default), `payload` or `library`.
+  `package-name`, `identifier`, `scripts-path`, `payload-path`,
   `resource-bundles`, `entitlements` and `private-deps` (with the `APP_ID` and
   `APP_PRIVATE_KEY` secrets) work as in [Swift Release](#swift-release).
   `paths`, `ci-workflow`, `ci-wait-minutes`, `environment` (default `staging`)
   and `dry-run` work as in `package-stage`. The promote call names the same
-  `package-name` and `library`, and sets `private-deps` (with the same
+  `package-name` and `kind`, and sets `private-deps` (with the same
   secrets) when a dependency is one of the owner's private repositories.
+  Callers that passed `library: true` pass `kind: library` to both
+  `swift-stage` and `swift-promote`.
+- **Payloads.** `kind: payload` packages a `.pkg` with no
+  compiled binary, as [Package Release](#package-release) does: the build
+  sets up no Swift toolchain and skips the `.env`, compile and binary steps,
+  so `pkgbuild` packages the contents of the required `payload-path` at the
+  install root `/` with `scripts-path`, `identifier` and the version, unsigned.
+  `resource-bundles`, `entitlements` and `private-deps` are
+  refused. Versions, attestation, the staging prerelease, approval and Jamf
+  work as for any package. Promotion takes no extra input: a commit with no
+  `Package.swift` has no SwiftPM dependencies to check, while one that has it
+  is checked as usual.
 - **Toolchain.** The build installs the Swift toolchain that the package's
   committed `.swift-version` names, or the latest Swift release when it has
   none. swiftly rewrites `.swift-version` when it selects a toolchain, so the
@@ -1060,7 +1075,7 @@ jobs:
   library, which no staging Mac runs, is
   exempt; the packages that pin it wait instead. A library's promote job
   still needs `pull-requests: read`, or GitHub refuses the run at startup.
-- **Libraries.** `library: true` builds nothing. Stage waits for CI, then tags
+- **Libraries.** `kind: library` builds nothing. Stage waits for CI, then tags
   `vX.Y.Z-staging.<run id>.<attempt>` with a prerelease that holds only the
   manifest, and promotion tags `vX.Y.Z` on the same commit. SwiftPM resolves
   only stable versions for a requirement such as `from: "1.2.0"`, so a staging
@@ -1160,8 +1175,8 @@ jobs:
 
 **File:** `.github/workflows/pkg-release.yml`
 
-**Compatibility workflow.** A payload-only package needs its own replacement;
-Swift stage/promote has no payload-only mode. See the [rules and remaining callers](docs/release-label-compatibility.md).
+**Compatibility workflow.** New payload/scripts-only callers use [Swift Stage and Promote](#swift-stage-and-promote)
+with `kind: payload`. See the [rules and remaining callers](docs/release-label-compatibility.md).
 
 Release pipeline for macOS `.pkg` distribution packages that don't contain a compiled binary. Packages payload files and scripts into a `.pkg`, creates a GitHub Release, and optionally uploads to Jamf Pro. Use this instead of `swift-release` when your package only delivers configuration files, LaunchDaemons, scripts, or other non-binary payload.
 

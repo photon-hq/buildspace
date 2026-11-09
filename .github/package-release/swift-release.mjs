@@ -308,7 +308,9 @@ function releaseProblem(run, dependency, version, revision) {
  * by the pins of its committed Package.resolved, which its build resolved from
  * and could not change. A library, whose consumers resolve its requirements
  * themselves, and a package without Package.resolved are checked by the
- * requirements in Package.swift, whose lowest version must be released.
+ * requirements in Package.swift, whose lowest version must be released. Staging
+ * compiles nothing without Package.swift, so a package from a commit that has
+ * none is payload-only and has no SwiftPM dependencies.
  */
 export function dependencyFindings({ repository, sourceSha, library = false, run = exec, dependencyRun = run }) {
   const owner = repository.split("/")[0];
@@ -341,7 +343,10 @@ export function dependencyFindings({ repository, sourceSha, library = false, run
     return { dependencies, findings };
   }
   const manifest = sourceFile(run, repository, sourceSha, "Package.swift");
-  if (manifest === undefined) throw new Error(`${sourceSha} has no Package.swift`);
+  if (manifest === undefined) {
+    if (library) throw new Error(`${sourceSha} has no Package.swift`);
+    return { dependencies, findings };
+  }
   for (const declaration of packageDeclarations(manifest)) {
     const url = /\burl\s*:\s*"((?:[^"\\\n]|\\.)*)"/.exec(declaration)?.[1];
     if (url === undefined) {

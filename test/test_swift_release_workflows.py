@@ -51,7 +51,7 @@ class WorkflowTests(unittest.TestCase):
     def test_caller_code_and_its_secrets_stay_in_the_read_only_build_job(self):
         build = STAGE['jobs']['build']
         self.assertEqual(build['permissions'], {'contents': 'read', 'actions': 'read'})
-        self.assertEqual(build['runs-on'], "${{ inputs.library && 'ubuntu-24.04' || 'macos-26' }}")
+        self.assertEqual(build['runs-on'], "${{ inputs.kind == 'library' && 'ubuntu-24.04' || 'macos-26' }}")
         for workflow in (STAGE, PROMOTE):
             for name, job in workflow['jobs'].items():
                 if workflow is STAGE and name == 'build':
@@ -65,6 +65,27 @@ class WorkflowTests(unittest.TestCase):
         holders = [s.get('name') for s in build['steps'] if 'secrets.SECRET_ENV_VARS' in yaml.dump(s)]
         self.assertEqual(holders, list(BUILDS))
 
+    def test_the_kind_must_be_known_and_a_payload_takes_only_payload_inputs(self):
+        check = step(STAGE['jobs']['version'], 'Check the kind and the inputs it takes')
+        self.assertEqual(STAGE['jobs']['version']['steps'][0], check)
+        self.assertNotIn('if', check)
+        defaults = {name: field.get('default', '') for name, field in STAGE['on']['workflow_call']['inputs'].items()}
+        for inputs, error in (
+            ({}, None),
+            ({'kind': 'payload', 'payload-path': 'payload', 'scripts-path': 'scripts'}, None),
+            ({'kind': 'Library'}, 'kind must be executable, payload or library'),
+            ({'kind': 'payload'}, 'A payload needs payload-path'),
+            ({'kind': 'payload', 'payload-path': 'payload', 'entitlements': 'ent.plist'}, 'A payload needs payload-path'),
+        ):
+            given = {**defaults, **inputs}
+            env = {name: re.sub(r'\$\{\{ inputs\.([\w-]+) \}\}', lambda match: given[match[1]], value) for name, value in check['env'].items()}
+            result = subprocess.run(['bash', '-c', check['run']], env={**os.environ, **env}, capture_output=True, text=True)
+            if error:
+                self.assertNotEqual(result.returncode, 0, inputs)
+                self.assertIn(f'::error::{error}', result.stderr, inputs)
+            else:
+                self.assertEqual(result.returncode, 0, (inputs, result.stderr))
+
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
         self.assertEqual(publish['needs'], ['version', 'build'])
@@ -73,7 +94,7 @@ class WorkflowTests(unittest.TestCase):
         names = [s.get('name') for s in publish['steps']]
         attest = step(publish, 'Attest the staging package and its production candidate')
         self.assertLess(names.index(attest['name']), names.index('Publish the staging build and attach its candidate'))
-        self.assertEqual(attest['if'], '${{ !inputs.library }}')
+        self.assertEqual(attest['if'], "inputs.kind != 'library'")
         self.assertEqual(publish['concurrency']['cancel-in-progress'], 'false')
 
     def test_promotion_resolves_read_only_and_releases_behind_the_environment(self):
@@ -125,7 +146,7 @@ class WorkflowTests(unittest.TestCase):
     def test_jamf_receives_only_the_released_package_of_an_approved_promotion(self):
         jamf = PROMOTE['jobs']['jamf-upload']
         self.assertEqual(jamf['needs'], ['resolve', 'publish'])
-        self.assertEqual(jamf['if'], "inputs.jamf-url != '' && !inputs.library")
+        self.assertEqual(jamf['if'], "inputs.jamf-url != '' && inputs.kind != 'library'")
         self.assertTrue(jamf['uses'].startswith('photon-hq/jamf-package-updater/.github/workflows/jamf-upload.yml@'))
         self.assertEqual(jamf['with']['artifact_name'], 'swift-promotion')
         self.assertEqual(jamf['with']['tool_ref'], jamf['uses'].rsplit('@', 1)[1])
@@ -229,6 +250,22 @@ class BuildStepTests(unittest.TestCase):
             self.assertIn(f'VERSION={version}', (root / 'usr/local/bin/macrocosm-astrolabe').read_text())
         self.assertEqual((self.temp / 'swift-args').read_text().splitlines(), ['build -c release', 'build -c release --show-bin-path'] * 2)
         self.assertEqual(len(re.findall(r'^-s - --entitlements ent\.plist -f /.+/\.build/release/macrocosm-astrolabe$', (self.temp / 'signed').read_text(), re.M)), 2)
+        self.assertFalse((self.root / '.env').exists())
+
+    def test_a_payload_packages_its_payload_and_scripts_without_compiling(self):
+        executable(self.bin / 'swift', 'exit 1\n')
+        (self.root / 'payload/Library/LaunchDaemons').mkdir(parents=True)
+        (self.root / 'payload/Library/LaunchDaemons/codes.photon.example.plist').write_text('plist')
+        failure = self.build(kind='payload', payload_path='payload', scripts_path='scripts')
+        self.assertIsNone(failure, failure and failure.stderr)
+        for channel, version in (('staging', '1.27.0-staging.9.1'), ('production', '1.27.0')):
+            package = self.temp / 'pack' / channel / 'macrocosm-astrolabe.pkg'
+            args = package.read_text().splitlines()
+            self.assertEqual(args[args.index('--version') + 1], version)
+            self.assertEqual(args[args.index('--scripts') + 1], 'scripts')
+            root = Path(str(package) + '.root')
+            self.assertEqual(sorted(str(p.relative_to(root)) for p in root.rglob('*')), ['Library', 'Library/LaunchDaemons', 'Library/LaunchDaemons/codes.photon.example.plist'])
+        self.assertFalse((self.temp / 'compiled').exists())
         self.assertFalse((self.root / '.env').exists())
 
     def test_a_package_needs_a_valid_name_and_an_identifier(self):
