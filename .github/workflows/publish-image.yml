@@ -228,14 +228,14 @@ jobs:
         with:
           subject-name: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: false
+          push-to-registry: true
       - name: Retry attestation once for this newly built image
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.attest.outcome == 'failure' }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ steps.registry.outputs.registry }}/${{ inputs.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: false
+          push-to-registry: true
       # The tag is what a deployment pipeline discovers and what a retry reuses,
       # so it must never exist without the attestation. A run that fails before
       # this step leaves an untagged image and the next attempt builds again.
