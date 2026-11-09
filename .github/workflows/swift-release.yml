@@ -42,7 +42,7 @@ on:
         type: boolean
         required: false
         default: false
-        description: "Force a stable release. Overrides labels."
+        description: "Enable the legacy release; a prerelease input or label still selects RC mode."
       jamf-url:
         type: string
         required: false

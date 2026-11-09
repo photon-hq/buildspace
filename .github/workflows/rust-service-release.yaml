@@ -50,7 +50,7 @@ on:
         type: boolean
         required: false
         default: false
-        description: "Run in dry-run mode (no actual publishing)"
+        description: "Publisher dry run only; version commits, GitHub Releases, and configured Homebrew tap commits and pushes can still occur."
       tap-repo:
         type: string
         required: false
