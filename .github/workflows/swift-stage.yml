@@ -175,45 +175,52 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-contents: read
-      # Both builds share one checkout and build directory. BetterEnv declares
-      # .env as a build input, so the second build recompiles what reads it.
-      - name: Build the staging package and its production candidate
+      - name: Check the package and its source
         if: ${{ !inputs.library }}
         env:
           PACKAGE_NAME: ${{ inputs.package-name }}
           IDENTIFIER: ${{ inputs.identifier }}
-          SCRIPTS_PATH: ${{ inputs.scripts-path }}
-          PAYLOAD_PATH: ${{ inputs.payload-path }}
-          RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
-          ENTITLEMENTS: ${{ inputs.entitlements }}
-          RELEASE_VERSION: ${{ needs.version.outputs.version }}
-          STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
-          SECRET_ENV_VARS: ${{ secrets.SECRET_ENV_VARS }}
-          DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
         run: |
           set -euo pipefail
           [[ "$PACKAGE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "::error::Invalid package name: $PACKAGE_NAME" >&2; exit 1; }
           [[ -n "$IDENTIFIER" ]] || { echo "::error::A package needs an identifier" >&2; exit 1; }
           test -z "$(git status --porcelain --untracked-files=no)"
-          if [[ -n "$DEPENDENCY_TOKEN" ]]; then
-            git config --global url."https://x-access-token:${DEPENDENCY_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
-          for channel in staging production; do
-            version="$RELEASE_VERSION"
-            if [[ "$channel" == staging ]]; then version="$RELEASE_VERSION$STAGING_SUFFIX"; fi
-            printf '%s\n' "VERSION=$version" "BUILD_ENVIRONMENT=production" "RELEASE_CHANNEL=$channel" "$SECRET_ENV_VARS" > .env
-            swift build -c release
-            binary=".build/release/$PACKAGE_NAME"
-            if [[ -n "$ENTITLEMENTS" ]]; then codesign -s - --entitlements "$ENTITLEMENTS" -f "$binary"; fi
-            root="$RUNNER_TEMP/pkgroot/$channel"
-            mkdir -p "$root/usr/local/bin" "$RUNNER_TEMP/pack/$channel"
-            cp "$binary" "$root/usr/local/bin/"
-            if [[ -n "$PAYLOAD_PATH" ]]; then cp -R "$PAYLOAD_PATH/" "$root/"; fi
-            for bundle in $RESOURCE_BUNDLES; do cp -R ".build/release/$bundle" "$root/usr/local/bin/"; done
-            args=(--root "$root" --identifier "$IDENTIFIER" --install-location / --version "$version")
-            if [[ -n "$SCRIPTS_PATH" ]]; then args+=(--scripts "$SCRIPTS_PATH"); fi
-            pkgbuild "${args[@]}" "$RUNNER_TEMP/pack/$channel/$PACKAGE_NAME.pkg"
-          done
+      - name: Let SwiftPM clone private dependencies
+        if: steps.dependency-token.outputs.token != ''
+        env:
+          DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
+        run: git config --global url."https://x-access-token:${DEPENDENCY_TOKEN}@github.com/".insteadOf "https://github.com/"
+      # Both builds share one checkout and build directory. BetterEnv declares
+      # .env as a build input, so the second build recompiles what reads it.
+      - name: Build the staging package
+        if: ${{ !inputs.library }}
+        uses: $/.github/blocks/swift-stage-package
+        with:
+          package-name: ${{ inputs.package-name }}
+          identifier: ${{ inputs.identifier }}
+          channel: staging
+          version: ${{ needs.version.outputs.version }}-staging.${{ github.run_id }}.${{ github.run_attempt }}
+          scripts-path: ${{ inputs.scripts-path }}
+          payload-path: ${{ inputs.payload-path }}
+          resource-bundles: ${{ inputs.resource-bundles }}
+          entitlements: ${{ inputs.entitlements }}
+          secret-env-vars: ${{ secrets.SECRET_ENV_VARS }}
+      - name: Build the production candidate
+        if: ${{ !inputs.library }}
+        uses: $/.github/blocks/swift-stage-package
+        with:
+          package-name: ${{ inputs.package-name }}
+          identifier: ${{ inputs.identifier }}
+          channel: production
+          version: ${{ needs.version.outputs.version }}
+          scripts-path: ${{ inputs.scripts-path }}
+          payload-path: ${{ inputs.payload-path }}
+          resource-bundles: ${{ inputs.resource-bundles }}
+          entitlements: ${{ inputs.entitlements }}
+          secret-env-vars: ${{ secrets.SECRET_ENV_VARS }}
+      - name: Require the builds to leave tracked files unchanged
+        if: ${{ !inputs.library }}
+        run: |
           rm -f .env
           if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
             git status --short --untracked-files=no >&2
