@@ -1009,7 +1009,8 @@ jobs:
   label added while the promotion waits for approval doesn't count. If a
   `vX.Y.Z` comes out while the promotion waits for approval, publishing
   checks again from that release, because it sent staging Macs back to it;
-  a skip reason given at resolution still applies. The
+  that check reads the labels as they are then. A skip reason given at
+  resolution still applies. The
   reviewer's summary lists each change,
   its time on staging and its minimum. Reading the labels takes
   `pull-requests: read` on the promote job. An empty `minimum-staging-age`
