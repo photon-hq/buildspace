@@ -555,7 +555,7 @@ source commit, and moves `latest`.
 - `downstream` repositories receive an `internal-package-published` dispatch after
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
-Local validation: `node --test test/package-release.test.mjs test/release-version.test.mjs` (after
+Local validation: `node --test test/package-*.test.mjs test/release-version.test.mjs` (after
 `npm ci --prefix .github/package-release`) and `python3 -m unittest discover -s test`
 (the crate packaging test runs when `cargo` is installed).
 
