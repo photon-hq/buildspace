@@ -447,8 +447,12 @@ source commit, and moves `latest`.
   other tarball, or the build fails. A build that mixes both kinds sets
   `package-selection` in both callers to its exact names and `@scope/` prefixes,
   such as `app @app/`; the selection must include `package`, which still names
-  the build. Names that map to one release filename, such as `@app/core` and
-  `app-core`, are rejected before collection writes any files. The staging build and the promoted
+  the build. Every exact name must be packed; a scope prefix may match any
+  number of packages. The effective selection is recorded in the manifest and
+  must match at promotion, ignoring order and duplicate entries. Older manifests
+  without it retain the selection derived from their package and registry.
+  Names that map to one release filename, such as `@app/core` and `app-core`,
+  are rejected before collection writes any files. The staging build and the promoted
   candidates are published through npm trusted publishing, with provenance and
   no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0. On npmjs, give
   the package a trusted publisher for each caller workflow file, for example

@@ -107,7 +107,7 @@ test("a mixed npmjs build releases exactly the names and scopes its package sele
   await publishWith(fake, options);
   const { manifest: resolved } = await resolveWith(fake, { ...options, version: PUBLIC_STAGING });
   assert.deepEqual(resolved, manifest);
-  await publishWith(fake, { ...options, directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
+  await publishWith(fake, { ...options, packageSelection: "@app/ app app", directory: join(root, "candidate"), channel: "production", sourceSha: undefined, runId: "901" });
   assert.deepEqual(commands(fake.calls, "npm", "dist-tag").filter((call) => call[2] === "add").map((call) => call.slice(3, 5)), [
     [`@app/core@${PUBLIC_STAGING}`, "staging"], [`app@${PUBLIC_STAGING}`, "staging"],
     ["@app/core@3.9.0", "latest"], ["app@3.9.0", "latest"],
@@ -128,6 +128,40 @@ test("collect refuses package names that would overwrite one release artifact", 
     collectBoth({ ...PUBLIC, packageInput: "app-core", packageSelection: "app-core @app/" }),
     /app-core-3\.9\.0\.tgz: multiple packages map to the same release filename/
   );
+});
+
+test("every exact selection is required in the packs and the published manifest", async () => {
+  const options = { ...PUBLIC, packageInput: "app", packageSelection: "app @app/core" };
+  for (const [channel, version] of [["staging", PUBLIC_STAGING], ["production", "3.9.0"]])
+    pack(join(root, channel), { name: "app", version });
+  await assert.rejects(collectBoth(options), /@app\/core was not packed/);
+
+  const manifest = await collectBoth({ ...options, packageSelection: "app @app/" });
+  assert.deepEqual(manifest.packages.map(({ name }) => name), ["app"]);
+  writeFileSync(join(root, "release/release-manifest.json"), JSON.stringify({ ...manifest, selection: ["app", "@app/core"] }));
+  const fake = world();
+  await assert.rejects(publishWith(fake, options), /selected package @app\/core is missing/);
+  assert.equal(fake.calls.length, 0);
+});
+
+test("promotion cannot narrow the staged dependency policy", async () => {
+  const options = { ...PUBLIC, packageInput: "app", packageSelection: "app @app/" };
+  for (const [channel, version] of [["staging", PUBLIC_STAGING], ["production", "3.9.0"]]) {
+    pack(join(root, channel), { name: "app", version, dependencies: { "@app/core": version } });
+    pack(join(root, channel), { name: "@app/core", version, dependencies: { "@app/helper": "1.0.0" } });
+  }
+  const manifest = await collectBoth(options);
+  const fake = world();
+  await publishWith(fake, options);
+  await assert.rejects(resolveWith(fake, { ...options, version: PUBLIC_STAGING }), /@app\/helper@1\.0\.0 is not published/);
+  const narrowed = { ...options, packageSelection: "app @app/core" };
+  await assert.rejects(resolveWith(fake, { ...narrowed, version: PUBLIC_STAGING }), /package selection/);
+
+  fake.calls.length = 0;
+  await assert.rejects(publishWith(fake, { ...narrowed, channel: "production", sourceSha: undefined, runId: "901" }), /package selection/);
+  assert.equal(fake.calls.length, 0);
+  const { selection: _, ...legacy } = manifest;
+  await assert.rejects(verifyManifest(join(root, "release"), legacy, { repository: REPOSITORY, ...options, channels: ["production"] }), /package selection/);
 });
 
 test("npmjs is read without credentials and past its CDN", async (t) => {
@@ -208,7 +242,7 @@ test("a build staged before registries were recorded is promoted to GitHub Packa
   const { manifest: staged, fake } = await stagedWorld();
   assert.equal(staged.registry, "https://npm.pkg.github.com");
   const path = join(root, "release/release-manifest.json");
-  const { registry: _, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
+  const { registry: _registry, selection: _selection, ...manifest } = JSON.parse(readFileSync(path, "utf8"));
   writeFileSync(path, JSON.stringify(manifest));
   assert.equal((await resolveWith(fake)).pending, true);
   await assert.rejects(resolveWith(fake, { ...PUBLIC, packageInput: "@photon-hq/adapter" }), /registry https:\/\/npm\.pkg\.github\.com/);

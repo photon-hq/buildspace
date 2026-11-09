@@ -29,6 +29,8 @@ const fileName = (name, version) =>
 /** A selection lists `@scope/` prefixes and exact package names. */
 export const matchesPackage = (name, selection) =>
   typeof name === "string" && selection.some((entry) => (entry.endsWith("/") ? name.startsWith(entry) : name === entry));
+const missingSelectedPackage = (selection, packages) =>
+  selection.find((name) => !name.endsWith("/") && !packages.has(name));
 const crateFile = (name, version) => `${name}-${version}.crate`;
 const sorted = (values) => JSON.stringify([...values].sort());
 
@@ -284,6 +286,8 @@ export async function collect({
     throw new Error(
       `${names.primary} was not packed; set the package input to the package that names the release`
     );
+  const missing = missingSelectedPackage(names.selection, production);
+  if (missing) throw new Error(`${missing} was not packed; every exact package selection must be present`);
   const filenames = new Set();
   for (const name of packed) {
     const candidate = production.get(name).manifest.version;
@@ -335,6 +339,7 @@ export async function collect({
     suffix,
     package: names.primary,
     registry: names.registryUrl,
+    selection: names.selection,
     stagingTag: `${names.tagPrefix}${primary.staging.version}`,
     productionTag: `${names.productionTagPrefix}${primary.production.version}`,
     packages,
@@ -391,6 +396,9 @@ export async function verifyManifest(
     fail(`suffix ${manifest.suffix}`);
   if (manifest.package !== names.primary) fail(`package ${manifest.package}`);
   if ((manifest.registry ?? GITHUB_PACKAGES) !== names.registryUrl) fail(`registry ${manifest.registry ?? GITHUB_PACKAGES}`);
+  const selection = manifest.selection ?? releaseNames({ repository, packageInput, registryUrl }).selection;
+  if (!Array.isArray(selection) || sorted(new Set(selection)) !== sorted(new Set(names.selection)))
+    fail("package selection differs from the staged policy");
   if (manifest.formatVersion === 3 && bumpProblem(manifest.bump)) fail(`bump ${bumpProblem(manifest.bump)}`);
   if (bump && JSON.stringify(manifest.bump) !== JSON.stringify(bump)) fail("bump, which is not the version this run computed");
   const seen = new Set();
@@ -407,6 +415,8 @@ export async function verifyManifest(
     for (const channel of channels)
       if (pkg[channel].file !== fileName(pkg.name, pkg[channel].version)) fail(`file ${pkg[channel].file}`);
   }
+  const missing = missingSelectedPackage(names.selection, seen);
+  if (missing) fail(`selected package ${missing} is missing`);
   const crateNames = new Set();
   for (const crate of manifest.crates) {
     if (!CRATE_NAME.test(crate.name ?? "") || crateNames.has(crate.name)) fail(`crate ${crate.name}`);
