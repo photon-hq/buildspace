@@ -284,6 +284,7 @@ export async function collect({
     throw new Error(
       `${names.primary} was not packed; set the package input to the package that names the release`
     );
+  const filenames = new Set();
   for (const name of packed) {
     const candidate = production.get(name).manifest.version;
     const build = staging.get(name).manifest.version;
@@ -293,6 +294,10 @@ export async function collect({
       throw new Error(`${name}@${candidate}: every package of the build is packed at its release version ${bump.version}, RELEASE_VERSION`);
     if (build !== `${candidate}${suffix}`)
       throw new Error(`${name}: staging packed ${build}, expected ${candidate}${suffix}`);
+    const file = fileName(name, candidate);
+    if (filenames.has(file))
+      throw new Error(`${file}: multiple packages map to the same release filename`);
+    filenames.add(file);
   }
   await mkdir(output, { recursive: true });
   const entry = async ({ path, manifest }) => {
@@ -358,9 +363,11 @@ async function verifyFiles(directory, manifest, channels) {
     ...manifest.packages.flatMap((pkg) => channels.map((channel) => pkg[channel])),
     ...manifest.crates,
   ];
-  for (const { file, sha256: expected } of files)
-    if (sha256(await readFile(join(directory, file))) !== expected)
+  for (const { file, sha256: expected, integrity: expectedIntegrity } of files) {
+    const buffer = await readFile(join(directory, file));
+    if (sha256(buffer) !== expected || (file.endsWith(".tgz") && integrity(buffer) !== expectedIntegrity))
       throw new Error(`${file} does not match the release manifest`);
+  }
 }
 
 /**
