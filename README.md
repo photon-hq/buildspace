@@ -260,6 +260,12 @@ publish:
   same manifest bytes back with the expected digest, so the registry refuses a
   tag for any other manifest. The publishing role needs `ecr:BatchGetImage` as
   well as `ecr:PutImage`.
+- The attestation is also pushed to the registry as an OCI 1.1 referrer of the
+  image digest, so an admission controller can verify provenance from the
+  registry alone, without calling GitHub. Registries that honour OCI subjects
+  keep a referrer while its image exists (Amazon ECR exempts referrers from
+  lifecycle rules until their subject is deleted). The publishing role pushes
+  it with the same layer and manifest permissions it uses for the image.
 - The caller's repository identity and configured environment remain the AWS
   OIDC subject. The reusable workflow becomes the attestation signer:
   `photon-hq/buildspace/.github/workflows/publish-image.yml`. Verifiers must check
