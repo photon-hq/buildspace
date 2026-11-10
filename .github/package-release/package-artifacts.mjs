@@ -10,6 +10,7 @@ export const GITHUB_PACKAGES = "https://npm.pkg.github.com";
 export const NPMJS = "https://registry.npmjs.org";
 const SCOPED_NAME = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const UNSCOPED_NAME = /^[a-z0-9][a-z0-9._-]{0,213}$/;
+const SCOPE = /^@[a-z0-9][a-z0-9._-]*\/$/;
 export const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SUFFIX = /^-staging\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 export const SHA = /^[a-f0-9]{40}$/;
@@ -25,8 +26,11 @@ export const integrity = (buffer) =>
   `sha512-${createHash("sha512").update(buffer).digest("base64")}`;
 const fileName = (name, version) =>
   `${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`;
+/** A selection lists `@scope/` prefixes and exact package names. */
 export const matchesPackage = (name, selection) =>
-  typeof name === "string" && (selection.endsWith("/") ? name.startsWith(selection) : name === selection);
+  typeof name === "string" && selection.some((entry) => (entry.endsWith("/") ? name.startsWith(entry) : name === entry));
+const missingSelectedPackage = (selection, packages) =>
+  selection.find((name) => !name.endsWith("/") && !packages.has(name));
 const crateFile = (name, version) => `${name}-${version}.crate`;
 const sorted = (values) => JSON.stringify([...values].sort());
 
@@ -180,20 +184,27 @@ export function publishOrder(manifests) {
  * A repository whose `vX.Y.Z` tags already name something else, such as the
  * releases of a service, gives its packages a production tag prefix of their
  * own: `<name>-v`. GitHub Packages holds the owner's scope; a public package
- * on npmjs names its own scope, or only itself when unscoped.
+ * on npmjs names its own scope, or only itself when unscoped, unless the
+ * package selection lists the build's exact names and scopes.
  */
-export function releaseNames(repository, packageInput = "", tagPrefix = "", productionTagPrefix = "", registryUrl = GITHUB_PACKAGES) {
+export function releaseNames({ repository, packageInput = "", packageSelection = "", tagPrefix = "", productionTagPrefix = "", registryUrl = GITHUB_PACKAGES }) {
   const [owner, repo] = repository.split("/");
   if (productionTagPrefix && !PRODUCTION_TAG_PREFIX.test(productionTagPrefix))
     throw new Error(`Invalid production tag prefix ${productionTagPrefix}: use v or <name>-v`);
   if (![GITHUB_PACKAGES, NPMJS].includes(registryUrl))
     throw new Error(`Unsupported registry ${registryUrl}: use ${GITHUB_PACKAGES} or ${NPMJS}`);
-  const unscoped = typeof packageInput === "string" && UNSCOPED_NAME.test(packageInput) && !["node_modules", "favicon.ico"].includes(packageInput);
+  const isUnscoped = (name) => typeof name === "string" && UNSCOPED_NAME.test(name) && !["node_modules", "favicon.ico"].includes(name);
+  const unscoped = isUnscoped(packageInput);
   if (registryUrl === NPMJS && !SCOPED_NAME.test(packageInput) && !unscoped)
     throw new Error("A package on npmjs is named by the package input, @scope/name or name");
+  const listed = packageSelection.split(/\s+/).filter(Boolean);
+  if (listed.length && (registryUrl !== NPMJS || listed.some((entry) => !SCOPE.test(entry) && !SCOPED_NAME.test(entry) && !isUnscoped(entry))))
+    throw new Error("The package selection lists the @scope/ prefixes and names of a build on npmjs");
+  if (listed.length && !matchesPackage(packageInput, listed))
+    throw new Error(`The package selection must include the package input ${packageInput}`);
   return {
     registryUrl,
-    selection: registryUrl === NPMJS ? (unscoped ? packageInput : `${packageInput.split("/")[0]}/`) : `@${owner}/`,
+    selection: listed.length ? listed : [registryUrl === NPMJS ? (unscoped ? packageInput : `${packageInput.split("/")[0]}/`) : `@${owner}/`],
     primary: packageInput || `@${owner}/${repo}`,
     tagPrefix: tagPrefix || `${repo}-staging-`,
     productionTagPrefix: productionTagPrefix || "v",
@@ -209,9 +220,7 @@ async function readPacked(directory, selection) {
     const path = join(directory, file);
     const manifest = readTarballManifest(path);
     if (!matchesPackage(manifest.name, selection))
-      throw new Error(selection.endsWith("/")
-        ? `${file}: the package name must use the ${selection} scope`
-        : `${file}: the package name must be ${selection}`);
+      throw new Error(`${file}: ${manifest.name} is not in the release selection ${selection.join(" ")}`);
     if (packed.has(manifest.name))
       throw new Error(`${manifest.name} was packed more than once`);
     packed.set(manifest.name, { path, manifest });
@@ -252,6 +261,7 @@ export async function collect({
   sourceSha,
   repository,
   packageInput,
+  packageSelection,
   tagPrefix,
   productionTagPrefix,
   registryUrl,
@@ -262,7 +272,7 @@ export async function collect({
   if (!SHA.test(sourceSha)) throw new Error("An exact source commit is required");
   const problem = bumpProblem(bump);
   if (problem) throw new Error(`Invalid release version: ${problem}`);
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
+  const names = releaseNames({ repository, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl });
   // Cargo pins an internal crate by the vX.Y.Z tag of its release.
   if (crates.length && names.productionTagPrefix !== "v")
     throw new Error("Crates are released under vX.Y.Z tags; a build with crates cannot use another production tag prefix");
@@ -276,6 +286,9 @@ export async function collect({
     throw new Error(
       `${names.primary} was not packed; set the package input to the package that names the release`
     );
+  const missing = missingSelectedPackage(names.selection, production);
+  if (missing) throw new Error(`${missing} was not packed; every exact package selection must be present`);
+  const filenames = new Set();
   for (const name of packed) {
     const candidate = production.get(name).manifest.version;
     const build = staging.get(name).manifest.version;
@@ -285,6 +298,10 @@ export async function collect({
       throw new Error(`${name}@${candidate}: every package of the build is packed at its release version ${bump.version}, RELEASE_VERSION`);
     if (build !== `${candidate}${suffix}`)
       throw new Error(`${name}: staging packed ${build}, expected ${candidate}${suffix}`);
+    const file = fileName(name, candidate);
+    if (filenames.has(file))
+      throw new Error(`${file}: multiple packages map to the same release filename`);
+    filenames.add(file);
   }
   await mkdir(output, { recursive: true });
   const entry = async ({ path, manifest }) => {
@@ -322,6 +339,7 @@ export async function collect({
     suffix,
     package: names.primary,
     registry: names.registryUrl,
+    selection: names.selection,
     stagingTag: `${names.tagPrefix}${primary.staging.version}`,
     productionTag: `${names.productionTagPrefix}${primary.production.version}`,
     packages,
@@ -350,9 +368,11 @@ async function verifyFiles(directory, manifest, channels) {
     ...manifest.packages.flatMap((pkg) => channels.map((channel) => pkg[channel])),
     ...manifest.crates,
   ];
-  for (const { file, sha256: expected } of files)
-    if (sha256(await readFile(join(directory, file))) !== expected)
+  for (const { file, sha256: expected, integrity: expectedIntegrity } of files) {
+    const buffer = await readFile(join(directory, file));
+    if (sha256(buffer) !== expected || (file.endsWith(".tgz") && integrity(buffer) !== expectedIntegrity))
       throw new Error(`${file} does not match the release manifest`);
+  }
 }
 
 /**
@@ -363,9 +383,9 @@ async function verifyFiles(directory, manifest, channels) {
 export async function verifyManifest(
   directory,
   manifest,
-  { repository, sourceSha, runId, packageInput, tagPrefix, productionTagPrefix, registryUrl, channels, crates, bump }
+  { repository, sourceSha, runId, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl, channels, crates, bump }
 ) {
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
+  const names = releaseNames({ repository, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl });
   const fail = (reason) => {
     throw new Error(`The release manifest does not describe this build: ${reason}`);
   };
@@ -376,6 +396,9 @@ export async function verifyManifest(
     fail(`suffix ${manifest.suffix}`);
   if (manifest.package !== names.primary) fail(`package ${manifest.package}`);
   if ((manifest.registry ?? GITHUB_PACKAGES) !== names.registryUrl) fail(`registry ${manifest.registry ?? GITHUB_PACKAGES}`);
+  const selection = manifest.selection ?? releaseNames({ repository, packageInput, registryUrl }).selection;
+  if (!Array.isArray(selection) || sorted(new Set(selection)) !== sorted(new Set(names.selection)))
+    fail("package selection differs from the staged policy");
   if (manifest.formatVersion === 3 && bumpProblem(manifest.bump)) fail(`bump ${bumpProblem(manifest.bump)}`);
   if (bump && JSON.stringify(manifest.bump) !== JSON.stringify(bump)) fail("bump, which is not the version this run computed");
   const seen = new Set();
@@ -392,6 +415,8 @@ export async function verifyManifest(
     for (const channel of channels)
       if (pkg[channel].file !== fileName(pkg.name, pkg[channel].version)) fail(`file ${pkg[channel].file}`);
   }
+  const missing = missingSelectedPackage(names.selection, seen);
+  if (missing) fail(`selected package ${missing} is missing`);
   const crateNames = new Set();
   for (const crate of manifest.crates) {
     if (!CRATE_NAME.test(crate.name ?? "") || crateNames.has(crate.name)) fail(`crate ${crate.name}`);

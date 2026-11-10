@@ -450,7 +450,15 @@ source commit, and moves `latest`.
   `app`, in both callers, and grants `id-token: write` to both calls. A scoped
   name releases every package its `pack` script writes under that scope; an
   unscoped name releases only that package, so its `pack` script must write no
-  other tarball, or the build fails. The staging build and the promoted
+  other tarball, or the build fails. A build that mixes both kinds sets
+  `package-selection` in both callers to its exact names and `@scope/` prefixes,
+  such as `app @app/`; the selection must include `package`, which still names
+  the build. Every exact name must be packed; a scope prefix may match any
+  number of packages. The effective selection is recorded in the manifest and
+  must match at promotion, ignoring order and duplicate entries. Older manifests
+  without it retain the selection derived from their package and registry.
+  Names that map to one release filename, such as `@app/core` and `app-core`,
+  are rejected before collection writes any files. The staging build and the promoted
   candidates are published through npm trusted publishing, with provenance and
   no token, by npm 11.21.1: trusted publishing manages dist-tags from npm 11.21.0.
   Before enabling staging publication, give every selected package a trusted
@@ -466,8 +474,8 @@ source commit, and moves `latest`.
   runs have none. npm scans a new version for a few minutes before it serves it,
   so each publish waits up to 30 minutes for the version to appear before it
   checks its integrity and moves a tag. The dependency rules below apply to the
-  package's own scope, and a build staged for one registry is refused under the
-  other.
+  package's own scope, or to its `package-selection`, and a build staged for one
+  registry is refused under the other.
 - **A failed npm publish job can leave a published version.** If `npm dist-tag`
   reports `This trusted publisher cannot manage dist-tags`, a package maintainer
   must enable **Allow npm dist-tag** for that publisher. For every package in the
@@ -573,7 +581,7 @@ source commit, and moves `latest`.
 - `downstream` repositories receive an `internal-package-published` dispatch after
   each publication, using the `APP_ID` and `APP_PRIVATE_KEY` GitHub App.
 
-Local validation: `node --test test/package-release.test.mjs test/release-version.test.mjs` (after
+Local validation: `node --test test/package-*.test.mjs test/release-version.test.mjs` (after
 `npm ci --prefix .github/package-release`) and `python3 -m unittest discover -s test`
 (the crate packaging test runs when `cargo` is installed).
 

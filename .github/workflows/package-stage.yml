@@ -33,6 +33,10 @@ on:
         description: Package whose version names the build; defaults to @<owner>/<repository>
         default: ''
         type: string
+      package-selection:
+        description: Space-separated exact package names (all required) and @scope/ prefixes for an npmjs build; must include package and select the same names and prefixes in stage and promote
+        default: ''
+        type: string
       tag-prefix:
         description: Staging release tag prefix; defaults to <repository>-staging-
         default: ''
@@ -229,6 +233,7 @@ jobs:
         id: collect
         env:
           PACKAGE: ${{ inputs.package }}
+          PACKAGE_SELECTION: ${{ inputs.package-selection }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           REGISTRY: ${{ inputs.registry }}
@@ -239,7 +244,7 @@ jobs:
           node "$RELEASE_TOOLS/package-release.mjs" collect \
             --staging "$RUNNER_TEMP/pack/staging" --production "$RUNNER_TEMP/pack/production" \
             --crates="$CRATES" --crate-directory "$RUNNER_TEMP/pack/crates" --bump "$BUMP" \
-            --suffix="$STAGING_SUFFIX" --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --suffix="$STAGING_SUFFIX" --package "$PACKAGE" --package-selection "$PACKAGE_SELECTION" --tag-prefix "$TAG_PREFIX" \
             --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" \
             --output "$RUNNER_TEMP/package-release"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -308,6 +313,7 @@ jobs:
       - name: Publish the staging build and attach its candidates
         env:
           PACKAGE: ${{ inputs.package }}
+          PACKAGE_SELECTION: ${{ inputs.package-selection }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           REGISTRY: ${{ inputs.registry }}
@@ -315,7 +321,7 @@ jobs:
           BUMP: ${{ needs.version.outputs.bump }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/package-release" \
-            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --package "$PACKAGE" --package-selection "$PACKAGE_SELECTION" --tag-prefix "$TAG_PREFIX" \
             --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" --crates="$CRATES" --bump "$BUMP"
 
   notify-downstream:

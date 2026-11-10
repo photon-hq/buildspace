@@ -226,6 +226,7 @@ export async function publish({
   repository,
   sourceSha,
   packageInput,
+  packageSelection,
   tagPrefix,
   productionTagPrefix,
   registryUrl,
@@ -241,7 +242,7 @@ export async function publish({
   sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
 }) {
   const manifest = await readManifest(directory);
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
+  const names = releaseNames({ repository, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl });
   registry ??= registryMetadata(names.registryUrl);
   const target = `--registry=${names.registryUrl}`;
   const uploaded = channel === "staging" ? ["staging", "production"] : ["production"];
@@ -250,6 +251,7 @@ export async function publish({
     sourceSha,
     runId: channel === "staging" ? runId : undefined,
     packageInput,
+    packageSelection,
     tagPrefix,
     productionTagPrefix,
     registryUrl,

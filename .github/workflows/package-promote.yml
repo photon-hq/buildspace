@@ -15,6 +15,10 @@ on:
         description: Package whose version names the build; defaults to @<owner>/<repository>
         default: ''
         type: string
+      package-selection:
+        description: Space-separated exact package names (all required) and @scope/ prefixes for an npmjs build; must include package and select the same names and prefixes in stage and promote
+        default: ''
+        type: string
       tag-prefix:
         description: Staging release tag prefix; defaults to <repository>-staging-
         default: ''
@@ -95,6 +99,7 @@ jobs:
           STAGING_VERSION: ${{ inputs.staging-version }}
           IMAGE_TAG: ${{ inputs.image-tag }}
           PACKAGE: ${{ inputs.package }}
+          PACKAGE_SELECTION: ${{ inputs.package-selection }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           REGISTRY: ${{ inputs.registry }}
@@ -104,7 +109,7 @@ jobs:
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" resolve \
             --version "$STAGING_VERSION" --image-tag "$IMAGE_TAG" \
-            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --package "$PACKAGE" --package-selection "$PACKAGE_SELECTION" --tag-prefix "$TAG_PREFIX" \
             --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY" \
             --environment "$ENVIRONMENT" --approved-by "$APPROVED_BY" \
             --signer-workflow "$SIGNER_WORKFLOW" \
@@ -164,12 +169,13 @@ jobs:
       - name: Publish the candidates under latest
         env:
           PACKAGE: ${{ inputs.package }}
+          PACKAGE_SELECTION: ${{ inputs.package-selection }}
           TAG_PREFIX: ${{ inputs.tag-prefix }}
           PRODUCTION_TAG_PREFIX: ${{ inputs.production-tag-prefix }}
           REGISTRY: ${{ inputs.registry }}
         run: |
           node "$RELEASE_TOOLS/package-release.mjs" publish --channel production --directory "$RUNNER_TEMP/package-release" \
-            --package "$PACKAGE" --tag-prefix "$TAG_PREFIX" \
+            --package "$PACKAGE" --package-selection "$PACKAGE_SELECTION" --tag-prefix "$TAG_PREFIX" \
             --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --registry "$REGISTRY"
 
   notify-downstream:

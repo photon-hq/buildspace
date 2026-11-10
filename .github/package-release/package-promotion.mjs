@@ -255,6 +255,7 @@ export function requireReviewers({ repository, environment, approvedBy = "", run
 export async function resolveCandidate({
   repository,
   packageInput,
+  packageSelection,
   tagPrefix,
   productionTagPrefix,
   registryUrl,
@@ -267,7 +268,7 @@ export async function resolveCandidate({
   run = exec,
   registry,
 }) {
-  const names = releaseNames(repository, packageInput, tagPrefix, productionTagPrefix, registryUrl);
+  const names = releaseNames({ repository, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl });
   const sourceSha = IMAGE_TAG.exec(imageTag)?.[1];
   if (imageTag && requested) throw new Error("Supply a staging version or an image tag, not both");
   if (imageTag && !sourceSha) throw new Error("Invalid immutable image tag");
@@ -301,7 +302,7 @@ export async function resolveCandidate({
   const files = [...manifest.packages.map((pkg) => pkg.production.file), ...manifest.crates.map(({ file }) => file)];
   for (const file of files)
     run("gh", ["release", "download", tag, "--repo", repository, "--pattern", file, "--dir", output, "--clobber"]);
-  await verifyManifest(output, manifest, { repository, packageInput, tagPrefix, productionTagPrefix, registryUrl, channels: ["production"] });
+  await verifyManifest(output, manifest, { repository, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl, channels: ["production"] });
   for (const file of files)
     run("gh", [
       "attestation",
