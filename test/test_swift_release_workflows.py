@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -11,7 +12,11 @@ import yaml
 
 STAGE = yaml.load(Path('.github/workflows/swift-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/swift-promote.yml').read_text(), Loader=yaml.BaseLoader)
-CALLER_CODE = ('swift build', 'pkgbuild', 'SECRET_ENV_VARS', 'APP_PRIVATE_KEY', 'setup-swift')
+PACKAGE = yaml.load(Path('.github/blocks/swift-stage-package/action.yml').read_text(), Loader=yaml.BaseLoader)
+CALLER_CODE = ('swift build', 'pkgbuild', 'swift-stage-package', 'SECRET_ENV_VARS', 'APP_PRIVATE_KEY', 'setup-swift')
+BUILDS = ('Build the staging package', 'Build the production candidate')
+# The start of a swift stand-in: records its arguments and answers --show-bin-path.
+SWIFT = 'echo "$@" >> "$RUNNER_TEMP/swift-args"\ncase "$*" in *--show-bin-path) echo .build/release; exit;; esac\n'
 
 
 def step(job, name):
@@ -20,14 +25,16 @@ def step(job, name):
 
 class WorkflowTests(unittest.TestCase):
     def test_actions_are_pinned_and_inputs_never_reach_a_shell_directly(self):
+        steps = list(PACKAGE['runs']['steps'])
         for workflow in (STAGE, PROMOTE):
             for job in workflow['jobs'].values():
                 if 'uses' in job:
                     self.assertRegex(job['uses'], r'@[a-f0-9]{40}$')
-                for s in job.get('steps', []):
-                    if 'uses' in s:
-                        self.assertRegex(s['uses'], r'@[a-f0-9]{40}$')
-                    self.assertNotIn('${{', s.get('run', ''))
+                steps.extend(job.get('steps', []))
+        for s in steps:
+            if 'uses' in s and not s['uses'].startswith('$/'):
+                self.assertRegex(s['uses'], r'@[a-f0-9]{40}$')
+            self.assertNotIn('${{', s.get('run', ''))
 
     def test_the_version_is_computed_read_only_under_v_tags(self):
         version = STAGE['jobs']['version']
@@ -37,7 +44,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('version --production-tag-prefix v --paths "$PATHS"', step(version, 'Compute the release version')['run'])
         build = STAGE['jobs']['build']
         self.assertEqual(build['needs'], 'version')
-        self.assertEqual(step(build, 'Build the staging package and its production candidate')['env']['RELEASE_VERSION'], '${{ needs.version.outputs.version }}')
+        for name in BUILDS:
+            self.assertTrue(step(build, name)['with']['version'].startswith('${{ needs.version.outputs.version }}'), name)
         for job, name in ((build, 'Collect'), (STAGE['jobs']['publish'], 'Publish the staging build and attach its candidate')):
             self.assertEqual(step(job, name)['env']['BUMP'], '${{ needs.version.outputs.bump }}', name)
             self.assertIn('--bump "$BUMP"', step(job, name)['run'], name)
@@ -57,7 +65,7 @@ class WorkflowTests(unittest.TestCase):
         token = step(build, 'Mint a token for private dependencies')
         self.assertEqual({k: v for k, v in token['with'].items() if k.startswith('permission-')}, {'permission-contents': 'read'})
         holders = [s.get('name') for s in build['steps'] if 'secrets.SECRET_ENV_VARS' in yaml.dump(s)]
-        self.assertEqual(holders, ['Build the staging package and its production candidate'])
+        self.assertEqual(holders, list(BUILDS))
 
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
@@ -131,15 +139,16 @@ def executable(path, body):
 
 
 class BuildStepTests(unittest.TestCase):
-    """Runs the build step with stand-ins for swift, codesign and pkgbuild."""
+    """Runs the build job's package steps, and the actions they use, with stand-ins for swift, codesign and pkgbuild."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / 'repository'
         self.bin = Path(self.tmp.name) / 'bin'
-        self.root.mkdir()
-        self.bin.mkdir()
+        self.temp = Path(self.tmp.name) / 'temp'
+        for directory in (self.root, self.bin, self.temp):
+            directory.mkdir()
         git = ['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com']
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
         (self.root / '.gitignore').write_text('.env\n.build/\n')
@@ -147,59 +156,92 @@ class BuildStepTests(unittest.TestCase):
         subprocess.run([*git, 'add', '.'], check=True)
         subprocess.run([*git, 'commit', '-qm', 'source'], check=True)
         # swift build records the .env it compiled with, as BetterEnv bakes it in.
-        executable(self.bin / 'swift', 'mkdir -p .build/release\ncp .env ".build/release/$PACKAGE_NAME"\ncat .env >> "$RUNNER_TEMP/compiled"\n')
+        executable(self.bin / 'swift', SWIFT + 'mkdir -p .build/release/Tool_Tool.bundle\ncp .env .build/release/macrocosm-astrolabe\ncat .env >> "$RUNNER_TEMP/compiled"\n')
         executable(self.bin / 'codesign', 'echo "$@" >> "$RUNNER_TEMP/signed"\n')
         executable(self.bin / 'pkgbuild', 'for out; do :; done\nprintf "%s\\n" "$@" > "$out"\ncp -R "$2" "$out.root"\n')
-        self.script = step(STAGE['jobs']['build'], 'Build the staging package and its production candidate')['run']
+        self.env = {**os.environ, 'PATH': f'{self.bin}:{os.environ["PATH"]}', 'RUNNER_TEMP': str(self.temp), 'GITHUB_OUTPUT': str(self.temp / 'outputs')}
 
-    def build(self, **overrides):
-        env = {
-            **os.environ,
-            'PATH': f'{self.bin}:{os.environ["PATH"]}',
-            'RUNNER_TEMP': str(Path(self.tmp.name) / 'temp'),
-            'PACKAGE_NAME': 'macrocosm-astrolabe',
-            'IDENTIFIER': 'codes.photon.macrocosm-astrolabe',
-            'SCRIPTS_PATH': '',
-            'PAYLOAD_PATH': '',
-            'RESOURCE_BUNDLES': '',
-            'ENTITLEMENTS': '',
-            'RELEASE_VERSION': '1.27.0',
-            'STAGING_SUFFIX': '-staging.9.1',
-            'SECRET_ENV_VARS': 'TAILSCALE_AUTH=secret',
-            'DEPENDENCY_TOKEN': '',
-            **overrides,
+    def run_steps(self, steps, context):
+        """Runs steps as a runner would, returning the first failure; evaluates only the conditions these steps use.
+        As on a runner, a skipped step's outputs are empty."""
+        lookup = lambda name: context.get(name, '') if name.startswith('steps.') else context[name]
+        expand = lambda text: re.sub(r'\$\{\{ ([\w.-]+) \}\}', lambda match: lookup(match[1]), text)
+        for s in steps:
+            negated = re.fullmatch(r'\$\{\{ !([\w.-]+) \}\}', s.get('if', ''))
+            compared = re.fullmatch(r"([\w.-]+) != '(.*)'", s.get('if', ''))
+            self.assertTrue('if' not in s or negated or compared, s.get('if'))
+            if (negated and context[negated[1]] == 'true') or (compared and context[compared[1]] == compared[2]):
+                continue
+            env = {**self.env, **{name: expand(value) for name, value in s.get('env', {}).items()}}
+            given = {name: expand(value) for name, value in s.get('with', {}).items()}
+            action = Path.cwd() / s.get('uses', '$/').removeprefix('$/')
+            definition = yaml.load(next(action.glob('action.y*ml')).read_text(), Loader=yaml.BaseLoader) if 'uses' in s else None
+            if 'run' in s:
+                result = subprocess.run(['bash', '-eo', 'pipefail', '-c', s['run']], cwd=self.root, env=env, capture_output=True, text=True)
+            elif definition['runs']['using'] == 'composite':
+                inputs = {f'inputs.{name}': given.get(name, field.get('default', '')) for name, field in definition['inputs'].items()}
+                result = self.run_steps(definition['runs']['steps'], {'runner.temp': context['runner.temp'], **inputs})
+            else:
+                outputs = Path(tempfile.mkstemp(dir=self.temp)[1])
+                env.update({f'INPUT_{name.upper()}': value for name, value in given.items()}, GITHUB_OUTPUT=str(outputs))
+                result = subprocess.run(['node', str(action / definition['runs']['main'])], cwd=self.root, env=env, capture_output=True, text=True)
+                for name, _, value in re.findall(r'^([\w-]+)<<(\S+)\n(.*?)\n\2$', outputs.read_text(), re.M | re.S):
+                    context[f'steps.{s.get("id")}.outputs.{name}'] = value
+            if result and result.returncode:
+                return result
+        return None
+
+    def build(self, **inputs):
+        steps = STAGE['jobs']['build']['steps']
+        names = [s.get('name') for s in steps]
+        context = {
+            **{f'inputs.{name}': field.get('default', '') for name, field in STAGE['on']['workflow_call']['inputs'].items()},
+            'inputs.package-name': 'macrocosm-astrolabe',
+            'inputs.identifier': 'codes.photon.macrocosm-astrolabe',
+            **{f'inputs.{name.replace("_", "-")}': value for name, value in inputs.items()},
+            'needs.version.outputs.version': '1.27.0',
+            'github.run_id': '9',
+            'github.run_attempt': '1',
+            'secrets.SECRET_ENV_VARS': 'TAILSCALE_AUTH=secret',
+            'steps.dependency-token.outputs.token': '',
+            'runner.temp': str(self.temp),
         }
-        Path(env['RUNNER_TEMP']).mkdir(exist_ok=True)
-        return subprocess.run(['bash', '-c', self.script], cwd=self.root, env=env, capture_output=True, text=True)
+        return self.run_steps(steps[names.index('Check the package and its source'):names.index('Require the builds to leave tracked files unchanged') + 1], context)
 
     def test_each_channel_is_compiled_and_packaged_at_its_own_version(self):
-        result = self.build(ENTITLEMENTS='ent.plist')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        temp = Path(self.tmp.name) / 'temp'
-        self.assertEqual((temp / 'compiled').read_text(), ''.join(
+        (self.root / 'payload/Library/LaunchDaemons').mkdir(parents=True)
+        (self.root / 'payload/Library/LaunchDaemons/codes.photon.example.plist').write_text('plist')
+        failure = self.build(entitlements='ent.plist', payload_path='payload', resource_bundles='Tool_Tool.bundle', scripts_path='scripts')
+        self.assertIsNone(failure, failure and failure.stderr)
+        self.assertEqual((self.temp / 'compiled').read_text(), ''.join(
             f'VERSION={version}\nBUILD_ENVIRONMENT=production\nRELEASE_CHANNEL={channel}\nTAILSCALE_AUTH=secret\n'
             for channel, version in (('staging', '1.27.0-staging.9.1'), ('production', '1.27.0'))
         ))
         for channel, version in (('staging', '1.27.0-staging.9.1'), ('production', '1.27.0')):
-            package = temp / 'pack' / channel / 'macrocosm-astrolabe.pkg'
-            args = package.read_text().splitlines()
-            self.assertEqual(args[args.index('--version') + 1], version)
-            self.assertEqual(args[args.index('--identifier') + 1], 'codes.photon.macrocosm-astrolabe')
-            self.assertNotIn('--scripts', args)
-            binary = Path(str(package) + '.root') / 'usr/local/bin/macrocosm-astrolabe'
-            self.assertIn(f'VERSION={version}', binary.read_text())
-        self.assertEqual((temp / 'signed').read_text().count('--entitlements ent.plist'), 2)
+            package = self.temp / 'pack' / channel / 'macrocosm-astrolabe.pkg'
+            self.assertEqual(package.read_text().splitlines(), [
+                '--root', str(self.temp / 'pkgroot' / channel), '--identifier', 'codes.photon.macrocosm-astrolabe',
+                '--install-location', '/', '--version', version, '--scripts', 'scripts', str(package),
+            ])
+            root = Path(str(package) + '.root')
+            self.assertEqual(sorted(str(p.relative_to(root)) for p in root.rglob('*')), [
+                'Library', 'Library/LaunchDaemons', 'Library/LaunchDaemons/codes.photon.example.plist',
+                'usr', 'usr/local', 'usr/local/bin', 'usr/local/bin/Tool_Tool.bundle', 'usr/local/bin/macrocosm-astrolabe',
+            ])
+            self.assertIn(f'VERSION={version}', (root / 'usr/local/bin/macrocosm-astrolabe').read_text())
+        self.assertEqual((self.temp / 'swift-args').read_text().splitlines(), ['build -c release', 'build -c release --show-bin-path'] * 2)
+        self.assertEqual(len(re.findall(r'^-s - --entitlements ent\.plist -f /.+/\.build/release/macrocosm-astrolabe$', (self.temp / 'signed').read_text(), re.M)), 2)
         self.assertFalse((self.root / '.env').exists())
 
     def test_a_package_needs_a_valid_name_and_an_identifier(self):
-        self.assertIn('Invalid package name', self.build(PACKAGE_NAME='../escape').stderr)
-        self.assertIn('needs an identifier', self.build(IDENTIFIER='').stderr)
+        self.assertIn('Invalid package name', self.build(package_name='../escape').stderr)
+        self.assertIn('needs an identifier', self.build(identifier='').stderr)
 
     def test_a_build_that_changes_tracked_files_fails(self):
-        executable(self.bin / 'swift', 'mkdir -p .build/release\ntouch ".build/release/$PACKAGE_NAME"\necho changed > Package.swift\n')
-        result = self.build()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('changed tracked files', result.stderr)
+        executable(self.bin / 'swift', SWIFT + 'mkdir -p .build/release\ntouch .build/release/macrocosm-astrolabe\necho changed > Package.swift\n')
+        failure = self.build()
+        self.assertIsNotNone(failure)
+        self.assertIn('changed tracked files', failure.stderr)
 
 
 class ToolchainStepTests(unittest.TestCase):
@@ -236,7 +278,7 @@ class ToolchainStepTests(unittest.TestCase):
         self.assertEqual(step(self.build, read)['id'], 'swift-version')
         self.assertLess(names.index(read), names.index(setup['uses']))
         self.assertLess(names.index(setup['uses']), names.index(keep))
-        self.assertLess(names.index(keep), names.index('Build the staging package and its production candidate'))
+        self.assertLess(names.index(keep), names.index(BUILDS[0]))
         self.commit()
         self.assertEqual(self.run_step(read)[1], 'value=latest\n')
         self.commit('6.3.3\n')

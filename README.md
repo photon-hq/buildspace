@@ -2245,7 +2245,7 @@ The [primitive catalog](.github/primitives/README.md) documents each action's in
 |-----------|--------------------|
 | `cargo-build` | Compile one Rust binary |
 | `go-build` | Compile one Go binary |
-| `swift-build` | Compile one Swift executable product |
+| `swift-build` | Compile one Swift executable product, or the whole package |
 | `stage-file` | Copy one file to an explicit destination |
 | `pkgbuild` | Build one unsigned macOS installer from a prepared root |
 | `npm-package-info` | Read a package's name and version |
@@ -2306,6 +2306,7 @@ buildspace/
 │   │   ├── rust-build/                # Cross-platform Rust builds
 │   │   ├── swift-build/               # Swift binary builds
 │   │   ├── swift-pkg/                 # macOS .pkg creation
+│   │   ├── swift-stage-package/       # One swift-stage channel's .pkg
 │   │   ├── sync-crates-version/       # Workspace version sync
 │   │   ├── typescript-build/          # TypeScript builds
 │   │   ├── update-docs/               # AI docs update via Claude Code

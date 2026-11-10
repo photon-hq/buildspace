@@ -1,9 +1,9 @@
 name: Build Swift binary
-description: Compile one release product with an already installed Swift toolchain
+description: Compile one release product, or the whole package, with an already installed Swift toolchain
 inputs:
   product:
-    description: Executable product name
-    required: true
+    description: Executable product name; empty builds every product of the package
+    default: ''
   working-directory:
     description: Swift package directory
     default: '.'
@@ -11,8 +11,10 @@ inputs:
     description: Extra swift build arguments, split on whitespace and never run through a shell (e.g. -Xswiftc -Onone)
     default: ''
 outputs:
+  bin-path:
+    description: Absolute path to the directory the build writes products and resource bundles to
   binary-path:
-    description: Absolute path to the executable, before signing or staging
+    description: Absolute path to the product's executable, before signing or staging; empty when product is empty
 runs:
   using: node24
   main: index.mjs

@@ -46,7 +46,7 @@ Output `binary-path` is absolute. `build-flags` is executable caller configurati
 
 ### `swift-build`
 
-Requires Swift and any dependency authentication already configured by the caller. Input `product` is required; `working-directory` defaults to `.`. Optional `build-flags` are split on whitespace and appended as separate `swift build` arguments, never through a shell. Compiles only that executable product in release mode and asks Swift for its output directory. Output `binary-path` is absolute. Signing, environment files, caching, resource collection, and staging remain separate steps.
+Requires Swift and any dependency authentication already configured by the caller. `product` names one executable product to compile; empty compiles every product of the package, for a release that ships more than one executable. `working-directory` defaults to `.`. Optional `build-flags` are split on whitespace and appended as separate `swift build` arguments, never through a shell. Compiles in release mode and asks Swift for its output directory. Outputs `bin-path`, that absolute directory, and `binary-path`, the product's absolute path or empty without a product. Signing, environment files, caching, resource collection, and staging remain separate steps.
 
 ## File and installer operations
 
@@ -144,6 +144,7 @@ The existing build and publication blocks are recipes, not promises of atomic be
 - Rust and Go recipes combine toolchain setup, compilation, and `stage-file`.
 - The Swift build recipe retains checkout, caching, environment setup, and authentication. It compiles through `swift-build`, then signs and collects artifacts separately.
 - The Swift installer recipe prepares the payload, invokes `pkgbuild`, then stages the installer. It also supports payload-only packages.
+- The Swift stage recipe, `swift-stage-package`, builds one channel's installer: it writes that channel's `.env`, compiles the whole package through `swift-build`, signs, stages the binary through `stage-file`, adds the payload and resource bundles, and invokes `pkgbuild`. `swift-stage.yml` calls it once per channel.
 - The Makefile recipe still invokes the caller's `make release` target, then uses `stage-file`.
 - Single-package registry recipes retain setup, install/build order, registry scope policy, and OIDC/token selection. They compose package identity, publication, and visibility reads.
 - Monorepo registry recipes call the same internal operations for each package. They build, publish, and verify a dependency before proceeding to its dependent. A root build still suppresses per-package builds. npm monorepo publication now verifies each exact version and rejects swallowed npm errors, matching the single-package path.

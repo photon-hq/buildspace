@@ -1,0 +1,76 @@
+name: Swift stage package
+description: Build one channel's package for swift-stage.yml from an already checked-out, toolchain-ready Swift package
+
+inputs:
+  package-name:
+    description: Executable product, and the name of its .pkg
+    required: true
+  identifier:
+    description: Package identifier for pkgbuild
+    required: true
+  channel:
+    description: Release channel, staging or production; names the payload root and output directories
+    required: true
+  version:
+    description: Version written to .env and to the package
+    required: true
+  scripts-path:
+    description: Directory holding the package's preinstall and postinstall scripts
+    default: ''
+  payload-path:
+    description: Directory whose contents mirror the install root, added to the package
+    default: ''
+  resource-bundles:
+    description: Space-separated build products installed beside the binary
+    default: ''
+  entitlements:
+    description: Entitlements plist the binary is ad-hoc signed with
+    default: ''
+  secret-env-vars:
+    description: Lines added to the .env the build compiles with
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Write the channel's .env
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        CHANNEL: ${{ inputs.channel }}
+        SECRET_ENV_VARS: ${{ inputs.secret-env-vars }}
+      run: printf '%s\n' "VERSION=$VERSION" "BUILD_ENVIRONMENT=production" "RELEASE_CHANNEL=$CHANNEL" "$SECRET_ENV_VARS" > .env
+    # The whole package, not only the product: resource-bundles can name another executable.
+    - name: Compile
+      id: build
+      uses: $/.github/primitives/swift-build
+    - name: Sign
+      if: inputs.entitlements != ''
+      shell: bash
+      env:
+        BINARY: ${{ steps.build.outputs.bin-path }}/${{ inputs.package-name }}
+        ENTITLEMENTS: ${{ inputs.entitlements }}
+      run: codesign -s - --entitlements "$ENTITLEMENTS" -f "$BINARY"
+    - name: Stage the binary
+      uses: $/.github/primitives/stage-file
+      with:
+        source: ${{ steps.build.outputs.bin-path }}/${{ inputs.package-name }}
+        destination: ${{ runner.temp }}/pkgroot/${{ inputs.channel }}/usr/local/bin/${{ inputs.package-name }}
+    - name: Add the payload and resource bundles
+      shell: bash
+      env:
+        ROOT: ${{ runner.temp }}/pkgroot/${{ inputs.channel }}
+        PAYLOAD_PATH: ${{ inputs.payload-path }}
+        RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
+        BIN_PATH: ${{ steps.build.outputs.bin-path }}
+      run: |
+        if [[ -n "$PAYLOAD_PATH" ]]; then cp -R "$PAYLOAD_PATH/." "$ROOT/"; fi
+        for bundle in $RESOURCE_BUNDLES; do cp -R "$BIN_PATH/$bundle" "$ROOT/usr/local/bin/"; done
+    - name: Package
+      uses: $/.github/primitives/pkgbuild
+      with:
+        root: ${{ runner.temp }}/pkgroot/${{ inputs.channel }}
+        identifier: ${{ inputs.identifier }}
+        version: ${{ inputs.version }}
+        scripts: ${{ inputs.scripts-path }}
+        output: ${{ runner.temp }}/pack/${{ inputs.channel }}/${{ inputs.package-name }}.pkg
