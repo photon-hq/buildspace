@@ -474,9 +474,18 @@ test("a library, and a package without Package.resolved, are held to the require
       const { fake } = await staged({ world: { files: { "Package.swift": manifestWith(declaration) }, repos: RELEASED } });
       await assert.rejects(resolveWith(fake), error);
     });
-  await t.test("a commit without Package.swift", async () => {
+  await t.test("a payload-only package, from a commit without Package.swift, has no dependencies", async () => {
     const { fake } = await staged({ world: { files: {} } });
-    await assert.rejects(resolveWith(fake), new RegExp(`${SHA} has no Package.swift`));
+    const { pending, dependencies } = await resolveWith(fake);
+    assert.equal(pending, true);
+    assert.deepEqual(dependencies, []);
+  });
+  await t.test("a library from a commit without Package.swift", async () => {
+    const library = { library: true };
+    await collectBuild({ ...library, stagingPackage: undefined, productionPackage: undefined });
+    const fake = world({ tags: { "v1.26.0": OTHER }, files: {} });
+    await publishWith(fake, library);
+    await assert.rejects(resolveWith(fake, library), new RegExp(`${SHA} has no Package.swift`));
   });
 });
 

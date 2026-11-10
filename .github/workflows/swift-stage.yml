@@ -4,17 +4,17 @@ on:
   workflow_call:
     inputs:
       package-name:
-        description: Executable product to build and the name of its .pkg; for a library, the name its releases carry
+        description: Executable product to build and the name of its .pkg; for a payload, the .pkg name; for a library, the name its releases carry
         required: true
         type: string
       identifier:
         description: Package identifier for pkgbuild, such as codes.photon.macrocosm-astrolabe; a library has none
         default: ''
         type: string
-      library:
-        description: A SwiftPM library, released by its tags alone; nothing is built or packaged
-        default: false
-        type: boolean
+      kind:
+        description: What the build releases, executable, payload or library; executable compiles package-name and packages it with its payload, payload packages payload-path and scripts-path with no Swift build, and library releases a SwiftPM library by its tag alone
+        default: executable
+        type: string
       scripts-path:
         description: Directory holding the package's preinstall and postinstall scripts
         default: ''
@@ -86,6 +86,18 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Check the kind and the inputs it takes
+        env:
+          KIND: ${{ inputs.kind }}
+          PAYLOAD_PATH: ${{ inputs.payload-path }}
+          RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
+          ENTITLEMENTS: ${{ inputs.entitlements }}
+          PRIVATE_DEPS: ${{ inputs.private-deps }}
+        run: |
+          [[ "$KIND" =~ ^(executable|payload|library)$ ]] ||
+            { echo "::error::kind must be executable, payload or library, not $KIND" >&2; exit 1; }
+          [[ "$KIND" != payload || ( -n "$PAYLOAD_PATH" && -z "$RESOURCE_BUNDLES$ENTITLEMENTS" && "$PRIVATE_DEPS" != true ) ]] ||
+            { echo "::error::A payload needs payload-path and takes no resource-bundles, entitlements or private-deps" >&2; exit 1; }
       - name: Fetch the release tools of this workflow's commit
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -113,7 +125,7 @@ jobs:
   build:
     needs: version
     if: github.ref == 'refs/heads/main' || inputs.dry-run
-    runs-on: ${{ inputs.library && 'ubuntu-24.04' || 'macos-26' }}
+    runs-on: ${{ inputs.kind == 'library' && 'ubuntu-24.04' || 'macos-26' }}
     timeout-minutes: 90
     permissions:
       contents: read
@@ -148,7 +160,7 @@ jobs:
         run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
       - name: Read the Swift version the package pins
         id: swift-version
-        if: ${{ !inputs.library }}
+        if: inputs.kind == 'executable'
         run: |
           set -euo pipefail
           version=latest
@@ -158,17 +170,17 @@ jobs:
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
       - uses: swift-actions/setup-swift@364295d9c23900ce04d4e5cc708387921b4e50f9 # v3
-        if: ${{ !inputs.library }}
+        if: inputs.kind == 'executable'
         with:
           swift-version: ${{ steps.swift-version.outputs.value }}
       # swiftly rewrites a tracked .swift-version with the toolchain it selected.
       - name: Keep the committed .swift-version
-        if: ${{ !inputs.library }}
+        if: inputs.kind == 'executable'
         run: |
           if git ls-files --error-unmatch .swift-version >/dev/null 2>&1; then git checkout -- .swift-version; fi
       - name: Mint a token for private dependencies
         id: dependency-token
-        if: inputs.private-deps && !inputs.library
+        if: inputs.private-deps && inputs.kind != 'library'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -176,7 +188,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           permission-contents: read
       - name: Check the package and its source
-        if: ${{ !inputs.library }}
+        if: inputs.kind != 'library'
         env:
           PACKAGE_NAME: ${{ inputs.package-name }}
           IDENTIFIER: ${{ inputs.identifier }}
@@ -193,7 +205,7 @@ jobs:
       # Both builds share one checkout and build directory. BetterEnv declares
       # .env as a build input, so the second build recompiles what reads it.
       - name: Build the staging package
-        if: ${{ !inputs.library }}
+        if: inputs.kind != 'library'
         uses: $/.github/blocks/swift-stage-package
         with:
           package-name: ${{ inputs.package-name }}
@@ -205,8 +217,9 @@ jobs:
           resource-bundles: ${{ inputs.resource-bundles }}
           entitlements: ${{ inputs.entitlements }}
           secret-env-vars: ${{ secrets.SECRET_ENV_VARS }}
+          kind: ${{ inputs.kind }}
       - name: Build the production candidate
-        if: ${{ !inputs.library }}
+        if: inputs.kind != 'library'
         uses: $/.github/blocks/swift-stage-package
         with:
           package-name: ${{ inputs.package-name }}
@@ -218,8 +231,9 @@ jobs:
           resource-bundles: ${{ inputs.resource-bundles }}
           entitlements: ${{ inputs.entitlements }}
           secret-env-vars: ${{ secrets.SECRET_ENV_VARS }}
+          kind: ${{ inputs.kind }}
       - name: Require the builds to leave tracked files unchanged
-        if: ${{ !inputs.library }}
+        if: inputs.kind != 'library'
         run: |
           rm -f .env
           if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -231,7 +245,7 @@ jobs:
         id: collect
         env:
           PACKAGE_NAME: ${{ inputs.package-name }}
-          LIBRARY: ${{ inputs.library }}
+          LIBRARY: ${{ inputs.kind == 'library' }}
           BUMP: ${{ needs.version.outputs.bump }}
           STAGING_SUFFIX: -staging.${{ github.run_id }}.${{ github.run_attempt }}
         run: |
@@ -280,7 +294,7 @@ jobs:
           path: ${{ runner.temp }}/swift-release
       # Promotion verifies the candidate's attestation before releasing it.
       - name: Attest the staging package and its production candidate
-        if: ${{ !inputs.library }}
+        if: inputs.kind != 'library'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
@@ -289,7 +303,7 @@ jobs:
       - name: Publish the staging build and attach its candidate
         env:
           PACKAGE_NAME: ${{ inputs.package-name }}
-          LIBRARY: ${{ inputs.library }}
+          LIBRARY: ${{ inputs.kind == 'library' }}
           BUMP: ${{ needs.version.outputs.bump }}
         run: |
           node "$RELEASE_TOOLS/swift-release.mjs" publish --channel staging --directory "$RUNNER_TEMP/swift-release" \

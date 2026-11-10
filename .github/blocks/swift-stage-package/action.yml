@@ -29,11 +29,15 @@ inputs:
   secret-env-vars:
     description: Lines added to the .env the build compiles with
     default: ''
+  kind:
+    description: executable compiles package-name and packages it with the payload; payload packages only payload-path and scripts-path
+    default: executable
 
 runs:
   using: composite
   steps:
     - name: Write the channel's .env
+      if: inputs.kind != 'payload'
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
@@ -42,6 +46,7 @@ runs:
       run: printf '%s\n' "VERSION=$VERSION" "BUILD_ENVIRONMENT=production" "RELEASE_CHANNEL=$CHANNEL" "$SECRET_ENV_VARS" > .env
     # The whole package, not only the product: resource-bundles can name another executable.
     - name: Compile
+      if: inputs.kind != 'payload'
       id: build
       uses: $/.github/primitives/swift-build
     - name: Sign
@@ -52,6 +57,7 @@ runs:
         ENTITLEMENTS: ${{ inputs.entitlements }}
       run: codesign -s - --entitlements "$ENTITLEMENTS" -f "$BINARY"
     - name: Stage the binary
+      if: inputs.kind != 'payload'
       uses: $/.github/primitives/stage-file
       with:
         source: ${{ steps.build.outputs.bin-path }}/${{ inputs.package-name }}
@@ -64,6 +70,7 @@ runs:
         RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
         BIN_PATH: ${{ steps.build.outputs.bin-path }}
       run: |
+        mkdir -p "$ROOT"
         if [[ -n "$PAYLOAD_PATH" ]]; then cp -R "$PAYLOAD_PATH/." "$ROOT/"; fi
         for bundle in $RESOURCE_BUNDLES; do cp -R "$BIN_PATH/$bundle" "$ROOT/usr/local/bin/"; done
     - name: Package

@@ -142,10 +142,11 @@ authorization. They remain intact.
    `swift-stage.yml`/`swift-promote.yml`. The monorepo workflow's independent
    versions differ from modern shared build versions.
 3. Design replacements for standalone Go/Rust binaries, crates.io publishing,
-   Maven artifacts, Makefile dylibs, and payload-only packages before retiring
-   their workflows.
+   Maven artifacts, and Makefile dylibs before retiring their workflows.
    Modern package staging requires npm packages, and its optional Rust crates
-   are released by Git tag. Swift staging has no payload-only package mode.
+   are released by Git tag. Swift staging with `kind: payload` replaces
+   `pkg-release.yml` for packages with a `payload-path`. Scripts-only callers
+   without a `payload-path` keep the compatibility workflow.
 4. Configure and verify main-only staging and registry permissions before
    enabling the new caller: its first main push publishes to staging. A missing
    environment referenced by a job can be created without protection rules;
