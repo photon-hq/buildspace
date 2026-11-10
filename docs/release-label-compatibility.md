@@ -20,6 +20,12 @@ Its only autonomous workflow is PR CI; the other workflows are reusable entry
 points, not buildspace's own release pipeline. Merging to `main` publishes
 buildspace without a release label.
 
+Revalidation on 2026-11-09 found `release` registered again. PR timelines show
+CodeRabbit applying it on #138, #145 and #147. These events identify automatic
+PR-label assignment, not who recreated the repository label definition. Stop
+the observed producer before repeating deletion; its effective configuration
+and organization-wide retirement clearance have not been established.
+
 This does not remove a calling repository's labels. The checker reads
 `context.repo`, which is the caller. Caller label objects and executable
 release gates remain unchanged in this cleanup.
@@ -125,14 +131,30 @@ authorization. They remain intact.
    consumers, label objects, and open issues/PRs before deleting a label.
 2. Move supported npm packages to `package-stage.yml`/`package-promote.yml`,
    preserving package scope, registry, outputs, and dependency requirements.
+   On npmjs, an unscoped primary selects only that package; a scoped primary
+   selects its scope. Neither default selection supports a pack mixing scoped
+   and unscoped packages. GitHub Packages selects the repository owner's scope;
+   the primary must belong to that scope. Preserve the package set instead of
+   renaming or dropping packages to pass validation.
    Move supported Swift executables/libraries to
    `swift-stage.yml`/`swift-promote.yml`. The monorepo workflow's independent
    versions differ from modern shared build versions.
 3. Design replacements for standalone Go/Rust binaries, crates.io publishing,
-   Makefile dylibs, and payload-only packages before retiring their workflows.
+   Maven artifacts, Makefile dylibs, and payload-only packages before retiring
+   their workflows.
    Modern package staging requires npm packages, and its optional Rust crates
    are released by Git tag. Swift staging has no payload-only package mode.
-4. Validate the replacement's dry run, first staged build, stored-candidate
+4. Configure and verify main-only staging and registry permissions before
+   enabling the new caller: its first main push publishes to staging. A missing
+   environment referenced by a job can be created without protection rules;
+   its existence alone does not prove setup is complete. For npm trusted
+   publishing, configure every selected package's staging publisher before
+   staging and its promotion publisher shortly before its first promotion.
+   Follow the [publisher setup and expiry rules](../README.md#package-stage-and-promote),
+   including permission for both publication and dist-tag management.
+   Configure production's approval rules before promotion; they are not a
+   prerequisite for retiring unused labels.
+   Validate the replacement's dry run, first staged build, stored-candidate
    promotion, and production approval path. Legacy RC artifacts cannot be
    promoted as modern candidates without the expected manifests and provenance.
    Keep unverified publication and approval steps explicit in the rollout record.
