@@ -2402,4 +2402,4 @@ modern staging dry run.
 
 ## License
 
-MIT © [Photon](https://github.com/photon-hq)
+Apache-2.0 © [Photon](https://github.com/photon-hq)
