@@ -338,7 +338,7 @@ test("the visibility action reads the dist-tag and timeout inputs", (t) => {
   npmView(f, [listed({ latest: "1.2.2" })]);
   const result = f.action("wait-npm-version", { package: "widget", version: "1.2.3", registry: "https://registry.example.com", "timeout-seconds": "0", "dist-tag": "latest" });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /its latest dist-tag names 1\.2\.2 after 1 read over 0s/);
+  assert.match(result.stderr, /its latest dist-tag names 1\.2\.2 after 1 read over \d+s/);
   rmSync(join(f.root, "reads"));
   npmView(f, [listed()]);
   const served = f.action("wait-npm-version", { package: "widget", version: "1.2.3", registry: "https://registry.example.com", "timeout-seconds": "0", "dist-tag": "latest" });

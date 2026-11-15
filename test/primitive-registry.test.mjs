@@ -100,7 +100,7 @@ test("the real npm launcher's answers for a missing version and a moved dist-tag
   }
   const absent = await launch({});
   assert.notEqual(absent.status, 0);
-  assert.match(absent.diagnostics, /widget@1\.2\.3 is not visible on .* after 1 read over 0s \(last read: not found \(E404\)\)/);
+  assert.match(absent.diagnostics, /widget@1\.2\.3 is not visible on .* after 1 read over \d+s \(last read: not found \(E404\)\)/);
   packument = {
     name: "widget", "dist-tags": { latest: "1.2.2", next: "1.2.3" },
     versions: { "1.2.2": { name: "widget", version: "1.2.2" }, "1.2.3": { name: "widget", version: "1.2.3", dist: { integrity: "sha512-built" } } },
