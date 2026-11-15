@@ -33,10 +33,23 @@ inputs:
   npm-token:
     description: 'NPM authentication token. Used only as a fallback when npm OIDC Trusted Publishing is unavailable or fails. Not required if OIDC Trusted Publishing is fully configured.'
     required: false
+  verify-timeout-seconds:
+    description: '[string] Seconds to wait after publishing for npm to serve the version under the requested tag. npm can take several minutes to make a new version available.'
+    required: false
+    default: '600'
 
 runs:
   using: composite
   steps:
+    - name: Check the verification timeout
+      shell: bash
+      env:
+        VERIFY_TIMEOUT_SECONDS: ${{ inputs.verify-timeout-seconds }}
+      run: |
+        if ! [[ "$VERIFY_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+          echo "::error::verify-timeout-seconds must be a whole number of seconds"
+          exit 1
+        fi
     - uses: oven-sh/setup-bun@v2
       with:
         bun-version: ${{ inputs.bun-version }}
@@ -115,6 +128,7 @@ runs:
         dry-run: ${{ inputs.dry-run }}
         command: ${{ inputs.publish-command }}
     - name: Verify publish landed on registry
+      id: verify
       if: inputs.dry-run != 'true'
       uses: $/.github/primitives/wait-npm-version
       env:
@@ -123,3 +137,17 @@ runs:
         package: ${{ steps.package.outputs.name }}
         version: ${{ steps.package.outputs.version }}
         registry: https://registry.npmjs.org
+        dist-tag: ${{ inputs.tag }}
+        timeout-seconds: ${{ inputs.verify-timeout-seconds }}
+    # The publish steps above fail on their own when npm rejects a publication;
+    # this one runs only when npm accepted it but did not serve it in time.
+    - name: Report a publication npm accepted but has not served
+      if: failure() && steps.verify.outcome == 'failure'
+      shell: bash
+      env:
+        PACKAGE_NAME: ${{ steps.package.outputs.name }}
+        PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        DIST_TAG: ${{ inputs.tag }}
+        VERIFY_TIMEOUT_SECONDS: ${{ inputs.verify-timeout-seconds }}
+      run: |
+        echo "::error::npm accepted $PACKAGE_NAME@$PACKAGE_VERSION, but did not serve it under the $DIST_TAG dist-tag within $VERIFY_TIMEOUT_SECONDS seconds. It may still appear: check https://www.npmjs.com/package/$PACKAGE_NAME/v/$PACKAGE_VERSION before running this job again, since publishing the same version a second time fails."

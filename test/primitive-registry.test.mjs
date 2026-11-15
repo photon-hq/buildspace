@@ -61,3 +61,53 @@ test("the real npm launcher verifies an exact version against a local registry",
   assert.ok(requests.every((request) => request.path === "/widget" && request.method === "GET"));
   assert.ok(requests.slice(previousRequests).every((request) => !request.authenticated));
 });
+
+test("the real npm launcher's answers for a missing version and a moved dist-tag are read as such", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "buildspace-registry-"));
+  let packument = { name: "widget", "dist-tags": { latest: "1.2.2" }, versions: { "1.2.2": { name: "widget", version: "1.2.2" } } };
+  const server = createServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(packument));
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((done) => server.close(done));
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const userConfig = join(directory, "user.npmrc");
+  const globalConfig = join(directory, "global.npmrc");
+  writeFileSync(userConfig, "");
+  writeFileSync(globalConfig, "");
+  async function launch(inputs) {
+    const child = spawn(process.execPath, [fileURLToPath(new URL("../.github/primitives/wait-npm-version/index.mjs", import.meta.url))], {
+      env: {
+        ...process.env, NODE_AUTH_TOKEN: "", NPM_CONFIG_USERCONFIG: userConfig, NPM_CONFIG_GLOBALCONFIG: globalConfig,
+        NPM_CONFIG_CACHE: join(directory, "cache"), NPM_CONFIG_FETCH_RETRIES: "0", NPM_CONFIG_FETCH_TIMEOUT: "10000",
+        NPM_CONFIG_UPDATE_NOTIFIER: "false", GITHUB_OUTPUT: join(directory, "outputs"),
+        INPUT_PACKAGE: "widget", INPUT_VERSION: "1.2.3", INPUT_REGISTRY: `http://127.0.0.1:${server.address().port}`,
+        "INPUT_TIMEOUT-SECONDS": "0", ...inputs,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let diagnostics = "";
+    child.stderr.on("data", (chunk) => { diagnostics += chunk; });
+    const status = await new Promise((done, reject) => {
+      child.on("error", reject);
+      child.on("close", done);
+    });
+    return { status, diagnostics };
+  }
+  const absent = await launch({});
+  assert.notEqual(absent.status, 0);
+  assert.match(absent.diagnostics, /widget@1\.2\.3 is not visible on .* after 1 read over \d+s \(last read: not found \(E404\)\)/);
+  packument = {
+    name: "widget", "dist-tags": { latest: "1.2.2", next: "1.2.3" },
+    versions: { "1.2.2": { name: "widget", version: "1.2.2" }, "1.2.3": { name: "widget", version: "1.2.3", dist: { integrity: "sha512-built" } } },
+  };
+  const untagged = await launch({ "INPUT_DIST-TAG": "latest" });
+  assert.notEqual(untagged.status, 0);
+  assert.match(untagged.diagnostics, /its latest dist-tag names 1\.2\.2/);
+  const served = await launch({ "INPUT_DIST-TAG": "next", INPUT_INTEGRITY: "sha512-built" });
+  assert.equal(served.status, 0, served.diagnostics);
+});

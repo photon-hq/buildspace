@@ -1907,6 +1907,7 @@ Builds and publishes multiple monorepo packages to npm in dependency order. Supp
 | `root-build-command` | string | No | `""` | Build once at repo root (e.g., `turbo build`) |
 | `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
 | `npm-token` | secret | Yes | — | npm authentication token |
+| `verify-timeout-seconds` | string | No | `600` | Seconds to wait after each publication for npm to serve the version under `tag` |
 
 #### Usage
 
@@ -2070,7 +2071,7 @@ Publishes workspace crates to crates.io in dependency order with retry logic and
 
 **Path:** `.github/blocks/publish-npm/action.yaml`
 
-Publishes a single package to npm (installs dependencies, builds, publishes). Tries npm OIDC Trusted Publishing first (when the calling job has `id-token: write`), then falls back to token-based publishing with `npm-token`.
+Publishes a single package to npm (installs dependencies, builds, publishes). Tries npm OIDC Trusted Publishing first (when the calling job has `id-token: write`), then falls back to token-based publishing with `npm-token`. After publishing, it waits until npm serves the version under `tag`, up to `verify-timeout-seconds`.
 
 #### Inputs
 
@@ -2084,6 +2085,7 @@ Publishes a single package to npm (installs dependencies, builds, publishes). Tr
 | `dry-run` | boolean | No | `false` | Run `npm publish --dry-run` |
 | `publish-command` | string | No | `npm publish` | Publisher command; registry, tag, access, and dry-run flags are appended |
 | `npm-token` | secret | No | — | npm token; used only as a fallback when OIDC Trusted Publishing is unavailable or fails |
+| `verify-timeout-seconds` | string | No | `600` | Seconds to wait after publishing for npm to serve the version under `tag` |
 
 #### Usage
 
@@ -2098,6 +2100,12 @@ Publishes a single package to npm (installs dependencies, builds, publishes). Tr
 
 1. **OIDC Trusted Publishing (preferred):** when the calling job has `id-token: write`, the action publishes tokenlessly with provenance. Requires a configured [trusted publisher](https://docs.npmjs.com/trusted-publishers) for the package on npmjs.com and npm ≥ 11.5.1 on the runner.
 2. **Token fallback:** if OIDC is unavailable (no `id-token: write`) or fails, the action publishes with `npm-token`. This is the default behavior today — keep providing `NPM_TOKEN` so publishing works until OIDC is fully set up.
+
+#### Checking the publication
+
+npm answers a publish with "Your package is being processed and may take a few minutes to become available". Releases have taken 55 to 249 seconds to appear, and npm's CDN can serve package metadata cached for up to five more minutes. The block reads the registry with backoff, from 5 seconds up to 30, until the version is listed with `tag` naming it or `verify-timeout-seconds` runs out.
+
+A publish that npm rejects fails in its publish step, as before. If npm accepted the publish but did not serve it in time, the block fails with an error that says so. The version may still appear: check it on npmjs.com before running the job again, because publishing the same version a second time fails.
 
 ---
 

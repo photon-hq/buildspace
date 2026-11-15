@@ -207,24 +207,143 @@ test("a missing required registry fails before a publisher can use its default r
   assert.deepEqual(f.commands(), []);
 });
 
-test("registry visibility reads only the exact version and retries propagation", async (t) => {
-  const f = fixture(t);
+// Answers each `npm view` like npm 11 does, from one response per read; the last one repeats.
+function npmView(f, responses) {
+  writeFileSync(join(f.root, "responses.json"), JSON.stringify(responses));
   f.stub("npm", `${f.record}
 const fs = require('node:fs');
-const state = process.env.TEST_ROOT + '/attempt';
-const attempt = fs.existsSync(state) ? Number(fs.readFileSync(state)) + 1 : 1;
-fs.writeFileSync(state, String(attempt));
-console.log(attempt === 3 ? '1.2.3' : '1.2.2');`);
-  assert.equal(await waitNpmVersion({ package: "@outside/widget", version: "1.2.3", registry: "https://registry.example.com", attempts: 3, intervalSeconds: 0, env: f.env }), "1.2.3");
+const root = process.env.TEST_ROOT;
+const responses = JSON.parse(fs.readFileSync(root + '/responses.json', 'utf8'));
+const reads = fs.existsSync(root + '/reads') ? Number(fs.readFileSync(root + '/reads', 'utf8')) : 0;
+fs.writeFileSync(root + '/reads', String(reads + 1));
+const response = responses[Math.min(reads, responses.length - 1)];
+if (response === 404) {
+  console.log(JSON.stringify({ error: { code: 'E404', summary: 'No match found for version 1.2.3' } }));
+  console.error('npm error code E404');
+  process.exit(1);
+}
+if (response === 500) {
+  console.error('npm error code E500');
+  console.error('npm error 500 Internal Server Error');
+  process.exit(1);
+}
+console.log(JSON.stringify(response));`);
+}
+
+function clock() {
+  let time = 0;
+  const sleeps = [];
+  return { sleeps, now: () => time, sleep: async (ms) => { sleeps.push(ms); time += ms; } };
+}
+
+const quiet = () => {};
+const listed = (tags = { latest: "1.2.3" }, integrity = "sha512-built") => ({ version: "1.2.3", "dist.integrity": integrity, "dist-tags": tags });
+
+test("registry visibility reads only the exact version and retries propagation", async (t) => {
+  const f = fixture(t);
+  npmView(f, [404, 404, listed()]);
+  assert.equal(await waitNpmVersion({ package: "@outside/widget", version: "1.2.3", registry: "https://registry.example.com", attempts: 3, intervalSeconds: 0, env: f.env, log: quiet }), "1.2.3");
   assert.equal(f.commands().length, 3);
-  for (const call of f.commands()) assert.deepEqual(call.args, ["view", "@outside/widget@1.2.3", "version", "--registry", "https://registry.example.com"]);
+  for (const call of f.commands()) assert.deepEqual(call.args, ["view", "@outside/widget@1.2.3", "version", "dist.integrity", "dist-tags", "--json", "--registry", "https://registry.example.com"]);
 });
 
 test("registry visibility fails when the version is absent or the registry errors", async (t) => {
   const f = fixture(t);
   f.stub("npm", `${f.record} process.exit(1);`);
-  await assert.rejects(waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", attempts: 2, intervalSeconds: 0, env: f.env }), /not visible/);
+  await assert.rejects(waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", attempts: 2, intervalSeconds: 0, env: f.env, log: quiet }), /not visible/);
   assert.equal(f.commands().length, 2);
+});
+
+test("without a timeout the primitive keeps its fixed six reads five seconds apart", async (t) => {
+  const f = fixture(t);
+  npmView(f, [404]);
+  const time = clock();
+  await assert.rejects(waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", env: f.env, log: quiet, ...time }), /not visible on https:\/\/registry\.example\.com after 6 reads over 25s \(last read: not found \(E404\)\)/);
+  assert.deepEqual(time.sleeps, [5000, 5000, 5000, 5000, 5000]);
+});
+
+test("a timeout backs off to thirty seconds and outlasts npm's processing delay", async (t) => {
+  const f = fixture(t);
+  // openclaw 0.2.3 appeared 76 seconds after npm accepted it: reads at 0, 5, 15, 35 and 65 seconds miss it.
+  npmView(f, [404, 404, 404, 404, 404, listed()]);
+  const time = clock();
+  assert.equal(await waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", timeoutSeconds: 600, distTag: "latest", env: f.env, log: quiet, ...time }), "1.2.3");
+  assert.deepEqual(time.sleeps, [5000, 10000, 20000, 30000, 30000]);
+});
+
+test("a timeout reads once more at the deadline and then reports the version as still propagating", async (t) => {
+  const f = fixture(t);
+  npmView(f, [404]);
+  const time = clock();
+  const lines = [];
+  await assert.rejects(
+    waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", timeoutSeconds: 600, env: f.env, log: (line) => lines.push(line), ...time }),
+    /widget@1\.2\.3 is not visible on https:\/\/registry\.example\.com after 23 reads over 600s \(last read: not found \(E404\)\)\. npm can take several minutes/,
+  );
+  assert.equal(time.sleeps.reduce((sum, ms) => sum + ms, 0), 600_000);
+  assert.deepEqual(time.sleeps.slice(0, 4), [5000, 10000, 20000, 30000]);
+  assert.equal(time.sleeps.at(-1), 25_000);
+  assert.equal(f.commands().length, 23);
+  assert.equal(lines[0], "widget@1.2.3 on https://registry.example.com: not found (E404); reading again in 5s");
+});
+
+test("registry errors are retried and named when the wait runs out", async (t) => {
+  const f = fixture(t);
+  npmView(f, [500, 404, 500]);
+  const time = clock();
+  await assert.rejects(waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", timeoutSeconds: 20, env: f.env, log: quiet, ...time }), /after 4 reads over 20s \(last read: the read failed: npm error code E500\)/);
+});
+
+test("a version published with different contents fails at once instead of waiting", async (t) => {
+  const f = fixture(t);
+  npmView(f, [listed(undefined, "sha512-other")]);
+  const time = clock();
+  await assert.rejects(waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", timeoutSeconds: 600, integrity: "sha512-built", env: f.env, log: quiet, ...time }), /has integrity sha512-other, not sha512-built: different contents were published/);
+  assert.equal(f.commands().length, 1);
+  assert.deepEqual(time.sleeps, []);
+});
+
+test("the expected integrity and dist-tag together mark a publication as served", async (t) => {
+  const f = fixture(t);
+  npmView(f, [listed({ latest: "1.2.2" }), listed({ latest: "1.2.2", next: "1.2.3" })]);
+  const time = clock();
+  assert.equal(await waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", timeoutSeconds: 60, distTag: "next", integrity: "sha512-built", env: f.env, log: quiet, ...time }), "1.2.3");
+  assert.equal(f.commands().length, 2);
+});
+
+test("a version whose dist-tag never names it fails with the version the tag names", async (t) => {
+  const f = fixture(t);
+  npmView(f, [404, listed({ latest: "1.3.0" })]);
+  const time = clock();
+  await assert.rejects(waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", timeoutSeconds: 60, distTag: "latest", env: f.env, log: quiet, ...time }), /widget@1\.2\.3 is on https:\/\/registry\.example\.com, but its latest dist-tag names 1\.3\.0 after \d+ reads over 60s/);
+});
+
+test("npm's bare single-field output still counts as the version", async (t) => {
+  const f = fixture(t);
+  npmView(f, ["1.2.3"]);
+  assert.equal(await waitNpmVersion({ package: "widget", version: "1.2.3", registry: "https://registry.example.com", attempts: 1, env: f.env, log: quiet }), "1.2.3");
+});
+
+test("the visibility action rejects an unreadable timeout before reading the registry", (t) => {
+  const f = fixture(t);
+  npmView(f, [listed()]);
+  const result = f.action("wait-npm-version", { package: "widget", version: "1.2.3", registry: "https://registry.example.com", "timeout-seconds": "ten minutes" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /timeout-seconds must be a nonnegative number/);
+  assert.deepEqual(f.commands(), []);
+});
+
+test("the visibility action reads the dist-tag and timeout inputs", (t) => {
+  const f = fixture(t);
+  npmView(f, [listed({ latest: "1.2.2" })]);
+  const result = f.action("wait-npm-version", { package: "widget", version: "1.2.3", registry: "https://registry.example.com", "timeout-seconds": "0", "dist-tag": "latest" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /its latest dist-tag names 1\.2\.2 after 1 read over \d+s/);
+  rmSync(join(f.root, "reads"));
+  npmView(f, [listed()]);
+  const served = f.action("wait-npm-version", { package: "widget", version: "1.2.3", registry: "https://registry.example.com", "timeout-seconds": "0", "dist-tag": "latest" });
+  assert.equal(served.status, 0, served.stderr);
+  assert.deepEqual(outputs(f.env.GITHUB_OUTPUT), { version: "1.2.3" });
 });
 
 test("monorepo recipe builds, publishes, and verifies each dependency before its dependent", async (t) => {
@@ -237,9 +356,29 @@ test("monorepo recipe builds, publishes, and verifies each dependency before its
   });
   f.stub("build", f.record);
   f.stub("bun", f.record);
-  f.stub("npm", `${f.record} console.log('1.2.3');`);
+  npmView(f, [listed({ latest: "1.0.0" })]);
   await publishPackages({ packages, buildCommand: "build", rootBuildCommand: "", registry: "https://registry.example.com", tag: "latest", dryRun: false, owner: "outside", env: { ...f.env, NODE_AUTH_TOKEN: "fixture-token" } });
   assert.deepEqual(f.commands().map((call) => [call.command, call.cwd]), packages.flatMap(({ path }) => [["build", path], ["bun", path], ["npm", process.cwd()]]));
+});
+
+test("the npmjs monorepo recipe waits for each version under its tag", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.root, "package.json"), '{"name":"widget","version":"1.2.3"}');
+  f.stub("bun", f.record);
+  npmView(f, [listed({ latest: "1.2.3", next: "1.2.2" })]);
+  await assert.rejects(publishPackages({ packages: [{ path: f.root }], buildCommand: "true", registry: "https://registry.example.com", tag: "next", dryRun: false, verifyTimeoutSeconds: 0, env: f.env }), /its next dist-tag names 1\.2\.2/);
+  npmView(f, [listed({ latest: "1.2.3", next: "1.2.3" })]);
+  await publishPackages({ packages: [{ path: f.root }], buildCommand: "true", registry: "https://registry.example.com", tag: "next", dryRun: false, verifyTimeoutSeconds: 0, env: f.env });
+});
+
+test("the monorepo recipe rejects an unreadable verification timeout before publishing", async (t) => {
+  const f = fixture(t);
+  writeFileSync(join(f.root, "package.json"), '{"name":"widget","version":"1.2.3"}');
+  f.stub("bun", f.record);
+  for (const value of [Number.NaN, -1, 1.5]) {
+    await assert.rejects(publishPackages({ packages: [{ path: f.root }], buildCommand: "true", registry: "https://registry.example.com", tag: "latest", dryRun: false, verifyTimeoutSeconds: value, env: f.env }), /verify-timeout-seconds must be a whole number/);
+  }
+  assert.deepEqual(f.commands(), []);
 });
 
 test("monorepo dry runs skip builds after a root build, visibility checks, and registry credentials", async (t) => {

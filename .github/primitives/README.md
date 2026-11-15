@@ -95,7 +95,20 @@ Output `exit-code` records the publisher's exit code, including when the action 
 
 ### `wait-npm-version`
 
-Requires npm, Bash, and read authentication configured for the registry, if needed. Bash resolves npm's launcher on both Unix and Windows; package names and flags remain literal arguments. Required inputs are `package`, `version`, and `registry`. `attempts` defaults to `6`; `interval-seconds` defaults to `5`. Reads the exact package version until it is visible, then outputs `version`. Fails after the last unsuccessful read. Does not publish or move distribution tags. Call it separately when publication must be verified.
+Requires npm, Bash, and read authentication configured for the registry, if needed. Bash resolves npm's launcher on both Unix and Windows; package names and flags remain literal arguments. Reads the exact package version until it is visible, then outputs `version`. Does not publish or move distribution tags. Call it separately when publication must be verified.
+
+| Input | Default | Meaning |
+|-------|---------|---------|
+| `package` | Required | Package name |
+| `version` | Required | Exact version |
+| `registry` | Required | npm-compatible registry URL |
+| `attempts` | `6` | Reads before failing, when `timeout-seconds` is empty |
+| `interval-seconds` | `5` | Delay between reads; with `timeout-seconds`, the first delay |
+| `timeout-seconds` | `''` | Seconds to keep reading instead of `attempts`; the delay doubles up to 30 seconds, and the last read happens at the deadline |
+| `dist-tag` | `''` | Tag that must name the version; empty skips the check |
+| `integrity` | `''` | Expected `dist.integrity`; empty skips the check |
+
+Without `timeout-seconds`, the defaults make six reads five seconds apart, as before. npmjs can take minutes to serve a version it accepted, and its CDN caches package metadata for up to five minutes, so a check right after publishing to npmjs needs `timeout-seconds`. A version that is missing, a registry error, or a dist-tag naming another version is read again until the reads or the time run out; the error names the last state seen. A version listed with a different integrity fails at once, since waiting cannot change it.
 
 ### `cargo-publish`
 
@@ -146,7 +159,7 @@ The existing build and publication blocks are recipes, not promises of atomic be
 - The Swift installer recipe prepares the payload, invokes `pkgbuild`, then stages the installer. It also supports payload-only packages.
 - The Swift stage recipe, `swift-stage-package`, builds one channel's installer: it writes that channel's `.env`, compiles the whole package through `swift-build`, signs, stages the binary through `stage-file`, adds the payload and resource bundles, and invokes `pkgbuild`. `swift-stage.yml` calls it once per channel. With `kind: payload`, it skips the `.env`, compile, and binary steps.
 - The Makefile recipe still invokes the caller's `make release` target, then uses `stage-file`.
-- Single-package registry recipes retain setup, install/build order, registry scope policy, and OIDC/token selection. They compose package identity, publication, and visibility reads.
+- Single-package registry recipes retain setup, install/build order, registry scope policy, and OIDC/token selection. They compose package identity, publication, and visibility reads. The npmjs recipes wait up to `verify-timeout-seconds` (600 by default) for the version under its dist-tag; the GitHub Packages recipes keep six reads.
 - Monorepo registry recipes call the same internal operations for each package. They build, publish, and verify a dependency before proceeding to its dependent. A root build still suppresses per-package builds. npm monorepo publication now verifies each exact version and rejects swallowed npm errors, matching the single-package path.
 - The crates.io recipe retains ordered publications and retries around the single-attempt `cargo-publish` operation.
 - The npm, Cargo, monorepo, and Homebrew version-update recipes stage, commit, and push as separate operations. Existing identity and credential setup remain in the recipes. Only npm and monorepo retain their existing post-commit rebase policy. No-op commits skip rebase and push; `commit-changes: 'false'` still suppresses all three writes in the Cargo recipe. Homebrew operations stay in its own checkout and keep its configured branch selection.

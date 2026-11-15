@@ -15,8 +15,8 @@ CONTRACTS = {
     'swift-build': (('binary-name', 'compile-env', 'use-cache', 'resource-bundles', 'entitlements', 'github-token', 'build-flags'), ('binary-path', 'resource-bundles-path')),
     'swift-pkg': (('swift-binary-path', 'identifier', 'version', 'package-name', 'developer-id-installer-name', 'allow-unsigned', 'scripts-path', 'payload-path', 'resource-bundles-path'), ()),
     'build-makefile-dylib': (('output-name', 'version'), ()),
-    'publish-npm': (('bun-version', 'node-version', 'working-directory', 'build-command', 'tag', 'dry-run', 'publish-command', 'npm-token'), ()),
-    'publish-npm-packages': (('changed-packages', 'bun-version', 'node-version', 'tag', 'build-command', 'root-build-command', 'dry-run', 'npm-token'), ()),
+    'publish-npm': (('bun-version', 'node-version', 'working-directory', 'build-command', 'tag', 'dry-run', 'publish-command', 'npm-token', 'verify-timeout-seconds'), ()),
+    'publish-npm-packages': (('changed-packages', 'bun-version', 'node-version', 'tag', 'build-command', 'root-build-command', 'dry-run', 'npm-token', 'verify-timeout-seconds'), ()),
     'publish-github-package': (('bun-version', 'node-version', 'working-directory', 'build-command', 'tag', 'dry-run', 'publish-command', 'github-token'), ()),
     'publish-github-packages': (('changed-packages', 'bun-version', 'node-version', 'tag', 'build-command', 'root-build-command', 'dry-run', 'github-token'), ()),
     'publish-crates': (('crates', 'dry-run', 'cargo-registry-token'), ()),
@@ -171,6 +171,40 @@ class PrimitiveContracts(unittest.TestCase):
         verify = next(step for step in steps if step.get('name') == 'Verify publish landed on registry')
         self.assertEqual(verify['env'], {'NODE_AUTH_TOKEN': ''})
         self.assertEqual(verify['with']['registry'], 'https://registry.npmjs.org')
+
+    def test_npm_visibility_waits_for_the_tag_long_enough_for_npm_to_process_a_publication(self):
+        # npm took 55 to 249 seconds to serve dashboard-api 1.6.30 to 1.6.34 and 76 seconds for openclaw 0.2.3.
+        block = action(ROOT / '.github/blocks/publish-npm')
+        self.assertEqual(block['inputs']['verify-timeout-seconds']['default'], '600')
+        steps = block['runs']['steps']
+        verify = next(step for step in steps if step.get('name') == 'Verify publish landed on registry')
+        self.assertEqual(verify['id'], 'verify')
+        self.assertEqual(verify['with']['dist-tag'], '${{ inputs.tag }}')
+        self.assertEqual(verify['with']['timeout-seconds'], '${{ inputs.verify-timeout-seconds }}')
+        report = steps[steps.index(verify) + 1]
+        self.assertEqual(report['if'], "failure() && steps.verify.outcome == 'failure'")
+        self.assertIn('::error::npm accepted', report['run'])
+        monorepo = action(ROOT / '.github/blocks/publish-npm-packages')
+        self.assertEqual(monorepo['inputs']['verify-timeout-seconds']['default'], '600')
+        publish = next(step for step in monorepo['runs']['steps'] if step.get('name') == 'Build and publish packages in dependency order')
+        self.assertEqual(publish['env']['VERIFY_TIMEOUT_SECONDS'], '${{ inputs.verify-timeout-seconds }}')
+        for name in ('publish-github-packages', 'publish-github-package'):
+            self.assertNotIn('verify-timeout-seconds', yaml.dump(action(ROOT / '.github/blocks' / name)))
+
+    def test_npm_verification_timeout_is_checked_before_anything_is_built_or_published(self):
+        steps = action(ROOT / '.github/blocks/publish-npm')['runs']['steps']
+        check = steps[0]
+        self.assertEqual(check['name'], 'Check the verification timeout')
+        for value, accepted in (('600', True), ('0', True), ('', False), ('10m', False), ('-1', False), ('1.5', False)):
+            with self.subTest(value=value):
+                result = subprocess.run(['bash', '-c', check['run']], env={**os.environ, 'VERIFY_TIMEOUT_SECONDS': value}, capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, accepted, result.stdout)
+
+    def test_direct_visibility_callers_keep_the_fixed_schedule_unless_they_ask_for_more(self):
+        inputs = action(ROOT / '.github/primitives/wait-npm-version')['inputs']
+        self.assertEqual((inputs['attempts']['default'], inputs['interval-seconds']['default']), ('6', '5'))
+        for name in ('timeout-seconds', 'dist-tag', 'integrity'):
+            self.assertEqual(inputs[name]['default'], '')
 
     def test_git_recipes_keep_rebase_and_publication_policy_outside_the_primitives(self):
         for name in ('bump-npm-version', 'bump-monorepo-versions', 'sync-crates-version', 'update-tap'):
