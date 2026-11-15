@@ -11,11 +11,20 @@ inputs:
     description: npm-compatible registry URL
     required: true
   attempts:
-    description: Maximum registry reads
+    description: Maximum registry reads when timeout-seconds is empty
     default: '6'
   interval-seconds:
-    description: Delay between registry reads
+    description: Delay between registry reads; with timeout-seconds, the first delay, which then doubles up to 30 seconds
     default: '5'
+  timeout-seconds:
+    description: Seconds to keep reading, replacing attempts; empty keeps the fixed attempts schedule
+    default: ''
+  dist-tag:
+    description: Distribution tag that must name the version; empty skips the check
+    default: ''
+  integrity:
+    description: Expected dist.integrity of the version; a different value fails at once; empty skips the check
+    default: ''
 outputs:
   version:
     description: Verified version

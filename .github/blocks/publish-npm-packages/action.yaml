@@ -32,6 +32,10 @@ inputs:
   npm-token:
     description: '[secret] NPM authentication token'
     required: true
+  verify-timeout-seconds:
+    description: '[string] Seconds to wait after each publication for npm to serve the version under the requested tag. npm can take several minutes to make a new version available.'
+    required: false
+    default: '600'
 
 runs:
   using: composite
@@ -65,4 +69,5 @@ runs:
         REGISTRY_URL: https://registry.npmjs.org
         PACKAGE_ACCESS: public
         PACKAGE_OWNER: ''
+        VERIFY_TIMEOUT_SECONDS: ${{ inputs.verify-timeout-seconds }}
       run: node "$ACTION_PATH/../publish-packages.mjs"
