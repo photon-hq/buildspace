@@ -244,10 +244,10 @@ function stringEnd(text, start) {
 }
 
 /**
- * The argument lists of Package.swift's .package(...) declarations, read as
- * text with its comments dropped. Promotion never runs the manifest.
+ * The argument lists of a Swift source's calls matching `call`, read as text
+ * with its comments dropped. Promotion never runs the source.
  */
-export function packageDeclarations(source) {
+function argumentLists(source, call) {
   let code = "";
   for (let i = 0; i < source.length; ) {
     if (source[i] === '"') {
@@ -262,7 +262,7 @@ export function packageDeclarations(source) {
     } else code += source[i++];
   }
   const declarations = [];
-  for (const match of code.matchAll(/\.package\s*\(/g)) {
+  for (const match of code.matchAll(call)) {
     let depth = 1;
     let i = match.index + match[0].length;
     for (; i < code.length && depth; i++) {
@@ -274,6 +274,9 @@ export function packageDeclarations(source) {
   }
   return declarations;
 }
+
+/** The argument lists of Package.swift's .package(...) declarations. */
+export const packageDeclarations = (source) => argumentLists(source, /\.package\s*\(/g);
 
 /**
  * Why a version of one of the owner's repositories is not production, or
