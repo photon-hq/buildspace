@@ -145,6 +145,16 @@ class WorkflowTests(unittest.TestCase):
             if name != 'resolve':
                 self.assertNotIn('APP_PRIVATE_KEY', yaml.dump(job), name)
 
+    def test_promotion_checks_gitgate_packages_read_only(self):
+        inputs = PROMOTE['on']['workflow_call']['inputs']
+        self.assertEqual(inputs['gitgate-packages']['default'], '')
+        resolving = step(PROMOTE['jobs']['resolve'], 'Resolve and verify the candidate')
+        self.assertEqual(resolving['env']['GITGATE_PACKAGES'], '${{ inputs.gitgate-packages }}')
+        self.assertIn('--gitgate-packages "$GITGATE_PACKAGES"', resolving['run'])
+        for name, job in PROMOTE['jobs'].items():
+            if name != 'resolve':
+                self.assertNotIn('gitgate-packages', yaml.dump(job), name)
+
     def test_jamf_receives_only_the_released_package_of_an_approved_promotion(self):
         jamf = PROMOTE['jobs']['jamf-upload']
         self.assertEqual(jamf['needs'], ['resolve', 'publish'])

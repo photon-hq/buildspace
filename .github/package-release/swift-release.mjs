@@ -13,6 +13,7 @@ const SHA = /^[a-f0-9]{40}$/;
 const STAGING_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-staging\.(\d+)\.(\d+)$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const LITERAL = /"((?:[^"\\\n]|\\.)*)"/g;
+const SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const AGE = /^(0|[1-9]\d*)([mhd])$/;
 const AGE_LABEL = /^min-staging-age:(.+)$/;
 const AGE_UNIT = { m: 60_000, h: 3_600_000, d: 86_400_000 };
@@ -279,6 +280,23 @@ function argumentLists(source, call) {
 export const packageDeclarations = (source) => argumentLists(source, /\.package\s*\(/g);
 
 /**
+ * The GitGate packages a Swift source declares: the owner/repository literal
+ * each `GitGate(...)` opens with, in declaration order without repeats, and a
+ * finding for each declaration that opens with anything else.
+ */
+export function gitGateDeclarations(source) {
+  const slugs = [];
+  const findings = [];
+  for (const declaration of argumentLists(source, /\bGitGate\s*\(/g)) {
+    const slug = /^\s*"((?:[^"\\\n]|\\.)*)"/.exec(declaration)?.[1];
+    if (slug === undefined || !SLUG.test(slug))
+      findings.push(`write the repository of GitGate(${declaration.trim().replace(/\s+/g, " ")}) as an owner/repository string literal so promotion can check it`);
+    else if (!slugs.includes(slug)) slugs.push(slug);
+  }
+  return { slugs, findings };
+}
+
+/**
  * Why a version of one of the owner's repositories is not production, or
  * undefined when it is: a published release under vX.Y.Z or X.Y.Z, not a draft
  * or prerelease, whose tag still names the resolved revision.
@@ -370,10 +388,52 @@ export function dependencyFindings({ repository, sourceSha, library = false, run
 }
 
 /**
+ * The release a production host installs from a GitGate package's repository,
+ * or the problem that leaves it nothing to install. GitGate lists a
+ * repository's newest 30 releases as GitHub orders them, and a production
+ * host takes the newest published, non-prerelease release among them.
+ */
+function gitGateRelease(run, slug) {
+  let releases;
+  try {
+    releases = JSON.parse(run("gh", ["api", `repos/${slug}/releases?per_page=30`]));
+  } catch (error) {
+    if (notFound(error)) return { problem: `${slug} is not readable to check its releases; promote with private-deps` };
+    throw error;
+  }
+  const published = (release) => Date.parse(release.published_at ?? release.created_at ?? "") || 0;
+  const [release] = releases.filter((candidate) => !candidate.draft && !candidate.prerelease).sort((left, right) => published(right) - published(left) || right.id - left.id);
+  if (release) return { release: release.tag_name };
+  return { problem: `${slug} has no production release${releases.length >= 30 ? " among its newest 30 releases, which are all GitGate lists" : ""}; promote it first` };
+}
+
+/**
+ * Findings that keep a build from production: a GitGate package declared by
+ * the source commit's file at `path` that production hosts could not install,
+ * because its repository has no production release. Promotion reads the file
+ * from GitHub, never running it. `packages` lists the release each package
+ * resolves to.
+ */
+export function gitGateFindings({ repository, sourceSha, path, run = exec, dependencyRun = run }) {
+  const source = sourceFile(run, repository, sourceSha, path);
+  if (source === undefined) throw new Error(`${sourceSha} has no ${path} to read its GitGate packages from`);
+  const { slugs, findings } = gitGateDeclarations(source);
+  const packages = [];
+  const problems = findings.map((finding) => `${path}: ${finding}`);
+  for (const slug of slugs) {
+    const { release, problem } = gitGateRelease(dependencyRun, slug);
+    if (problem) problems.push(problem);
+    else packages.push({ package: slug, release });
+  }
+  return { packages, findings: problems };
+}
+
+/**
  * Find the build to promote and prove where it came from: staged by the stage
  * workflow from a commit on main, unchanged since, newer than the latest
- * release, and depending only on the owner's production releases. `pending`
- * is false when that release already is this build.
+ * release, depending only on the owner's production releases, and installing
+ * only GitGate packages that have one. `pending` is false when that release
+ * already is this build.
  */
 export async function resolveCandidate({
   repository,
@@ -386,6 +446,7 @@ export async function resolveCandidate({
   output,
   minimumAge,
   skipMinimumAge = "",
+  gitGatePackages = "",
   now = Date.now(),
   run = exec,
   dependencyRun = run,
@@ -439,22 +500,30 @@ export async function resolveCandidate({
   if (latest === candidate) {
     if (tagCommit(run, repository, manifest.productionTag) !== manifest.sourceSha)
       throw new Error(`${tag} cannot be promoted: ${manifest.productionTag} is already released from another commit; stage a newer build`);
-    if (productionReleaseExists(run, manifest)) return { manifest, pending: false, dependencies: [] };
+    if (productionReleaseExists(run, manifest)) return { manifest, pending: false, dependencies: [], packages: [] };
   } else if (behind(candidate, latest))
     throw new Error(`${tag} cannot be promoted: ${candidate} is not newer than the latest release ${latest}; stage a newer build`);
   const { dependencies, findings } = dependencyFindings({ repository, sourceSha: manifest.sourceSha, library, run, dependencyRun });
   if (findings.length)
     throw new Error(`${tag} cannot be promoted until its dependencies are production releases:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
+  // Production hosts install the GitGate packages the build declares, so each needs a release they can install.
+  let packages = [];
+  if (gitGatePackages) {
+    const installed = gitGateFindings({ repository, sourceSha: manifest.sourceSha, path: gitGatePackages, run, dependencyRun });
+    if (installed.findings.length)
+      throw new Error(`${tag} cannot be promoted until every GitGate package it installs has a production release:\n${installed.findings.map((finding) => `- ${finding}`).join("\n")}`);
+    packages = installed.packages;
+  }
   // A library runs on no staging Mac; the packages that pin it wait instead.
   // A build re-released after a rollback is measured from the release before it.
   const previous = baselineOf(tags, manifest);
   // An unset minimum (only callers of this function can leave it unset) skips the
   // check; an empty one, as the workflow passes it, means the default.
-  if (minimumAge === undefined || library) return { manifest, pending: true, dependencies, overridden: false };
+  if (minimumAge === undefined || library) return { manifest, pending: true, dependencies, packages, overridden: false };
   // A reason skips the check outright, so nothing in it can hold up a hotfix.
   if (reason) {
     await writeFile(join(output, OVERRIDE), `${JSON.stringify({ reason }, null, 2)}\n`);
-    return { manifest, pending: true, dependencies, overridden: true };
+    return { manifest, pending: true, dependencies, packages, overridden: true };
   }
   const skip = "To promote now, set skip-minimum-age-reason.";
   let soak;
@@ -469,7 +538,7 @@ export async function resolveCandidate({
     throw Object.assign(new Error(`${tag}: some changes were on staging for less than the minimum time:\n${soak.waiting.map((change) => `- ${changeLine(change)}`).join("\n")}\n${skip}`), { soak });
   // Publishing checks again if a release comes out before approval.
   await writeFile(join(output, CHECKED), `${JSON.stringify({ baseline: previous, minimum }, null, 2)}\n`);
-  return { manifest, pending: true, dependencies, soak, overridden: false };
+  return { manifest, pending: true, dependencies, packages, soak, overridden: false };
 }
 
 /** A duration such as 30m, 2h or 1d, in milliseconds. */
@@ -621,6 +690,7 @@ async function main() {
       channel: { type: "string" },
       directory: { type: "string" },
       environment: { type: "string" },
+      "gitgate-packages": { type: "string", default: "" },
       library: { type: "string", default: "false" },
       "minimum-age": { type: "string", default: "" },
       output: { type: "string" },
@@ -695,6 +765,7 @@ async function main() {
           output: resolve(values.output),
           minimumAge: values["minimum-age"],
           skipMinimumAge: reason,
+          gitGatePackages: values["gitgate-packages"],
           dependencyRun: env.DEPENDENCY_TOKEN ? (command, args) => exec(command, args, { ...env, GH_TOKEN: env.DEPENDENCY_TOKEN }) : exec,
         });
       } catch (error) {
@@ -703,9 +774,12 @@ async function main() {
         if (error.unchecked !== undefined) await summarize(soakSummary(undefined, `Cannot check the time on staging. ${error.unchecked} ${skip}`).join("\n"));
         throw error;
       }
-      const { manifest, pending, dependencies, soak } = resolved;
+      const { manifest, pending, dependencies, packages, soak } = resolved;
       const released = dependencies.length
         ? ["Its internal dependencies are production releases:", "", "| Dependency | Version |", "| --- | --- |", ...dependencies.map(({ dependency, version }) => `| ${dependency} | \`${version}\` |`), ""]
+        : [];
+      const installed = packages.length
+        ? ["Production hosts install these releases of the GitGate packages it declares:", "", "| Package | Production release |", "| --- | --- |", ...packages.map(({ package: slug, release }) => `| ${slug} | \`${release}\` |`), ""]
         : [];
       await summarize(
         pending
@@ -714,6 +788,7 @@ async function main() {
               "",
               releaseNotes(manifest, "production", resolved.overridden ? { reason } : null),
               ...released,
+              ...installed,
               // With a skip reason there is no table; the release notes above give the reason.
               ...(soak ? soakSummary(soak) : []),
               "Approve the deployment to release this exact build.",
