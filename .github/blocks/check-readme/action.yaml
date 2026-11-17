@@ -48,6 +48,10 @@ runs:
         openai-api-key: ${{ inputs.openai-api-key }}
         model: gpt-5.4
         safety-strategy: read-only
+        # codex-action runs only for actors with write access. The organization's Capy
+        # GitHub App opens pull requests as capy-ai[bot], which has none, so its pull
+        # requests fail here instead of being checked.
+        allow-bot-users: capy-ai
         prompt: |
           You are reviewing a pull request to determine if the README (README.md) is up to date.
 
