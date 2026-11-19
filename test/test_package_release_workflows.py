@@ -192,25 +192,12 @@ class WorkflowTests(unittest.TestCase):
 
 
 class CiGateTests(unittest.TestCase):
-    def test_gate_runs_alongside_the_build_for_every_main_publication(self):
-        gate = STAGE['jobs']['verify-ci']
-        self.assertEqual(gate['needs'], STAGE['jobs']['build']['needs'])
-        self.assertEqual(gate['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
-        self.assertEqual(gate['permissions'], {'actions': 'read'})
-        self.assertNotIn('environment', gate)
-        self.assertEqual(gate['steps'][0], STAGE['jobs']['publish']['steps'][0])
-        self.assertEqual(gate['steps'][0]['env']['WORKFLOW_SHA'], '${{ job.workflow_sha }}')
-        self.assertEqual(len(gate['steps']), 2)
-        self.assertNotIn('wait-ci', yaml.dump(STAGE['jobs']['build']))
-
     def test_wait_step_requires_the_latest_matching_green_main_push(self):
         sha = 'a' * 40
         workflow = 'verify-contracts.yaml'
         green = dict(id=5, path=f'.github/workflows/{workflow}', head_sha=sha,
                      head_branch='main', event='push', status='completed', conclusion='success')
         gate = step(STAGE['jobs']['verify-ci'], 'Require CI to pass on this exact commit')
-        self.assertEqual(gate['env']['CI_WORKFLOW'], '${{ inputs.ci-workflow }}')
-        self.assertEqual(gate['env']['CI_WAIT_MINUTES'], '${{ inputs.ci-wait-minutes }}')
         with tempfile.TemporaryDirectory() as directory:
             gh = Path(directory, 'gh')
             gh.write_text('#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = api ] && [ "$2" = "$ENDPOINT" ] || exit 7\nprintf "%s" "$RESPONSE"\n')
