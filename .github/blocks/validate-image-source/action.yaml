@@ -37,22 +37,17 @@ runs:
           echo "tag=main-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        prefix="refs/heads/hotfix/$NAMESPACE/"
-        [[ "$GITHUB_REF" == "$prefix"???????????????????????????????????????? ]] || {
+        [[ "$GITHUB_REF" =~ ^refs/heads/hotfix/$NAMESPACE/([a-f0-9]{40})$ ]] || {
           echo "::error::hotfix ref must be hotfix/$NAMESPACE/<40 lowercase hex baseline>" >&2
           exit 1
         }
-        baseline="${GITHUB_REF#"$prefix"}"
-        [[ "$baseline" =~ ^[a-f0-9]{40}$ ]] || {
-          echo "::error::hotfix baseline must be a 40-character lowercase SHA" >&2
-          exit 1
-        }
+        baseline="${BASH_REMATCH[1]}"
         release="$NAMESPACE-$baseline"
         gh release view "$release" --json isDraft,isPrerelease | jq -e '.isDraft == false and .isPrerelease == false' >/dev/null || {
           echo "::error::stable release $release is required" >&2
           exit 1
         }
-        [[ "$(git rev-parse "$release^{commit}")" == "$baseline" ]] || {
+        [[ "$(git rev-parse "refs/tags/$release^{commit}")" == "$baseline" ]] || {
           echo "::error::stable release $release does not identify the hotfix baseline" >&2
           exit 1
         }
