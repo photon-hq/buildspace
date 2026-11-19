@@ -1,0 +1,68 @@
+name: 'TypeScript Install'
+description: 'Check out a TypeScript repository, configure Node and pnpm, and install its frozen lockfile'
+
+inputs:
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '24'
+  pnpm-version:
+    description: 'pnpm version; empty reads the packageManager field in package.json'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Directory containing package.json and the lockfile'
+    required: false
+    default: '.'
+  cache-dependency-path:
+    description: 'Lockfile path or newline-separated paths for the pnpm cache'
+    required: false
+    default: 'pnpm-lock.yaml'
+  registry-url:
+    description: 'npm-compatible registry used by setup-node for package reads'
+    required: false
+    default: 'https://npm.pkg.github.com'
+  scope:
+    description: 'Package scope mapped to registry-url by setup-node'
+    required: false
+    default: '@photon-hq'
+  buf-token:
+    description: 'Read token for the buf.build npm registry; used only by install'
+    required: false
+    default: ''
+  install-command:
+    description: 'Trusted shell command that installs the frozen lockfile'
+    required: false
+    default: 'pnpm install --frozen-lockfile --config.//buf.build/gen/npm/v1/:_authToken="$BUF_TOKEN"'
+  persist-credentials:
+    description: 'Whether checkout leaves the GitHub token in the local Git config'
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Check out source
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        persist-credentials: ${{ inputs.persist-credentials }}
+    - name: Set up pnpm
+      uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+      with:
+        version: ${{ inputs.pnpm-version }}
+        run_install: false
+    - name: Set up Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}
+        registry-url: ${{ inputs.registry-url }}
+        scope: ${{ inputs.scope }}
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BUF_TOKEN: ${{ inputs.buf-token }}
+        NODE_AUTH_TOKEN: ${{ github.token }}
+      run: ${{ inputs.install-command }}

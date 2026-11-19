@@ -48,6 +48,7 @@ BuildSpace gives you three layers of CI/CD automation:
   - [publish-github-packages](#publish-github-packages)
   - [publish-npm-packages](#publish-npm-packages)
   - [rust-build](#rust-build)
+  - [typescript-install](#typescript-install)
   - [typescript-build](#typescript-build)
   - [sync-crates-version](#sync-crates-version)
   - [update-tap](#update-tap)
@@ -1983,6 +1984,56 @@ Builds a TypeScript project using Bun.
 
 ---
 
+### typescript-install
+
+**Path:** `.github/blocks/typescript-install/action.yaml`
+
+Checks out a TypeScript repository, resolves its pnpm version from the
+repository's `packageManager` field by default, configures Node and the pnpm
+cache, and installs the frozen lockfile. The block maps the caller's GitHub
+token to `NODE_AUTH_TOKEN` and accepts a caller-provided `buf-token` only for
+the install command. It does not run scripts, build packages, or choose a
+release policy.
+
+The default command reads Photon packages from GitHub Packages and buf.build.
+Set `buf-token` from the caller's secret, and grant the calling job
+`packages: read`. The token is scoped to the install step; later steps do not
+inherit it from this block.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `node-version` | string | No | `24` | Node.js version |
+| `pnpm-version` | string | No | `""` | pnpm version; empty reads `packageManager` |
+| `working-directory` | string | No | `.` | Directory containing `package.json` and the lockfile |
+| `cache-dependency-path` | string | No | `pnpm-lock.yaml` | Lockfile path or newline-separated paths |
+| `registry-url` | string | No | `https://npm.pkg.github.com` | npm-compatible package registry |
+| `scope` | string | No | `@photon-hq` | Package scope mapped to the registry |
+| `buf-token` | secret | No | `""` | buf.build read token, used only by install |
+| `install-command` | string | No | frozen pnpm install | Trusted install command |
+| `persist-credentials` | boolean | No | `true` | Keep the checkout token in local Git config |
+
+#### Usage
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+
+steps:
+  - uses: photon-hq/buildspace/.github/blocks/typescript-install@<reviewed-commit-sha>
+    with:
+      buf-token: ${{ secrets.BUF_TOKEN }}
+```
+
+Use `pnpm-version` only when a caller intentionally overrides the version in
+`package.json`; otherwise the lockfile and package manager declaration remain
+the source of truth. For more than one lockfile, pass a newline-separated
+`cache-dependency-path` and keep the caller's install command explicit.
+
+---
+
 ### sync-crates-version
 
 **Path:** `.github/blocks/sync-crates-version/action.yaml`
@@ -2324,6 +2375,7 @@ buildspace/
 │   │   ├── swift-pkg/                 # macOS .pkg creation
 │   │   ├── swift-stage-package/       # One swift-stage channel's .pkg
 │   │   ├── sync-crates-version/       # Workspace version sync
+│   │   ├── typescript-install/        # Node/pnpm setup and frozen install
 │   │   ├── typescript-build/          # TypeScript builds
 │   │   ├── update-docs/               # AI docs update via Claude Code
 │   │   └── update-skills/             # AI skills update via Claude Code
