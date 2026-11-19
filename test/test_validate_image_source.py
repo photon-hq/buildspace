@@ -1,92 +1,103 @@
+import json
 import os
 from pathlib import Path
-import stat
 import subprocess
 import tempfile
 import unittest
 
 import yaml
 
+from git_fixture import commit_fixture
+
 
 ROOT = Path(__file__).resolve().parents[1]
-ACTION = yaml.safe_load(
-    (ROOT / '.github/blocks/validate-image-source/action.yaml').read_text(),
-)
+ACTION = yaml.safe_load((ROOT / '.github/blocks/validate-image-source/action.yaml').read_text())
 SCRIPT = next(step['run'] for step in ACTION['runs']['steps'] if step.get('id') == 'identity')
 
 
 class ValidateImageSourceTests(unittest.TestCase):
-    def run_identity(self, *, ref, sha, namespace='account', release='stable', tag_sha=None, ancestor=True):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bin_dir = root / 'bin'
-            bin_dir.mkdir()
-            output = root / 'output'
-            output.write_text('')
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.repo = self.root / 'repo'
+        self.repo.mkdir()
+        self.output = self.root / 'output'
+        gh = self.root / 'gh'
+        gh.write_text(
+            '#!/bin/sh\n'
+            '[ "$#" -eq 5 ] && [ "$1 $2 $3 $4 $5" = "release view $EXPECTED_RELEASE --json isDraft,isPrerelease" ] || exit 1\n'
+            'cat "$RELEASE_METADATA"\n'
+        )
+        gh.chmod(0o755)
 
-            gh = bin_dir / 'gh'
-            gh.write_text('#!/bin/sh\nprintf \'%s\\n\' "$RELEASE_JSON"\n')
-            gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
-            jq = bin_dir / 'jq'
-            jq.write_text('#!/bin/sh\ncat >/dev/null\n[ "$RELEASE_OK" = true ]\n')
-            jq.chmod(jq.stat().st_mode | stat.S_IEXEC)
-            git = bin_dir / 'git'
-            git.write_text(
-                '#!/bin/sh\n'
-                'case "$1" in\n'
-                '  rev-parse) printf \'%s\\n\' "$TAG_SHA" ;;\n'
-                '  merge-base) [ "$ANCESTOR_OK" = true ] ;;\n'
-                '  *) exit 1 ;;\n'
-                'esac\n',
-            )
-            git.chmod(git.stat().st_mode | stat.S_IEXEC)
-            env = {
-                **os.environ,
-                'PATH': f'{bin_dir}:{os.environ["PATH"]}',
-                'GITHUB_REF': ref,
-                'GITHUB_SHA': sha,
-                'GITHUB_OUTPUT': str(output),
-                'NAMESPACE': namespace,
-                'RELEASE_JSON': '{"isDraft":false,"isPrerelease":false}',
-                'RELEASE_OK': str(release == 'stable').lower(),
-                'TAG_SHA': tag_sha or sha,
-                'ANCESTOR_OK': str(ancestor).lower(),
-            }
-            return subprocess.run(['bash', '-c', SCRIPT], env=env, capture_output=True, text=True), output.read_text()
+    def git(self, *args):
+        subprocess.run(['git', *args], cwd=self.repo, check=True, capture_output=True)
 
-    def test_main_uses_the_event_sha_without_release_or_history_reads(self):
+    def run_identity(self, ref, sha, *, namespace='account', expected_release=''):
+        self.output.write_text('')
+        result = subprocess.run(['bash', '-c', SCRIPT], cwd=self.repo, env={
+            **os.environ,
+            'PATH': f'{self.root}:{os.environ["PATH"]}',
+            'GITHUB_REF': ref,
+            'GITHUB_SHA': sha,
+            'GITHUB_OUTPUT': str(self.output),
+            'NAMESPACE': namespace,
+            'EXPECTED_RELEASE': expected_release,
+            'RELEASE_METADATA': str(self.root / 'release.json'),
+        }, capture_output=True, text=True)
+        return result, self.output.read_text()
+
+    def test_main_needs_neither_history_nor_a_release(self):
         sha = 'a' * 40
-        result, output = self.run_identity(ref='refs/heads/main', sha=sha)
+        result, output = self.run_identity('refs/heads/main', sha)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output, f'tag=main-{sha}\n')
 
-    def test_hotfix_requires_stable_release_exact_tag_and_ancestry(self):
-        baseline = 'b' * 40
-        sha = 'c' * 40
+    def test_hotfix_requires_a_stable_release_on_the_exact_ancestor(self):
+        self.git('init', '-q')
+        baseline = commit_fixture(self.repo, 'baseline')
+        head = commit_fixture(self.repo, 'hotfix')
+        release = f'account-{baseline}'
         ref = f'refs/heads/hotfix/account/{baseline}'
-        result, output = self.run_identity(ref=ref, sha=sha, tag_sha=baseline)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(output, f'tag=hotfix-{baseline}-{sha}\n')
+        self.git('tag', release, baseline)
+        metadata = self.root / 'release.json'
 
-        for kwargs, message in (
-            ({'release': 'missing', 'tag_sha': baseline}, 'stable release'),
-            ({'tag_sha': 'd' * 40}, 'stable release'),
-            ({'ancestor': False, 'tag_sha': baseline}, 'descended'),
-        ):
-            with self.subTest(message=message):
-                failed, _ = self.run_identity(ref=ref, sha=sha, **kwargs)
-                self.assertNotEqual(failed.returncode, 0)
-                self.assertIn(message, failed.stderr)
+        def check(sha, error=''):
+            result, output = self.run_identity(ref, sha, expected_release=release)
+            if error:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
+                self.assertEqual(output, '')
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output, f'tag=hotfix-{baseline}-{sha}\n')
 
-    def test_namespace_and_hotfix_baseline_use_a_strict_grammar(self):
+        check(head, 'is required')
+        for draft, prerelease in ((True, False), (False, True), (False, False)):
+            with self.subTest(draft=draft, prerelease=prerelease):
+                metadata.write_text(json.dumps({'isDraft': draft, 'isPrerelease': prerelease}))
+                check(head, 'is required' if draft or prerelease else '')
+
+        self.git('checkout', '--orphan', 'unrelated')
+        check(commit_fixture(self.repo, 'unrelated'), 'not descended')
+        self.git('tag', '-f', release, head)
+        check(head, 'does not identify')
+        self.git('tag', '-d', release)
+        check(head, 'does not identify')
+
+    def test_malformed_namespace_and_ref_do_not_produce_a_tag(self):
         sha = 'a' * 40
-        failed, _ = self.run_identity(ref='refs/heads/main', sha=sha, namespace='account;touch')
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('namespace', failed.stderr)
-
-        failed, _ = self.run_identity(ref='refs/heads/hotfix/account/not-a-sha', sha=sha)
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('hotfix ref', failed.stderr)
+        for namespace, ref, error in (
+            ('account;touch', 'refs/heads/main', 'namespace'),
+            ('account', 'refs/heads/hotfix/account/not-a-sha', 'hotfix ref'),
+            ('account', f'refs/heads/hotfix/other/{sha}', 'hotfix ref'),
+        ):
+            with self.subTest(namespace=namespace, ref=ref):
+                result, output = self.run_identity(ref, sha, namespace=namespace)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(error, result.stderr)
+                self.assertEqual(output, '')
 
 
 if __name__ == '__main__':

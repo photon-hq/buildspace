@@ -2040,25 +2040,23 @@ Builds a TypeScript project using Bun.
 
 **Path:** `.github/blocks/typescript-install/action.yaml`
 
-Checks out a TypeScript repository, resolves pnpm from the repository's
-`packageManager` field, configures Node and the root pnpm cache, and installs
-the frozen lockfile. The block maps the caller's GitHub token to
-`NODE_AUTH_TOKEN` and accepts a caller-provided `buf-token` only for the
-install step. It does not build packages or choose a release policy.
+Run this block **after checkout**; the caller selects the source ref, history
+depth and Git credentials. The block reads pnpm's version from the root
+`packageManager` field, configures Node and the pnpm store cache, then runs
+`pnpm install --frozen-lockfile` even on a cache hit.
 
-The default command reads Photon packages from GitHub Packages and buf.build.
-Set the required `buf-token` from the caller's secret, and grant the calling
-job `packages: read`. The token is scoped to the install step; later steps do
-not inherit it from this block. The block intentionally supports one root
-`pnpm-lock.yaml` and does not expose overrides that could bypass the frozen
-install or disagree with the repository's package-manager declaration.
+The GitHub Packages scope follows the caller's repository owner. Grant
+`packages: read` when the lockfile needs private GitHub packages. If it also
+needs private packages from buf.build, pass `buf-token`; otherwise omit the
+input for a plain frozen install. Only the install step receives registry
+credentials. The block has no outputs and runs no build or release command.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `node-version` | string | No | `24` | Node.js version |
-| `buf-token` | secret | Yes | — | buf.build read token, used only by install |
+| `buf-token` | secret | No | `""` | buf.build read token, used only by install |
 
 #### Usage
 
@@ -2068,6 +2066,9 @@ permissions:
   packages: read
 
 steps:
+  - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+    with:
+      persist-credentials: false
   - uses: photon-hq/buildspace/.github/blocks/typescript-install@<reviewed-commit-sha>
     with:
       buf-token: ${{ secrets.BUF_TOKEN }}

@@ -1,5 +1,5 @@
 name: 'TypeScript Install'
-description: 'Check out a TypeScript repository, configure Node and pnpm, and install its frozen lockfile'
+description: 'Configure Node and pnpm in the caller checkout and install its frozen lockfile'
 
 inputs:
   node-version:
@@ -7,16 +7,13 @@ inputs:
     required: false
     default: '24'
   buf-token:
-    description: 'Read token for the buf.build npm registry; used only by install'
-    required: true
+    description: 'Optional buf.build read token; used only by install'
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
-    - name: Check out source
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      with:
-        persist-credentials: false
     - name: Set up pnpm
       uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
     - name: Set up Node.js
@@ -26,10 +23,15 @@ runs:
         cache: pnpm
         cache-dependency-path: pnpm-lock.yaml
         registry-url: https://npm.pkg.github.com
-        scope: '@photon-hq'
+        scope: '@${{ github.repository_owner }}'
     - name: Install dependencies
       shell: bash
       env:
         BUF_TOKEN: ${{ inputs.buf-token }}
         NODE_AUTH_TOKEN: ${{ github.token }}
-      run: pnpm install --frozen-lockfile --config.//buf.build/gen/npm/v1/:_authToken="$BUF_TOKEN"
+      run: |
+        args=(--frozen-lockfile)
+        if [[ -n "$BUF_TOKEN" ]]; then
+          args+=("--config.//buf.build/gen/npm/v1/:_authToken=$BUF_TOKEN")
+        fi
+        pnpm install "${args[@]}"
