@@ -12,7 +12,7 @@ import { bumpNotes } from "./release-version.mjs";
 
 const CHANNEL_TAG = { staging: "staging", production: "latest" };
 const execFileAsync = promisify(execFile);
-const MAX_PUBLISHERS = 16;
+const MAX_PUBLISHERS = 5;
 
 async function npmPublish(args) {
   const scratch = await mkdtemp(join(tmpdir(), "npm-publish-"));

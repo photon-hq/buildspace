@@ -1,5 +1,6 @@
 """Check the package stage/promote workflows' trust boundaries and pack step."""
 import json
+from itertools import product
 import os
 from pathlib import Path
 import re
@@ -222,14 +223,64 @@ class CiGateTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 1 if error else 0, result.stderr)
                     self.assertIn(error or f'{workflow} passed on {sha}', result.stderr if error else result.stdout)
 
-    def test_a_missing_workflow_cannot_authorize_publication(self):
-        gate = step(STAGE['jobs']['verify-ci'], 'Require CI to pass on this exact commit')
-        for workflow in ('', ' \t '):
-            with self.subTest(workflow=workflow):
-                result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', gate['run']],
-                                        env={'PATH': '', 'CI_WORKFLOW': workflow}, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn('ci-workflow is required to publish', result.stderr)
+    def test_gate_fetch_uses_public_release_tools_and_only_reads_actions(self):
+        gate = STAGE['jobs']['verify-ci']
+        self.assertEqual(gate['needs'], 'version')
+        self.assertEqual(gate['permissions'], {'actions': 'read'})
+        self.assertNotIn('environment', gate)
+        fetch, wait = gate['steps']
+        version_fetch = STAGE['jobs']['version']['steps'][0]
+        self.assertEqual(fetch['env'], version_fetch['env'])
+        self.assertEqual(fetch['run'], version_fetch['run'])
+        self.assertEqual(fetch['if'], "inputs.ci-workflow != ''")
+        self.assertNotIn('GH_TOKEN', fetch['env'])
+        self.assertNotIn('env', gate)
+        self.assertNotIn('uses', fetch)
+        self.assertNotIn('uses', wait)
+        self.assertEqual(wait['env']['CI_WORKFLOW'], '${{ inputs.ci-workflow }}')
+        self.assertEqual(wait['env']['GH_TOKEN'], '${{ github.token }}')
+
+    def test_inline_and_external_verification_are_independent_publication_gates(self):
+        build = STAGE['jobs']['build']
+        gate = STAGE['jobs']['verify-ci']
+        publish = STAGE['jobs']['publish']
+        self.assertEqual(gate['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
+        self.assertEqual(publish['if'], gate['if'])
+        self.assertEqual(set(publish['needs']), {'version', 'build', 'verify-ci'})
+        verify = step(build, 'Verify')
+        wait = step(gate, 'Require CI to pass on this exact commit')
+        self.assertNotIn('if', verify)
+        self.assertNotIn('if', wait)
+        for prerequisite in (build, gate, verify, wait):
+            self.assertNotIn('continue-on-error', prerequisite)
+        self.assertEqual(verify['env'], dict(VERIFY='${{ inputs.verify }}', CI_WORKFLOW='${{ inputs.ci-workflow }}',
+                                             DRY_RUN='${{ inputs.dry-run }}'))
+        def execute(script, env):
+            return subprocess.run(['bash', '-euo', 'pipefail', '-c', script], env=env,
+                                  capture_output=True, text=True, timeout=5)
+
+        with tempfile.TemporaryDirectory() as directory:
+            poll = Path(directory, 'node')
+            poll.write_text('#!/bin/sh\nexit "$POLL_EXIT"\n')
+            poll.chmod(0o755)
+            cases = product((False, True), ('', ' \t', 'ci.yml'), ('', ' \n', 'exit 0', 'exit 19'), (0, 23))
+            for dry, workflow, inline, external in cases:
+                with self.subTest(dry=dry, workflow=workflow, inline=inline, external=external):
+                    env = dict(PATH=f'{directory}:/usr/bin:/bin', VERIFY=inline, CI_WORKFLOW=workflow,
+                               DRY_RUN=str(dry).lower(), POLL_EXIT=str(external),
+                               RELEASE_TOOLS=directory, CI_WAIT_MINUTES='1')
+                    result = execute(verify['run'], env)
+                    missing = not dry and not workflow.strip() and not inline.strip()
+                    if missing:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('Set ci-workflow or verify', result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 19 if inline == 'exit 19' else 0)
+                    if not dry:
+                        result = execute(wait['run'], env)
+                        self.assertEqual(result.returncode, external if workflow.strip() else 0)
+                        if not workflow.strip():
+                            self.assertIn('inline verification', result.stdout)
 
 
 class PackStepTests(unittest.TestCase):

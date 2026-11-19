@@ -142,6 +142,37 @@ test("a corrupt registry response after publication blocks the next wave and eve
   assert.deepEqual(commands(fake.calls, "npm", "dist-tag"), []);
 });
 
+test("an HTTP 429 drains the first five publishers; a retry finishes the remaining batch", async (t) => {
+  const plugins = Array.from({ length: 6 }, (_, i) => `@photon-hq/plugin-${i}`);
+  for (const [channel, version] of [["staging", BUMP.version + SUFFIX], ["production", BUMP.version]]) {
+    const directory = join(root, channel);
+    for (const name of plugins) pack(directory, { name, version });
+    pack(directory, { name: umbrella, version, dependencies: Object.fromEntries(plugins.map((name) => [name, version])) });
+  }
+  const { packages } = await collectBoth();
+  const files = new Map(packages.map((pkg) => [pkg.staging.file, pkg.name]));
+  const fake = world();
+  t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 429 }));
+  const limited = registryMetadata("https://registry.npmjs.org");
+  await assert.rejects(publishWith(fake, {
+    registry: async (name) => {
+      const data = await fake.registry(name);
+      if (name === plugins[0] && Object.keys(data.versions).length) return limited(name);
+      return data;
+    },
+  }), /plugin-0: .*HTTP 429/);
+  const sent = () => commands(fake.calls, "npm", "publish").map((call) => files.get(basename(call[2])));
+  assert.deepEqual(sent(), plugins.slice(0, 5));
+  assert.deepEqual(fake.state.tags, {});
+  assert.deepEqual(fake.state.releases, {});
+  assert.deepEqual(commands(fake.calls, "npm", "dist-tag"), []);
+
+  fake.calls.length = 0;
+  await publishWith(fake, { runAttempt: "2" });
+  assert.deepEqual(sent(), [plugins[5], umbrella]);
+  for (const pkg of packages) assert.equal((await fake.registry(pkg.name))["dist-tags"].staging, pkg.staging.version);
+});
+
 test("the offline dry run derives each channel's layers from that channel's verified tarballs", async () => {
   packGraph({ [b]: { dependencies: { [a]: BUMP.version + SUFFIX } } });
   await collectBoth();

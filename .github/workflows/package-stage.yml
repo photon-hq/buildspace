@@ -23,7 +23,7 @@ on:
         default: ''
         type: string
       ci-workflow:
-        description: Workflow file (for example ci.yml) whose main push run on this exact commit must succeed before publishing; required unless dry-run
+        description: Optional main push workflow (for example ci.yml) that must pass on this exact commit; a real publish needs this or inline verify
         default: ''
         type: string
       ci-wait-minutes:
@@ -110,10 +110,10 @@ jobs:
     steps:
       - &fetch-release-tools
         name: Fetch the release tools of this workflow's commit
-        env:
+        env: &release-tools-revision
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
+        run: &fetch-release-tools-script |
           set -euo pipefail
           [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
           git init -q "$RUNNER_TEMP/buildspace"
@@ -141,7 +141,10 @@ jobs:
     permissions:
       actions: read
     steps:
-      - *fetch-release-tools
+      - name: Fetch release tools for the exact-commit check
+        if: inputs.ci-workflow != ''
+        env: *release-tools-revision
+        run: *fetch-release-tools-script
       - name: Require CI to pass on this exact commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -149,8 +152,8 @@ jobs:
           CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
         run: |
           if [[ -z "${CI_WORKFLOW//[[:space:]]/}" ]]; then
-            echo "::error::ci-workflow is required to publish a package; use dry-run to verify and pack only." >&2
-            exit 1
+            echo "No external CI workflow; the build must pass its inline verification."
+            exit 0
           fi
           node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
 
@@ -196,10 +199,17 @@ jobs:
           INSTALL_TOKEN: ${{ secrets.INSTALL_TOKEN }}
         run: bash -euo pipefail -c "$INSTALL"
       - name: Verify
-        if: inputs.verify != ''
         env:
           VERIFY: ${{ inputs.verify }}
-        run: bash -euo pipefail -c "$VERIFY"
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [[ -n "${VERIFY//[[:space:]]/}" ]]; then
+            bash -euo pipefail -c "$VERIFY"
+          elif [[ "$DRY_RUN" != true && -z "${CI_WORKFLOW//[[:space:]]/}" ]]; then
+            echo "::error::Set ci-workflow or verify for a real package release." >&2
+            exit 1
+          fi
       # Cargo records the commit in each .crate and refuses uncommitted changes.
       - name: Package the Rust crates
         if: inputs.crates != ''
