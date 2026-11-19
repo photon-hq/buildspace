@@ -75,11 +75,7 @@ class WorkflowTests(unittest.TestCase):
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
         self.assertEqual(publish['needs'], ['version', 'build', 'verify-ci'])
-        self.assertEqual(' '.join(publish['if'].split()), (
-            "${{ !cancelled() && github.ref == 'refs/heads/main' && !inputs.dry-run && "
-            "needs.version.result == 'success' && needs.build.result == 'success' && "
-            "(needs.verify-ci.result == 'success' || (inputs.ci-workflow == '' && needs.verify-ci.result == 'skipped')) }}"
-        ))
+        self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
         names = [s.get('name') for s in publish['steps']]
         self.assertLess(names.index('Attest every packed file'), names.index('Publish the staging build and attach its candidates'))
         self.assertLess(names.index('Attest every packaged crate'), names.index('Publish the staging build and attach its candidates'))
@@ -196,10 +192,10 @@ class WorkflowTests(unittest.TestCase):
 
 
 class CiGateTests(unittest.TestCase):
-    def test_gate_runs_alongside_the_build_only_for_a_main_publication_with_ci(self):
+    def test_gate_runs_alongside_the_build_for_every_main_publication(self):
         gate = STAGE['jobs']['verify-ci']
         self.assertEqual(gate['needs'], STAGE['jobs']['build']['needs'])
-        self.assertEqual(gate['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run && inputs.ci-workflow != ''")
+        self.assertEqual(gate['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
         self.assertEqual(gate['permissions'], {'actions': 'read'})
         self.assertNotIn('environment', gate)
         self.assertEqual(gate['steps'][0], STAGE['jobs']['publish']['steps'][0])
@@ -238,6 +234,15 @@ class CiGateTests(unittest.TestCase):
                                             env={**env, 'RESPONSE': response}, capture_output=True, text=True, timeout=5)
                     self.assertEqual(result.returncode, 1 if error else 0, result.stderr)
                     self.assertIn(error or f'{workflow} passed on {sha}', result.stderr if error else result.stdout)
+
+    def test_a_missing_workflow_cannot_authorize_publication(self):
+        gate = step(STAGE['jobs']['verify-ci'], 'Require CI to pass on this exact commit')
+        for workflow in ('', ' \t '):
+            with self.subTest(workflow=workflow):
+                result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', gate['run']],
+                                        env={'PATH': '', 'CI_WORKFLOW': workflow}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('ci-workflow is required to publish', result.stderr)
 
 
 class PackStepTests(unittest.TestCase):

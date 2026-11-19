@@ -23,7 +23,7 @@ on:
         default: ''
         type: string
       ci-workflow:
-        description: Workflow file (for example ci.yml) whose push run on this exact commit must succeed first
+        description: Workflow file (for example ci.yml) whose main push run on this exact commit must succeed before publishing; required unless dry-run
         default: ''
         type: string
       ci-wait-minutes:
@@ -135,7 +135,7 @@ jobs:
 
   verify-ci:
     needs: version
-    if: github.ref == 'refs/heads/main' && !inputs.dry-run && inputs.ci-workflow != ''
+    if: github.ref == 'refs/heads/main' && !inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -147,7 +147,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI_WORKFLOW: ${{ inputs.ci-workflow }}
           CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
-        run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
+        run: |
+          if [[ -z "${CI_WORKFLOW//[[:space:]]/}" ]]; then
+            echo "::error::ci-workflow is required to publish a package; use dry-run to verify and pack only." >&2
+            exit 1
+          fi
+          node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
 
   # Runs the caller's code with read-only permissions. Its artifact is not a release.
   build:
@@ -257,10 +262,7 @@ jobs:
   # Never runs the caller's code: it attests and publishes the build job's files.
   publish:
     needs: [version, build, verify-ci]
-    if: >-
-      ${{ !cancelled() && github.ref == 'refs/heads/main' && !inputs.dry-run &&
-          needs.version.result == 'success' && needs.build.result == 'success' &&
-          (needs.verify-ci.result == 'success' || (inputs.ci-workflow == '' && needs.verify-ci.result == 'skipped')) }}
+    if: github.ref == 'refs/heads/main' && !inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: ${{ inputs.environment }}
