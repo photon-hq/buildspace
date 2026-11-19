@@ -64,7 +64,10 @@ export function registryMetadata(registryUrl = GITHUB_PACKAGES, token = process.
     if (!response.ok)
       throw new Error(`${name}: registry returned HTTP ${response.status}`);
     const body = await response.json();
-    return { versions: body.versions ?? {}, "dist-tags": body["dist-tags"] ?? {} };
+    for (const field of ["versions", "dist-tags"])
+      if (!body?.[field] || typeof body[field] !== "object" || Array.isArray(body[field]))
+        throw new Error(`${name}: invalid registry metadata (${field})`);
+    return { versions: body.versions, "dist-tags": body["dist-tags"] };
   };
 }
 
@@ -159,25 +162,58 @@ export function bumpProblem(bump) {
   if (!Number.isInteger(bump.total) || !Array.isArray(bump.changes) || !Array.isArray(bump.warnings)) return "changes";
 }
 
-/** A package's internal dependencies are published before it. */
-export function publishOrder(manifests) {
-  const order = [];
-  const state = new Map();
+export function dependencyTarget(name, spec) {
+  if (!spec.startsWith("npm:")) return [name, spec];
+  const alias = spec.slice(4);
+  const separator = alias.indexOf("@", 1);
+  const target = separator === -1 ? alias : alias.slice(0, separator);
+  if (!SCOPED_NAME.test(target) && !UNSCOPED_NAME.test(target))
+    throw new Error(`${name}: invalid npm alias ${spec}`);
+  return [target, separator === -1 ? "*" : alias.slice(separator + 1) || "*"];
+}
+
+function dependencyDepths(manifests, resolveAliases) {
+  const depths = new Map();
   const visit = (name, path) => {
-    if (state.get(name) === "done") return;
-    if (state.get(name) === "visiting")
+    if (depths.has(name)) return depths.get(name);
+    if (path.includes(name))
       throw new Error(`Packages depend on each other: ${[...path, name].join(" -> ")}`);
-    state.set(name, "visiting");
+    let depth = 0;
     const manifest = manifests.get(name);
-    for (const field of [...DEPENDENCY_FIELDS, "peerDependencies"])
-      for (const dependency of Object.keys(manifest[field] ?? {}).sort())
-        if (dependency !== name && manifests.has(dependency))
-          visit(dependency, [...path, name]);
-    state.set(name, "done");
-    order.push(name);
+    for (const field of [...DEPENDENCY_FIELDS, "peerDependencies"]) {
+      const dependencies = manifest[field];
+      if (dependencies === undefined) continue;
+      if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies))
+        throw new Error(`${name}: invalid ${field}`);
+      for (const dependency of Object.keys(dependencies).sort()) {
+        if (typeof dependencies[dependency] !== "string")
+          throw new Error(`${name}: invalid ${field} spec for ${dependency}`);
+        const target = resolveAliases ? dependencyTarget(dependency, dependencies[dependency])[0] : dependency;
+        if (manifests.has(target) && (resolveAliases || target !== name))
+          depth = Math.max(depth, visit(target, [...path, name]) + 1);
+      }
+    }
+    depths.set(name, depth);
+    return depth;
   };
   for (const name of [...manifests.keys()].sort()) visit(name, []);
-  return order;
+  return depths;
+}
+
+/** Keep the deterministic order recorded by release manifest formats 1–3. */
+export function publishOrder(manifests) {
+  return [...dependencyDepths(manifests, false).keys()];
+}
+
+function publishLayers(manifests) {
+  const layers = [];
+  for (const [name, depth] of dependencyDepths(manifests, true))
+    (layers[depth] ??= []).push(name);
+  return layers;
+}
+
+export function logLayers(channel, layers, log) {
+  for (const [i, layer] of layers.entries()) log(`${channel} layer ${i + 1}: ${layer.join(", ")}`);
 }
 
 /**
@@ -267,6 +303,7 @@ export async function collect({
   registryUrl,
   output,
   runUrl,
+  log = () => {},
 }) {
   if (!SUFFIX.test(suffix)) throw new Error(`Invalid staging suffix: ${suffix}`);
   if (!SHA.test(sourceSha)) throw new Error("An exact source commit is required");
@@ -303,6 +340,10 @@ export async function collect({
       throw new Error(`${file}: multiple packages map to the same release filename`);
     filenames.add(file);
   }
+  const manifests = (pack) => new Map(packed.map((name) => [name, pack.get(name).manifest]));
+  const productionManifests = manifests(production);
+  logLayers("staging", publishLayers(manifests(staging)), log);
+  logLayers("production", publishLayers(productionManifests), log);
   await mkdir(output, { recursive: true });
   const entry = async ({ path, manifest }) => {
     const file = fileName(manifest.name, manifest.version);
@@ -316,9 +357,7 @@ export async function collect({
     };
   };
   const packages = [];
-  for (const name of publishOrder(
-    new Map(packed.map((name) => [name, production.get(name).manifest]))
-  ))
+  for (const name of publishOrder(productionManifests))
     packages.push({
       name,
       staging: await entry(staging.get(name)),
@@ -433,15 +472,20 @@ export async function verifyManifest(
     if (contents.name !== crate.name || contents.version !== crate.version)
       fail(`${crate.file} holds ${contents.name} ${contents.version}`);
   }
-  const packed = new Map();
-  for (const pkg of manifest.packages)
-    for (const channel of channels) {
+  const layers = {};
+  for (const channel of channels) {
+    const packed = new Map();
+    for (const pkg of manifest.packages) {
       const { file, version } = pkg[channel];
       const contents = readTarballManifest(join(directory, file));
       if (contents.name !== pkg.name || contents.version !== version)
         fail(`${file} holds ${contents.name}@${contents.version}`);
-      if (channel === "production") packed.set(pkg.name, contents);
+      packed.set(pkg.name, contents);
     }
+    if (channel === "production" && JSON.stringify(publishOrder(packed)) !== JSON.stringify(manifest.packages.map(({ name }) => name)))
+      fail("publish order");
+    layers[channel] = publishLayers(packed);
+  }
   const primary = manifest.packages.find(({ name }) => name === names.primary);
   if (!primary) fail(`${names.primary} is missing`);
   if (
@@ -450,6 +494,5 @@ export async function verifyManifest(
   )
     fail("release tags");
   if (manifest.crates.length && names.productionTagPrefix !== "v") fail("crates under a production tag prefix");
-  if (JSON.stringify(publishOrder(packed)) !== JSON.stringify(manifest.packages.map(({ name }) => name)))
-    fail("publish order");
+  return layers;
 }
