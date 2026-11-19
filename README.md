@@ -1988,31 +1988,25 @@ Builds a TypeScript project using Bun.
 
 **Path:** `.github/blocks/typescript-install/action.yaml`
 
-Checks out a TypeScript repository, resolves its pnpm version from the
-repository's `packageManager` field by default, configures Node and the pnpm
-cache, and installs the frozen lockfile. The block maps the caller's GitHub
-token to `NODE_AUTH_TOKEN` and accepts a caller-provided `buf-token` only for
-the install command. It does not run scripts, build packages, or choose a
-release policy.
+Checks out a TypeScript repository, resolves pnpm from the repository's
+`packageManager` field, configures Node and the root pnpm cache, and installs
+the frozen lockfile. The block maps the caller's GitHub token to
+`NODE_AUTH_TOKEN` and accepts a caller-provided `buf-token` only for the
+install step. It does not build packages or choose a release policy.
 
 The default command reads Photon packages from GitHub Packages and buf.build.
-Set `buf-token` from the caller's secret, and grant the calling job
-`packages: read`. The token is scoped to the install step; later steps do not
-inherit it from this block.
+Set the required `buf-token` from the caller's secret, and grant the calling
+job `packages: read`. The token is scoped to the install step; later steps do
+not inherit it from this block. The block intentionally supports one root
+`pnpm-lock.yaml` and does not expose overrides that could bypass the frozen
+install or disagree with the repository's package-manager declaration.
 
 #### Inputs
 
 | Input | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `node-version` | string | No | `24` | Node.js version |
-| `pnpm-version` | string | No | `""` | pnpm version; empty reads `packageManager` |
-| `working-directory` | string | No | `.` | Directory containing `package.json` and the lockfile |
-| `cache-dependency-path` | string | No | `pnpm-lock.yaml` | Lockfile path or newline-separated paths |
-| `registry-url` | string | No | `https://npm.pkg.github.com` | npm-compatible package registry |
-| `scope` | string | No | `@photon-hq` | Package scope mapped to the registry |
-| `buf-token` | secret | No | `""` | buf.build read token, used only by install |
-| `install-command` | string | No | frozen pnpm install | Trusted install command |
-| `persist-credentials` | boolean | No | `true` | Keep the checkout token in local Git config |
+| `buf-token` | secret | Yes | — | buf.build read token, used only by install |
 
 #### Usage
 
@@ -2027,10 +2021,9 @@ steps:
       buf-token: ${{ secrets.BUF_TOKEN }}
 ```
 
-Use `pnpm-version` only when a caller intentionally overrides the version in
-`package.json`; otherwise the lockfile and package manager declaration remain
-the source of truth. For more than one lockfile, pass a newline-separated
-`cache-dependency-path` and keep the caller's install command explicit.
+The root `packageManager` field remains the source of truth for pnpm. A caller
+with more than one lockfile or a non-pnpm install should keep its existing
+setup rather than forcing this block into a different repository shape.
 
 ---
 
