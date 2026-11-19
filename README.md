@@ -396,8 +396,13 @@ source commit, and moves `latest`.
   continues to select Bun in its place.
 - **Several packages** from one repository are staged and promoted together, all
   at the build's version, so dependencies between them pin `$RELEASE_VERSION`.
-  They are published in dependency order, and the build is named after
-  `package` (default `@<owner>/<repository>`), which must be one of them.
+  The publisher reads dependencies, optional dependencies and peer dependencies
+  from each channel's verified tarballs. It publishes independent packages
+  together under temporary candidate tags. Dependents wait until the registry
+  serves the expected integrity for all their prerequisites. A failed package
+  stops the next layer; no GitHub release or channel tag advances until every
+  package is verified. The build is named after `package` (default
+  `@<owner>/<repository>`), which must be one of them.
   `tag-prefix` overrides the staging tag prefix.
 - **Packages of one repository released separately** each get their own call
   to the stage workflow, in one run, with their own `package`, `tag-prefix`,
@@ -553,10 +558,14 @@ source commit, and moves `latest`.
   release missing assets. Anything else stops before writing. Channel tags never
   move to an older version; a temporary `candidate-<run>-<attempt>` dist-tag is
   left only by a failed run.
-- `ci-workflow` waits up to `ci-wait-minutes` (default 20) for that workflow's
-  push run on the exact commit to succeed. `dry-run: true` verifies and packs
-  without publishing and is the only mode allowed outside `main`, so a pull
-  request branch can dispatch it.
+- **Exact-commit verification.** Set `ci-workflow` to the caller's push CI
+  workflow before updating its Stage pin. The read-only build and CI gate run
+  concurrently after version selection. The gate waits up to `ci-wait-minutes`
+  (default 20) for that workflow's push run on the exact commit to succeed.
+  The publisher requires both jobs to pass; an omitted workflow name cannot
+  authorize a release. An Actions artifact made while CI is pending is not
+  published or eligible for promotion. `dry-run: true` verifies and packs without publishing
+  and is the only mode allowed outside `main`.
 - **Checking a pull request.** Run the stage call as a dry run on
   `pull_request` to find on the pull request what staging would refuse after
   it merges. The run builds the merge commit GitHub tests, and the version job
