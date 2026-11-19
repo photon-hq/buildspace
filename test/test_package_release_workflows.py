@@ -1,4 +1,5 @@
 """Check the package stage/promote workflows' trust boundaries and pack step."""
+import json
 import os
 from pathlib import Path
 import re
@@ -73,8 +74,12 @@ class WorkflowTests(unittest.TestCase):
 
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
-        self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
-        self.assertEqual(publish['needs'], ['version', 'build'])
+        self.assertEqual(publish['needs'], ['version', 'build', 'verify-ci'])
+        self.assertEqual(' '.join(publish['if'].split()), (
+            "${{ !cancelled() && github.ref == 'refs/heads/main' && !inputs.dry-run && "
+            "needs.version.result == 'success' && needs.build.result == 'success' && "
+            "(needs.verify-ci.result == 'success' || (inputs.ci-workflow == '' && needs.verify-ci.result == 'skipped')) }}"
+        ))
         names = [s.get('name') for s in publish['steps']]
         self.assertLess(names.index('Attest every packed file'), names.index('Publish the staging build and attach its candidates'))
         self.assertLess(names.index('Attest every packaged crate'), names.index('Publish the staging build and attach its candidates'))
@@ -188,6 +193,51 @@ class WorkflowTests(unittest.TestCase):
         upload = next(s for s in resolve['steps'] if 'upload-artifact' in s.get('uses', ''))
         self.assertEqual(upload['if'], "steps.resolve.outputs.pending == 'true'")
         self.assertEqual(PROMOTE['on']['workflow_call']['outputs']['pending']['value'], '${{ jobs.resolve.outputs.pending }}')
+
+
+class CiGateTests(unittest.TestCase):
+    def test_gate_runs_alongside_the_build_only_for_a_main_publication_with_ci(self):
+        gate = STAGE['jobs']['verify-ci']
+        self.assertEqual(gate['needs'], STAGE['jobs']['build']['needs'])
+        self.assertEqual(gate['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run && inputs.ci-workflow != ''")
+        self.assertEqual(gate['permissions'], {'actions': 'read'})
+        self.assertNotIn('environment', gate)
+        self.assertEqual(gate['steps'][0], STAGE['jobs']['publish']['steps'][0])
+        self.assertEqual(gate['steps'][0]['env']['WORKFLOW_SHA'], '${{ job.workflow_sha }}')
+        self.assertEqual(len(gate['steps']), 2)
+        self.assertNotIn('wait-ci', yaml.dump(STAGE['jobs']['build']))
+
+    def test_wait_step_requires_the_latest_matching_green_main_push(self):
+        sha = 'a' * 40
+        workflow = 'verify-contracts.yaml'
+        green = dict(id=5, path=f'.github/workflows/{workflow}', head_sha=sha,
+                     head_branch='main', event='push', status='completed', conclusion='success')
+        gate = step(STAGE['jobs']['verify-ci'], 'Require CI to pass on this exact commit')
+        self.assertEqual(gate['env']['CI_WORKFLOW'], '${{ inputs.ci-workflow }}')
+        self.assertEqual(gate['env']['CI_WAIT_MINUTES'], '${{ inputs.ci-wait-minutes }}')
+        with tempfile.TemporaryDirectory() as directory:
+            gh = Path(directory, 'gh')
+            gh.write_text('#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = api ] && [ "$2" = "$ENDPOINT" ] || exit 7\nprintf "%s" "$RESPONSE"\n')
+            gh.chmod(0o755)
+            env = dict(PATH=f"{directory}:{os.environ['PATH']}", HOME=directory, GITHUB_SHA=sha,
+                       GITHUB_REPOSITORY='example/package', RELEASE_TOOLS=str(Path('.github/package-release').resolve()),
+                       CI_WORKFLOW=workflow, CI_WAIT_MINUTES='0',
+                       ENDPOINT=f'repos/example/package/actions/workflows/{workflow}/runs?head_sha={sha}&event=push&branch=main&per_page=100')
+            for runs, error in (
+                ([green], None),
+                ([green, dict(green, id=6, conclusion='failure')], 'concluded failure'),
+                ([green, dict(green, id=6, conclusion='cancelled')], 'concluded cancelled'),
+                ([green, dict(green, id=6, status='queued', conclusion=None)], 'Timed out'),
+                ([], 'Timed out'),
+                ([dict(green, head_sha='b' * 40), dict(green, event='pull_request'),
+                  dict(green, head_branch='staging'), dict(green, path='.github/workflows/other.yml')], 'Timed out'),
+            ):
+                with self.subTest(runs=runs):
+                    response = json.dumps({'workflow_runs': runs})
+                    result = subprocess.run(['bash', '-euo', 'pipefail', '-c', gate['run']], cwd=directory,
+                                            env={**env, 'RESPONSE': response}, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 1 if error else 0, result.stderr)
+                    self.assertIn(error or f'{workflow} passed on {sha}', result.stderr if error else result.stdout)
 
 
 class PackStepTests(unittest.TestCase):
