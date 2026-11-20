@@ -35,9 +35,8 @@ export const cargoBuild = async ({
     launchError = error;
   });
 
-  const completion = new Promise((done) =>
-    child.on("close", (code) => done(code ?? 1))
-  );
+  const { promise: completion, resolve } = Promise.withResolvers();
+  child.on("close", (code) => resolve(code ?? 1));
 
   let binaryPath;
 

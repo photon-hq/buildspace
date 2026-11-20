@@ -14,6 +14,9 @@ export const input = function input(name, fallback) {
   return value;
 };
 
+export const isNonemptyString = (value) =>
+  typeof value === "string" && value.length > 0;
+
 export const output = function output(name, value) {
   const delimiter = `buildspace_${randomUUID()}`;
   appendFileSync(
@@ -41,7 +44,7 @@ export const run = function run(command, args, options = {}) {
   return result.stdout;
 };
 
-export const main = async (url, callback) => {
+export const main = async (url, runAction) => {
   if (
     !process.argv[1] ||
     path.resolve(process.argv[1]) !== fileURLToPath(url)
@@ -50,7 +53,7 @@ export const main = async (url, callback) => {
   }
 
   try {
-    await callback();
+    await runAction();
   } catch (error) {
     console.error(error.message);
     process.exitCode = error.exitCode || 1;

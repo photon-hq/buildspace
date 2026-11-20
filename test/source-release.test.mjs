@@ -7,8 +7,8 @@ import { test } from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-const stepScript = (path, name, key) => {
-  const source = readFileSync(new URL(path, root), "utf-8");
+const stepScript = (workflow, name, key) => {
+  const source = readFileSync(new URL(workflow, root), "utf-8");
   const start = source.indexOf(`- name: ${name}\n`);
   assert.ok(start !== -1, `Missing step: ${name}`);
   const lines = source.slice(start).split("\n");

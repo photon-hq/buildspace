@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import {
-  mkdtempSync,
   mkdirSync,
   writeFileSync,
   readFileSync,
@@ -9,93 +7,14 @@ import {
   statSync,
   existsSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { publishPackages } from "../.github/blocks/publish-packages.mjs";
 import { packageInfo } from "../.github/primitives/npm-package-info/index.mjs";
 import { publishNpm } from "../.github/primitives/npm-publish/index.mjs";
 import { stageFile } from "../.github/primitives/stage-file/index.mjs";
 import { waitNpmVersion } from "../.github/primitives/wait-npm-version/index.mjs";
-
-const primitives = fileURLToPath(
-  new URL("../.github/primitives/", import.meta.url)
-);
-
-const fixture = (t) => {
-  const root = mkdtempSync(nodePath.join(tmpdir(), "buildspace-primitives-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const bin = nodePath.join(root, "bin");
-  mkdirSync(bin);
-  const log = nodePath.join(root, "commands.jsonl");
-
-  const env = {
-    ...process.env,
-    NODE_AUTH_TOKEN: "",
-    PATH: `${bin}:${process.env.PATH}`,
-    COMMAND_LOG: log,
-    GITHUB_OUTPUT: nodePath.join(root, "outputs"),
-    TEST_ROOT: root,
-  };
-
-  const stub = (name, source) =>
-    writeFileSync(
-      nodePath.join(bin, name),
-      `#!${process.execPath}\n${source}`,
-      {
-        mode: 0o755,
-      }
-    );
-
-  const record = `require('node:fs').appendFileSync(process.env.COMMAND_LOG, JSON.stringify({command: require('node:path').basename(process.argv[1]), args: process.argv.slice(2), cwd: process.cwd(), goos: process.env.GOOS, goarch: process.env.GOARCH, cgo: process.env.CGO_ENABLED}) + '\\n');`;
-
-  const commands = () =>
-    existsSync(log)
-      ? readFileSync(log, "utf-8")
-          .trim()
-          .split("\n")
-          .filter(Boolean)
-          .map(JSON.parse)
-      : [];
-
-  const action = (name, values = {}, overrides = {}) =>
-    spawnSync(
-      process.execPath,
-      [nodePath.join(primitives, name, "index.mjs")],
-      {
-        cwd: root,
-        env: {
-          ...env,
-          ...Object.fromEntries(
-            Object.entries(values).map(([key, value]) => [
-              `INPUT_${key.toUpperCase()}`,
-              value,
-            ])
-          ),
-          ...overrides,
-        },
-        encoding: "utf-8",
-      }
-    );
-
-  return { root, env, stub, record, commands, action };
-};
-
-const outputs = (path) => {
-  const lines = readFileSync(path, "utf-8").split("\n");
-  const result = {};
-
-  while (lines.length > 1) {
-    const [key, delimiter] = lines.shift().split("<<");
-    const end = lines.indexOf(delimiter);
-    assert.notEqual(end, -1);
-    result[key] = lines.splice(0, end).join("\n");
-    lines.shift();
-  }
-
-  return result;
-};
+import { fixture, outputs } from "./fixtures/primitives.mjs";
 
 test("staging only copies the selected file and preserves its source", (t) => {
   const f = fixture(t);

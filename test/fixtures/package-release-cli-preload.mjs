@@ -15,7 +15,7 @@ childProcess.execFileSync = (command, args, options) => {
   }
 
   if (command === "git") {
-    const operation = args[2];
+    const operation = args.at(2);
 
     if (operation === "tag") {
       return "v0.1.0\n";
@@ -29,7 +29,9 @@ childProcess.execFileSync = (command, args, options) => {
           (commit) =>
             !paths.length ||
             commit.paths.some((file) =>
-              paths.some((path) => file === path || file.startsWith(`${path}/`))
+              paths.some(
+                (prefix) => file === prefix || file.startsWith(`${prefix}/`)
+              )
             )
         )
         .map(
@@ -66,5 +68,5 @@ globalThis.fetch = async (url) => {
     throw new Error(`Unexpected registry request: ${url}`);
   }
 
-  return new Response(JSON.stringify(fixture.registry));
+  return Response.json(fixture.registry);
 };

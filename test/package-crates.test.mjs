@@ -21,7 +21,7 @@ import {
   SHA,
   REPOSITORY,
   BUMP,
-  root,
+  fixturePath,
   setUp,
   tearDown,
   crate,
@@ -41,11 +41,11 @@ afterEach(tearDown);
 
 test("crates stay under vX.Y.Z tags", async () => {
   packBoth();
-  crate(nodePath.join(root, "crates"));
+  crate(fixturePath("crates"));
   await assert.rejects(
     collectBoth({
       crates: ["adapter"],
-      crateDirectory: nodePath.join(root, "crates"),
+      crateDirectory: fixturePath("crates"),
       productionTagPrefix: "adapter-v",
     }),
     /cannot use another production tag prefix/
@@ -56,8 +56,8 @@ test("archives are read by full path in GNU and ustar layouts", () => {
   const long = `${"nested/".repeat(16)}module.rs`;
 
   for (const format of ["gnu", "ustar"]) {
-    const file = crate(nodePath.join(root, format), { format });
-    const source = mkdtempSync(nodePath.join(root, "long-"));
+    const file = crate(fixturePath(format), { format });
+    const source = mkdtempSync(fixturePath("long-"));
     execFileSync("tar", ["-xzf", file, "-C", source]);
     mkdirSync(nodePath.join(source, "adapter-0.4.0", long, ".."), {
       recursive: true,
@@ -82,7 +82,7 @@ test("archives are read by full path in GNU and ustar layouts", () => {
 
 test("a crate's digest ignores only the commit cargo recorded", () => {
   const read = (options) =>
-    readCrate(crate(mkdtempSync(nodePath.join(root, "digest-")), options));
+    readCrate(crate(mkdtempSync(fixturePath("digest-")), options));
 
   const original = read();
   assert.equal(original.name, "adapter");
@@ -98,15 +98,15 @@ test("a crate's digest ignores only the commit cargo recorded", () => {
 
 test("collect lays out the crates packaged from the source commit", async () => {
   packBoth();
-  crate(nodePath.join(root, "crates"), {
+  crate(fixturePath("crates"), {
     name: "adapter-macros",
     version: "0.2.0",
   });
-  crate(nodePath.join(root, "crates"));
+  crate(fixturePath("crates"));
 
   const manifest = await collectBoth({
     crates: ["adapter", "adapter-macros"],
-    crateDirectory: nodePath.join(root, "crates"),
+    crateDirectory: fixturePath("crates"),
   });
 
   assert.equal(manifest.formatVersion, 3);
@@ -118,9 +118,7 @@ test("collect lays out the crates packaged from the source commit", async () => 
     ]
   );
 
-  const bytes = readFileSync(
-    nodePath.join(root, "release/adapter-0.4.0.crate")
-  );
+  const bytes = readFileSync(fixturePath("release/adapter-0.4.0.crate"));
 
   assert.equal(
     manifest.crates[0].sha256,
@@ -159,26 +157,26 @@ test("collect refuses crates that do not belong to this build", async (t) => {
 
   for (const [name, [options, crates, error]] of Object.entries(cases)) {
     await t.test(name, async () => {
-      rmSync(root, { recursive: true, force: true });
-      mkdirSync(root);
+      rmSync(fixturePath(), { recursive: true, force: true });
+      mkdirSync(fixturePath());
       packBoth();
-      crate(nodePath.join(root, "crates"), options);
+      crate(fixturePath("crates"), options);
       await assert.rejects(
-        collectBoth({ crates, crateDirectory: nodePath.join(root, "crates") }),
+        collectBoth({ crates, crateDirectory: fixturePath("crates") }),
         error
       );
     });
   }
 
   await t.test("missing from the packaged crates", async () => {
-    rmSync(root, { recursive: true, force: true });
-    mkdirSync(root);
+    rmSync(fixturePath(), { recursive: true, force: true });
+    mkdirSync(fixturePath());
     packBoth();
-    mkdirSync(nodePath.join(root, "crates"));
+    mkdirSync(fixturePath("crates"));
     await assert.rejects(
       collectBoth({
         crates: ["adapter"],
-        crateDirectory: nodePath.join(root, "crates"),
+        crateDirectory: fixturePath("crates"),
       }),
       /\(none\) are not/
     );
@@ -186,7 +184,7 @@ test("collect refuses crates that do not belong to this build", async (t) => {
 });
 
 test("a manifest from before crates reads as a build without any", async () => {
-  const directory = mkdtempSync(nodePath.join(root, "v1-"));
+  const directory = mkdtempSync(fixturePath("v1-"));
   writeFileSync(
     nodePath.join(directory, "release-manifest.json"),
     JSON.stringify({ formatVersion: 1, packages: [] })
@@ -214,12 +212,12 @@ test("staging attaches the crates and shows the dependency that pins the staging
 test("the publishing job refuses crates the files and the crates input do not support", async (t) => {
   const forge = async (edit) => {
     packBoth();
-    crate(nodePath.join(root, "crates"));
+    crate(fixturePath("crates"));
     await collectBoth({
       crates: ["adapter"],
-      crateDirectory: nodePath.join(root, "crates"),
+      crateDirectory: fixturePath("crates"),
     });
-    const path = nodePath.join(root, "release/release-manifest.json");
+    const path = fixturePath("release/release-manifest.json");
     const manifest = JSON.parse(readFileSync(path, "utf-8"));
     edit(manifest);
     writeFileSync(path, JSON.stringify(manifest));
@@ -261,8 +259,8 @@ test("the publishing job refuses crates the files and the crates input do not su
 
   for (const [name, [edit, error]] of Object.entries(cases)) {
     await t.test(name, async () => {
-      rmSync(root, { recursive: true, force: true });
-      mkdirSync(root);
+      rmSync(fixturePath(), { recursive: true, force: true });
+      mkdirSync(fixturePath());
       await forge(edit);
       const fake = world();
       await assert.rejects(publishWith(fake, { crates: ["adapter"] }), error);
@@ -273,7 +271,7 @@ test("the publishing job refuses crates the files and the crates input do not su
 
 /** A production release made before this build, holding `crates` packaged from another commit. */
 const releasedBefore = (fake, crates) => {
-  const directory = mkdtempSync(nodePath.join(root, "previous-"));
+  const directory = mkdtempSync(fixturePath("previous-"));
 
   const files = crates.map((options) =>
     crate(directory, { sha: "c".repeat(40), ...options })
@@ -324,14 +322,14 @@ test("promotion verifies each crate and releases it under the production tag", a
     call[3].split("/").at(-1)
   );
 
-  assert.deepEqual(attested.sort(), [
+  assert.deepEqual(attested.toSorted(), [
     "adapter-0.4.0.crate",
     "photon-hq-adapter-1.2.0.tgz",
     "photon-hq-adapter-core-1.2.0.tgz",
   ]);
 
   await publishWith(fake, {
-    directory: nodePath.join(root, "candidate"),
+    directory: fixturePath("candidate"),
     channel: "production",
     sourceSha: undefined,
     runId: "901",

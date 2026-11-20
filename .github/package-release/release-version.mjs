@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import semver from "semver";
 
-const STABLE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const STABLE = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{40}$/;
 const HEADER = /^(?<type>[A-Za-z]+)(?:\([^()\r\n]*\))?(?<breaking>!)?: \S/;
 const REVERT = /^Revert "/;
 const BREAKING_FOOTER = /^BREAKING[ -]CHANGE: /m;
-const RELEASE_AS = /^Release-As:[ \t]*(\S*)[ \t]*$/gim;
+const RELEASE_AS = /^Release-As:(?:[ \t]*(?<version>\S+))?[ \t]*$/gim;
 const LEVELS = ["none", "patch", "minor", "major"];
 const PAGE = 50;
 const LISTED = 200;
@@ -29,15 +29,14 @@ export const classify = function classify({ title, body = "" }) {
   const breaking =
     Boolean(header?.groups.breaking) || BREAKING_FOOTER.test(body ?? "");
 
+  const ordinary =
+    header?.groups.type.toLowerCase() === "feat" ? "minor" : "patch";
+
   return {
-    level: breaking
-      ? "major"
-      : header?.groups.type.toLowerCase() === "feat"
-        ? "minor"
-        : "patch",
+    level: breaking ? "major" : ordinary,
     conventional: Boolean(header) || REVERT.test(title),
-    releaseAs: [...(body ?? "").matchAll(RELEASE_AS)].map(([, version]) =>
-      version.replace(/^v/, "")
+    releaseAs: [...(body ?? "").matchAll(RELEASE_AS)].map(({ groups }) =>
+      (groups.version ?? "").replace(/^v/, "")
     ),
   };
 };
@@ -51,17 +50,19 @@ const describe = (change) =>
  * no release yet starts at 0.1.0; one with no change since its release keeps it.
  */
 export const nextVersion = function nextVersion(base, changes) {
-  const level = changes.reduce(
-    (top, { level }) =>
-      LEVELS.indexOf(level) > LEVELS.indexOf(top) ? level : top,
-    "none"
-  );
+  let level = "none";
 
-  let version = base
-    ? level === "none"
-      ? base
-      : semver.inc(base, level)
-    : "0.1.0";
+  for (const { level: requested } of changes) {
+    if (LEVELS.indexOf(requested) > LEVELS.indexOf(level)) {
+      level = requested;
+    }
+  }
+
+  let version = base || "0.1.0";
+
+  if (base && level !== "none") {
+    version = semver.inc(base, level);
+  }
 
   const warnings = [];
 
@@ -96,7 +97,7 @@ export const latestReleaseTag = function latestReleaseTag(tags, prefix) {
     .filter(
       (tag) => tag.startsWith(prefix) && STABLE.test(tag.slice(prefix.length))
     )
-    .sort((left, right) =>
+    .toSorted((left, right) =>
       semver.rcompare(left.slice(prefix.length), right.slice(prefix.length))
     )[0];
 };
@@ -139,7 +140,7 @@ export const mergedPullRequests = function mergedPullRequests({
       ])
     );
 
-    page.forEach((sha, index) => {
+    for (const [index, sha] of page.entries()) {
       const merged = (
         response.data.repository[`c${index}`]?.associatedPullRequests.nodes ??
         []
@@ -152,7 +153,7 @@ export const mergedPullRequests = function mergedPullRequests({
       if (pull) {
         found.set(sha, pull);
       }
-    });
+    }
   }
 
   return found;
@@ -205,7 +206,7 @@ export const releaseChanges = function releaseChanges({
 
       return { sha, subject, body };
     })
-    .reverse();
+    .toReversed();
 
   const pulls = mergedPullRequests({
     repository,
@@ -254,8 +255,10 @@ export const releaseBump = function releaseBump({ from, base, changes }) {
     total: changes.length,
     changes: changes
       .slice(-LISTED)
-      .map(({ number, sha, title, level }) =>
-        number ? { number, title, level } : { sha, title, level }
+      .map(({ number, sha, title, level: changeLevel }) =>
+        number
+          ? { number, title, level: changeLevel }
+          : { sha, title, level: changeLevel }
       ),
     warnings,
   };

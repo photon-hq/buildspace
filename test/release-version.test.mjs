@@ -223,8 +223,7 @@ const history = () => {
   git("init", "-q", "-b", "main");
   commit("pkg/index.js", "feat: start");
   git("tag", "v1.0.0");
-  const commits = {};
-  commits.squash = commit("pkg/index.js", "feat: add retry (#2)");
+  const commits = { squash: commit("pkg/index.js", "feat: add retry (#2)") };
   git("checkout", "-qb", "service");
   commit("service/main.js", "work on the service");
   git("checkout", "-q", "main");
@@ -259,8 +258,10 @@ const github =
     queries.push(query);
     const repository = {};
 
-    for (const [, index, oid] of query.matchAll(
-      /c(\d+): object\(oid: "([a-f0-9]{40})"\)/g
+    for (const {
+      groups: { index, oid },
+    } of query.matchAll(
+      /c(?<index>\d+): object\(oid: "(?<oid>[a-f0-9]{40})"\)/g
     )) {
       repository[`c${index}`] = {
         associatedPullRequests: { nodes: pulls[oid] ?? [] },
@@ -376,7 +377,7 @@ test("a line without a release reads its whole history, and commits are looked u
       { encoding: "utf-8" }
     ).trim();
 
-  for (let index = 0; index < 60; index++) {
+  for (let index = 0; index < 60; index += 1) {
     git("commit", "-q", "--allow-empty", "-m", `chore: empty ${index}`);
   }
 

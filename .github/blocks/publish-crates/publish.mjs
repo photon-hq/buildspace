@@ -21,7 +21,7 @@ await main(import.meta.url, async () => {
 
     const attempts = dryRun ? 1 : 3;
 
-    for (let attempt = 1; attempt <= attempts; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
         publishCrate({ ...options, dryRun, allowDirty: true });
         break;

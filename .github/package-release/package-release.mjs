@@ -1,6 +1,5 @@
 import { appendFile, readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import semver from "semver";
 import {
@@ -79,6 +78,88 @@ const outputs = async (values) => {
         .join("")
     );
   }
+};
+
+const collectBuild = async ({ values, env, repository, crates, runUrl }) => {
+  const manifest = await collect({
+    stagingDirectory: path.resolve(values.staging),
+    productionDirectory: path.resolve(values.production),
+    crateDirectory:
+      values["crate-directory"] && path.resolve(values["crate-directory"]),
+    crates: crates ?? [],
+    suffix: values.suffix,
+    bump: JSON.parse(values.bump ?? "null"),
+    sourceSha: env.GITHUB_SHA,
+    repository,
+    packageInput: values.package,
+    packageSelection: values["package-selection"],
+    tagPrefix: values["tag-prefix"],
+    productionTagPrefix: values["production-tag-prefix"],
+    registryUrl: values.registry,
+    output: path.resolve(values.output),
+    runUrl,
+  });
+
+  const warnings = [];
+  const lookup = cached(registryMetadata(manifest.registry));
+
+  for (const pkg of manifest.packages) {
+    const { version, integrity: packed } = pkg.production;
+    const metadata = await lookup(pkg.name);
+    const released = metadata.versions[version];
+    const { latest } = metadata["dist-tags"];
+
+    if (
+      released
+        ? released.dist?.integrity !== packed
+        : latest && !semver.gt(version, latest)
+    ) {
+      warnings.push(
+        `${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Merge a change inside the build's paths, or a Release-As, and stage again.`
+      );
+    }
+  }
+
+  const crateHistory = releasedCrates({
+    repository,
+    latest: (await lookup(manifest.package))["dist-tags"].latest,
+  });
+
+  const findings = await crateVersionFindings(
+    manifest,
+    path.resolve(values.output),
+    crateHistory
+  );
+
+  for (const warning of warnings) {
+    console.log(`::warning::${warning}`);
+  }
+
+  if (findings.length) {
+    throw new Error(
+      `This build cannot be staged:\n${findings.map((finding) => `- ${finding}`).join("\n")}`
+    );
+  }
+
+  const primary = manifest.packages.find(
+    ({ name }) => name === manifest.package
+  );
+
+  await summarize(
+    [
+      "### Staged packages",
+      "",
+      ...packageTable(manifest, ["staging", "production"]),
+      ...crateTable(manifest, manifest.stagingTag),
+      "",
+      `Promote with \`staging-version: ${primary.staging.version}\`.`,
+      ...warnings.map((warning) => `\n> [!WARNING]\n> ${warning}`),
+    ].join("\n")
+  );
+  await outputs({
+    "staging-version": primary.staging.version,
+    "production-version": primary.production.version,
+  });
 };
 
 const main = async () => {
@@ -163,87 +244,7 @@ const main = async () => {
     }
 
     case "collect": {
-      const manifest = await collect({
-        stagingDirectory: path.resolve(values.staging),
-        productionDirectory: path.resolve(values.production),
-        crateDirectory:
-          values["crate-directory"] && path.resolve(values["crate-directory"]),
-        crates: crates ?? [],
-        suffix: values.suffix,
-        bump: JSON.parse(values.bump ?? "null"),
-        sourceSha: env.GITHUB_SHA,
-        repository,
-        packageInput: values.package,
-        packageSelection: values["package-selection"],
-        tagPrefix: values["tag-prefix"],
-        productionTagPrefix: values["production-tag-prefix"],
-        registryUrl: values.registry,
-        output: path.resolve(values.output),
-        runUrl,
-      });
-
-      const warnings = [];
-      const lookup = cached(registryMetadata(manifest.registry));
-
-      for (const pkg of manifest.packages) {
-        const { version, integrity: packed } = pkg.production;
-        const metadata = await lookup(pkg.name);
-        const released = metadata.versions[version];
-        const { latest } = metadata["dist-tags"];
-
-        if (
-          released
-            ? released.dist?.integrity !== packed
-            : latest && !semver.gt(version, latest)
-        ) {
-          warnings.push(
-            `${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Merge a change inside the build's paths, or a Release-As, and stage again.`
-          );
-        }
-      }
-
-      const crateHistory = releasedCrates({
-        repository,
-        latest: (await lookup(manifest.package))["dist-tags"].latest,
-      });
-
-      const findings = await crateVersionFindings(
-        manifest,
-        path.resolve(values.output),
-        crateHistory
-      );
-
-      for (const warning of warnings) {
-        console.log(`::warning::${warning}`);
-      }
-
-      if (findings.length) {
-        throw new Error(
-          `This build cannot be staged:\n${findings.map((finding) => `- ${finding}`).join("\n")}`
-        );
-      }
-
-      const primary = manifest.packages.find(
-        ({ name }) => name === manifest.package
-      );
-
-      await summarize(
-        [
-          "### Staged packages",
-          "",
-          ...packageTable(manifest, ["staging", "production"]),
-          ...crateTable(manifest, manifest.stagingTag),
-          "",
-          `Promote with \`staging-version: ${primary.staging.version}\`.`,
-          ...warnings.map((warning) => `\n> [!WARNING]\n> ${warning}`),
-        ].join("\n")
-      );
-      await outputs({
-        "staging-version": primary.staging.version,
-        "production-version": primary.production.version,
-      });
-
-      return;
+      return collectBuild({ values, env, repository, crates, runUrl });
     }
 
     case "publish": {

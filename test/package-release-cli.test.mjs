@@ -34,7 +34,7 @@ beforeEach(() => {
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-const command = (args, fixture, eventName = "push", pullRequest) => {
+const command = (args, fixture, { eventName = "push", pullRequest } = {}) => {
   const fixturePath = path.join(root, "fixture.json");
   const eventPath = path.join(root, "event.json");
   const output = path.join(root, "output");
@@ -82,17 +82,17 @@ const command = (args, fixture, eventName = "push", pullRequest) => {
   };
 };
 
-const version = ({
+const runVersion = ({
   eventName = "pull_request",
   title = "feat: add a field",
   body = "",
-  path = "crate/src/field.rs",
+  path: changedPath = "crate/src/field.rs",
 } = {}) => {
   const result = command(
     ["version", "--paths", "crate"],
     {
       commits: [
-        { sha: SHA, subject: "Merge pull into main", paths: [path] },
+        { sha: SHA, subject: "Merge pull into main", paths: [changedPath] },
         {
           sha: PREVIOUS,
           subject: "fix: order versions",
@@ -100,8 +100,7 @@ const version = ({
         },
       ],
     },
-    eventName,
-    { number: 8, title, body }
+    { eventName, pullRequest: { number: 8, title, body } }
   );
 
   assert.equal(result.status, 0, result.log);
@@ -132,7 +131,7 @@ for (const { title, body, expected, level } of [
   },
 ]) {
   test(`version CLI reads the pull request metadata for ${expected}`, () => {
-    const { bump } = version({ title, body });
+    const { bump } = runVersion({ title, body });
     assert.equal(bump.version, expected);
     assert.equal(bump.level, level);
     assert.deepEqual(bump.changes.at(-1), { number: 8, title, level });
@@ -140,12 +139,15 @@ for (const { title, body, expected, level } of [
 }
 
 test("version CLI reads an edited pull request title again for the same commit", () => {
-  assert.equal(version({ title: "fix: add a field" }).bump.version, "0.1.1");
-  assert.equal(version({ title: "feat: add a field" }).bump.version, "0.2.0");
+  assert.equal(runVersion({ title: "fix: add a field" }).bump.version, "0.1.1");
+  assert.equal(
+    runVersion({ title: "feat: add a field" }).bump.version,
+    "0.2.0"
+  );
 });
 
 test("version CLI excludes the pending pull request when it does not touch the selected paths", () => {
-  const { bump } = version({ path: "docs/field.md" });
+  const { bump } = runVersion({ path: "docs/field.md" });
   assert.equal(bump.version, "0.1.1");
   assert.equal(bump.level, "patch");
   assert.deepEqual(
@@ -156,7 +158,7 @@ test("version CLI excludes the pending pull request when it does not touch the s
 
 for (const eventName of ["push", "workflow_dispatch"]) {
   test(`version CLI does not use pending pull request metadata on ${eventName}`, () => {
-    const { bump } = version({ eventName });
+    const { bump } = runVersion({ eventName });
     assert.equal(bump.version, "0.1.1");
     assert.equal(bump.level, "patch");
     assert.equal(bump.changes.at(-1).sha, SHA);

@@ -1,10 +1,10 @@
-import { input, main, run } from "../runtime.mjs";
+import { input, isNonemptyString, main, run } from "../runtime.mjs";
 
 export const stageGit = function stageGit({ paths, directory = "." }) {
   if (
     !Array.isArray(paths) ||
     paths.length === 0 ||
-    paths.some((path) => typeof path !== "string" || !path)
+    paths.some((path) => !isNonemptyString(path))
   ) {
     throw new Error(
       "paths must be a nonempty JSON array of nonempty Git pathspecs"

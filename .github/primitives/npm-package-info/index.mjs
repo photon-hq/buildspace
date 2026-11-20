@@ -1,18 +1,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { input, main, output } from "../runtime.mjs";
+import { input, isNonemptyString, main, output } from "../runtime.mjs";
 
 export const packageInfo = function packageInfo(directory = ".") {
   const { name, version } = JSON.parse(
     readFileSync(path.join(directory, "package.json"), "utf-8")
   );
 
-  if (
-    typeof name !== "string" ||
-    !name ||
-    typeof version !== "string" ||
-    !version
-  ) {
+  if (!isNonemptyString(name) || !isNonemptyString(version)) {
     throw new Error(
       `Missing package name or version in ${directory}/package.json`
     );

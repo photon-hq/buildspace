@@ -1,11 +1,9 @@
 import { join } from "node:path/posix";
 import semver from "semver";
 
-// Internal crates have no registry: Cargo fetches them from the owner's GitHub
-// repositories, and a crate's release is a vX.Y.Z tag of its repository.
 export const INTERNAL_OWNER = "photon-hq";
-const RELEASE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const EXACT_STABLE = /^=(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const RELEASE_TAG = /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
+const EXACT_STABLE = /^=(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const REPOSITORY = /^[a-z0-9-]+\/[a-z0-9._-]+$/;
 
 const TABLES = [
@@ -26,7 +24,6 @@ const stable = (version) => {
   );
 };
 
-/** The internal repository a Cargo git URL names, as lower-case owner/name. */
 export const internalRepository = function internalRepository(git) {
   let url;
 
@@ -49,16 +46,22 @@ export const internalRepository = function internalRepository(git) {
   return `${INTERNAL_OWNER}/${name.replace(/\.git$/i, "").toLowerCase()}`;
 };
 
-const reference = ({ rev, branch, tag }) =>
-  rev == null
-    ? branch == null
-      ? tag == null
-        ? "its default branch"
-        : `tag ${tag}`
-      : `branch ${branch}`
-    : `rev ${rev}`;
+const reference = ({ rev, branch, tag }) => {
+  if (rev !== undefined && rev !== null) {
+    return `rev ${rev}`;
+  }
 
-// Cargo.lock: git+https://github.com/<owner>/<name>?tag=v1.2.3#<resolved commit>
+  if (branch !== undefined && branch !== null) {
+    return `branch ${branch}`;
+  }
+
+  if (tag !== undefined && tag !== null) {
+    return `tag ${tag}`;
+  }
+
+  return "its default branch";
+};
+
 const lockedSource = (source) => {
   if (typeof source !== "string" || !source.startsWith("git+")) {
     return null;
@@ -75,18 +78,14 @@ const lockedSource = (source) => {
 
   return {
     repository,
-    tag: pin.rev == null && pin.branch == null ? pin.tag : undefined,
+    tag:
+      pin.rev === undefined && pin.branch === undefined ? pin.tag : undefined,
     reference: reference(pin),
     commit: url.hash.slice(1),
   };
 };
 
-/**
- * Audit the internal crates Cargo.lock resolves, transitive ones included, and
- * the pins the workspace's own manifests declare for them.
- */
-export const inspectCrates = function inspectCrates({ lockfile, manifests }) {
-  const errors = new Set();
+const inspectLockedPackages = (lockfile, errors) => {
   const crates = [];
   const local = new Set();
 
@@ -97,8 +96,6 @@ export const inspectCrates = function inspectCrates({ lockfile, manifests }) {
   for (const entry of Array.isArray(lockfile?.package)
     ? lockfile.package
     : []) {
-    // A package without a source is this commit's own code: a workspace member
-    // or a path dependency. Its dependencies are audited through its manifest.
     if (entry.source === undefined) {
       local.add(entry.name);
       continue;
@@ -137,6 +134,10 @@ export const inspectCrates = function inspectCrates({ lockfile, manifests }) {
     crates.push(row);
   }
 
+  return { crates, local };
+};
+
+const indexManifests = (manifests) => {
   const byName = new Map();
 
   for (const [path, manifest] of Object.entries(manifests)) {
@@ -153,6 +154,96 @@ export const inspectCrates = function inspectCrates({ lockfile, manifests }) {
     byName.get(name).push([path, manifest]);
   }
 
+  return byName;
+};
+
+const dependencyWithWorkspaceVersion = (declared, inherited, key) => {
+  let dependency =
+    typeof declared === "string" ? { version: declared } : declared;
+
+  if (dependency?.workspace === true) {
+    const base = inherited[key];
+    dependency = {
+      ...(typeof base === "string" ? { version: base } : base),
+      ...dependency,
+    };
+  }
+
+  return dependency;
+};
+
+const inspectDeclaration = ({
+  path,
+  key,
+  declared,
+  inherited,
+  crates,
+  errors,
+}) => {
+  const dependency = dependencyWithWorkspaceVersion(declared, inherited, key);
+  const repository = internalRepository(dependency?.git);
+
+  if (!repository) {
+    return;
+  }
+
+  const crate = dependency.package ?? key;
+  const subject = `${join(path, "Cargo.toml")}: ${crate}`;
+
+  const pinned =
+    RELEASE_TAG.test(dependency.tag ?? "") &&
+    dependency.rev === undefined &&
+    dependency.branch === undefined;
+
+  const exact = EXACT_STABLE.test(dependency.version ?? "");
+
+  if (!pinned) {
+    errors.add(
+      `${subject} must pin a release tag vX.Y.Z of ${repository}, not ${reference(dependency)}`
+    );
+  }
+
+  if (!exact) {
+    errors.add(
+      `${subject} must require an exact stable version (=X.Y.Z), not ${dependency.version ?? "any version"}`
+    );
+  }
+
+  const matched = crates.some(
+    (row) =>
+      row.name === crate &&
+      row.repository === repository &&
+      row.tag === dependency.tag &&
+      `=${row.version}` === dependency.version
+  );
+
+  if (pinned && exact && !matched) {
+    errors.add(
+      `${subject} ${dependency.version} at ${dependency.tag} has no matching Cargo.lock package`
+    );
+  }
+};
+
+const inspectManifest = ({ path, manifest, inherited, crates, errors }) => {
+  const sections = [manifest, ...Object.values(manifest.target ?? {})];
+
+  for (const section of sections) {
+    for (const table of TABLES) {
+      for (const [key, declared] of Object.entries(section?.[table] ?? {})) {
+        inspectDeclaration({
+          path,
+          key,
+          declared,
+          inherited,
+          crates,
+          errors,
+        });
+      }
+    }
+  }
+};
+
+const inspectLocalCrates = ({ local, byName, manifests, crates, errors }) => {
   const inherited = manifests["."]?.workspace?.dependencies ?? {};
 
   for (const name of local) {
@@ -161,82 +252,27 @@ export const inspectCrates = function inspectCrates({ lockfile, manifests }) {
     }
 
     for (const [path, manifest] of byName.get(name) ?? []) {
-      for (const section of [
-        manifest,
-        ...Object.values(manifest.target ?? {}),
-      ]) {
-        for (const table of TABLES) {
-          for (const [key, declared] of Object.entries(
-            section?.[table] ?? {}
-          )) {
-            let dependency =
-              typeof declared === "string" ? { version: declared } : declared;
-
-            if (dependency?.workspace === true) {
-              const base = inherited[key];
-              dependency = {
-                ...(typeof base === "string" ? { version: base } : base),
-                ...dependency,
-              };
-            }
-
-            const repository = internalRepository(dependency?.git);
-
-            if (!repository) {
-              continue;
-            }
-
-            const crate = dependency.package ?? key;
-            const subject = `${join(path, "Cargo.toml")}: ${crate}`;
-
-            const pinned =
-              RELEASE_TAG.test(dependency.tag ?? "") &&
-              dependency.rev === undefined &&
-              dependency.branch === undefined;
-
-            const exact = EXACT_STABLE.test(dependency.version ?? "");
-
-            if (!pinned) {
-              errors.add(
-                `${subject} must pin a release tag vX.Y.Z of ${repository}, not ${reference(dependency)}`
-              );
-            }
-
-            if (!exact) {
-              errors.add(
-                `${subject} must require an exact stable version (=X.Y.Z), not ${dependency.version ?? "any version"}`
-              );
-            }
-
-            if (
-              pinned &&
-              exact &&
-              !crates.some(
-                (row) =>
-                  row.name === crate &&
-                  row.repository === repository &&
-                  row.tag === dependency.tag &&
-                  `=${row.version}` === dependency.version
-              )
-            ) {
-              errors.add(
-                `${subject} ${dependency.version} at ${dependency.tag} has no matching Cargo.lock package`
-              );
-            }
-          }
-        }
-      }
+      inspectManifest({ path, manifest, inherited, crates, errors });
     }
   }
-
-  return { errors: [...errors].sort(), crates };
 };
 
-/**
- * The release a tag names, or null when the repository has none: whether it is
- * a draft or prerelease, and the commit its tag points at. Throws when the
- * repository cannot be read, so a missing permission never reads as unreleased.
- */
+export const inspectCrates = function inspectCrates({ lockfile, manifests }) {
+  const errors = new Set();
+  const inspected = inspectLockedPackages(lockfile, errors);
+  const byName = indexManifests(manifests);
+
+  inspectLocalCrates({
+    local: inspected.local,
+    byName,
+    manifests,
+    crates: inspected.crates,
+    errors,
+  });
+
+  return { errors: [...errors].toSorted(), crates: inspected.crates };
+};
+
 export const fetchCrateRelease = async (repository, tag) => {
   if (!REPOSITORY.test(repository) || !RELEASE_TAG.test(tag)) {
     throw new Error(`Not an internal crate release: ${repository} ${tag}`);
@@ -257,7 +293,6 @@ export const fetchCrateRelease = async (repository, tag) => {
           accept,
           "x-github-api-version": "2022-11-28",
         },
-        // A renamed repository redirects; the pin must name the current one.
         redirect: "manual",
         signal: AbortSignal.timeout(30_000),
       }
@@ -269,7 +304,6 @@ export const fetchCrateRelease = async (repository, tag) => {
   );
 
   if (release.status === 404) {
-    // GitHub also answers 404 for a private repository the token cannot read.
     const visible = await get("", "application/vnd.github+json");
 
     if (visible.ok) {
@@ -299,12 +333,36 @@ export const fetchCrateRelease = async (repository, tag) => {
   return { draft, prerelease, commit: (await commit.text()).trim() };
 };
 
-/** Return a full report even when some pins or release lookups fail. */
+const releaseResult = (release, row) => {
+  if (!release) {
+    return {
+      reason: "Not released",
+      finding: `${row.repository} has no release ${row.tag}`,
+    };
+  }
+
+  if (release.draft || release.prerelease) {
+    return {
+      reason: "Not a production release",
+      finding: `${row.repository} release ${row.tag} is a draft or prerelease`,
+    };
+  }
+
+  if (release.commit === row.commit) {
+    return { reason: "Production release", finding: null };
+  }
+
+  return {
+    reason: "Release tag is at another commit",
+    finding: `${row.repository} tag ${row.tag} is at ${release.commit}, but Cargo.lock resolved ${row.commit}`,
+  };
+};
+
 export const auditCrates = async (cargo, loadRelease = fetchCrateRelease) => {
   const inspected = inspectCrates(cargo);
   const errors = new Set(inspected.errors);
-  // One lookup per release, shared by every crate resolved from it.
   const releases = new Map();
+
   await Promise.all(
     inspected.crates
       .filter((row) => row.production === null)
@@ -317,21 +375,7 @@ export const auditCrates = async (cargo, loadRelease = fetchCrateRelease) => {
 
         try {
           const release = await releases.get(key);
-
-          const [reason, finding] = release
-            ? release.draft || release.prerelease
-              ? [
-                  "Not a production release",
-                  `${row.repository} release ${row.tag} is a draft or prerelease`,
-                ]
-              : release.commit === row.commit
-                ? ["Production release"]
-                : [
-                    "Release tag is at another commit",
-                    `${row.repository} tag ${row.tag} is at ${release.commit}, but Cargo.lock resolved ${row.commit}`,
-                  ]
-            : ["Not released", `${row.repository} has no release ${row.tag}`];
-
+          const { reason, finding } = releaseResult(release, row);
           row.production = !finding;
           row.reason = reason;
 
@@ -347,7 +391,7 @@ export const auditCrates = async (cargo, loadRelease = fetchCrateRelease) => {
 
   const crates = inspected.crates
     .map(({ tag, commit, ...row }) => row)
-    .sort(
+    .toSorted(
       (a, b) =>
         a.name.localeCompare(b.name) ||
         a.version.localeCompare(b.version) ||
@@ -355,5 +399,5 @@ export const auditCrates = async (cargo, loadRelease = fetchCrateRelease) => {
         a.reference.localeCompare(b.reference)
     );
 
-  return { crates, errors: [...errors].sort() };
+  return { crates, errors: [...errors].toSorted() };
 };

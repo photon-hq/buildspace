@@ -31,6 +31,8 @@ const bumpTo = (version, from = "v1.1.0") => ({
 const BUMP = bumpTo("1.2.0");
 let root;
 
+const fixturePath = (...parts) => nodePath.join(root, ...parts);
+
 const setUp = () => {
   root = mkdtempSync(nodePath.join(tmpdir(), "package-release-"));
 };
@@ -137,6 +139,228 @@ const collectBoth = (overrides = {}) =>
     ...overrides,
   });
 
+const commandError = (command, args) =>
+  new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+
+const http404 = (message = "gh: Not Found (HTTP 404)") =>
+  Object.assign(new Error(message), { stderr: message });
+
+const npmCommand = (args, { published, latest, staging }) => {
+  const [operation, target, spec, channelName] = args;
+
+  if (operation === "publish") {
+    const { name, version } = JSON.parse(
+      execFileSync("tar", ["-xOzf", target, "package/package.json"], {
+        encoding: "utf-8",
+      })
+    );
+
+    published[`${name}@${version}`] =
+      `sha512-${createHash("sha512").update(readFileSync(target)).digest("base64")}`;
+
+    return "";
+  }
+
+  if (operation === "view") {
+    return JSON.stringify(published[target]);
+  }
+
+  if (operation === "dist-tag") {
+    const channel = { latest, staging }[channelName];
+
+    if (target === "add" && channel) {
+      const separator = spec.lastIndexOf("@");
+      channel[spec.slice(0, separator)] = spec.slice(separator + 1);
+    }
+
+    return "";
+  }
+
+  throw commandError("npm", args);
+};
+
+const compareCommits = (history, { base, head }) => {
+  const baseIndex = history.indexOf(base);
+  const headIndex = history.indexOf(head);
+
+  if (baseIndex === -1 || headIndex === -1) {
+    return "diverged";
+  }
+
+  if (baseIndex === headIndex) {
+    return "identical";
+  }
+
+  return baseIndex < headIndex ? "ahead" : "behind";
+};
+
+const githubApi = (args, { environment, contents, tags, history, runs }) => {
+  const request = args.find((arg) => arg.startsWith("repos/"));
+
+  if (request.endsWith("/environments/production")) {
+    if (!environment) {
+      throw http404();
+    }
+
+    return JSON.stringify({
+      protection_rules: environment.length
+        ? [
+            {
+              type: "required_reviewers",
+              reviewers: environment.map((login) => ({
+                reviewer: { login },
+              })),
+            },
+          ]
+        : [],
+    });
+  }
+
+  const content = /\/contents\/(?<file>.+)\?ref=a{40}$/.exec(request)?.groups
+    .file;
+
+  if (content) {
+    const result = contents[decodeURIComponent(content)];
+
+    if (result === undefined) {
+      throw http404();
+    }
+
+    return result;
+  }
+
+  const tag = /\/git\/ref\/tags\/(?<name>.+)$/.exec(request)?.groups.name;
+
+  if (tag) {
+    if (!tags[tag]) {
+      throw http404();
+    }
+
+    return JSON.stringify({ object: { type: "commit", sha: tags[tag] } });
+  }
+
+  if (request.endsWith("/git/refs")) {
+    const ref = args
+      .find((arg) => arg.startsWith("ref="))
+      .slice("ref=refs/tags/".length);
+
+    tags[ref] = args.find((arg) => arg.startsWith("sha=")).slice(4);
+
+    return "";
+  }
+
+  const prefix = /\/git\/matching-refs\/tags\/(?<prefix>[^?]*)\?/.exec(request)
+    ?.groups.prefix;
+
+  if (prefix !== undefined) {
+    return JSON.stringify(
+      Object.entries(tags)
+        .filter(([name]) => name.startsWith(prefix))
+        .map(([name, sha]) => ({
+          ref: `refs/tags/${name}`,
+          object: { type: "commit", sha },
+        }))
+    );
+  }
+
+  // `history` lists main's commits, oldest first.
+  const compared =
+    /\/compare\/(?<base>[a-f0-9]{40})\.\.\.(?<head>[a-f0-9]{40})$/.exec(
+      request
+    )?.groups;
+
+  if (compared) {
+    return JSON.stringify({ status: compareCommits(history, compared) });
+  }
+
+  if (/\/actions\/runs\/\d+$/.test(request)) {
+    return JSON.stringify({ workflow_id: 7 });
+  }
+
+  if (/\/actions\/workflows\/7\/runs\?/.test(request)) {
+    return JSON.stringify({ workflow_runs: runs });
+  }
+
+  if (/\/compare\/a{40}\.\.\.main$/.test(request)) {
+    return JSON.stringify({ status: "ahead" });
+  }
+
+  if (
+    /\/compare\/(?:[a-z0-9._-]+-)?v[^.]+(?:\..*)?\.\.\.a{40}$/.test(request)
+  ) {
+    return JSON.stringify({
+      total_commits: 2,
+      commits: [
+        { commit: { message: "feat: one\n\nbody" } },
+        { commit: { message: "fix: two" } },
+      ],
+    });
+  }
+
+  throw commandError("gh", args);
+};
+
+const githubRelease = (args, releases) => {
+  const [, operation, tag] = args;
+  const release = releases[tag];
+
+  if (operation === "view") {
+    if (!release) {
+      throw http404("release not found");
+    }
+
+    return JSON.stringify({
+      isPrerelease: release.prerelease,
+      assets: release.assets.map((name) => ({ name })),
+    });
+  }
+
+  if (operation === "create") {
+    const files = args.slice(3, args.indexOf("--repo"));
+    releases[tag] = {
+      prerelease: args.includes("--prerelease"),
+      assets: files.map((file) => file.split("/").at(-1)),
+      files,
+      notes: readFileSync(args[args.indexOf("--notes-file") + 1], "utf-8"),
+      title: args[args.indexOf("--title") + 1],
+    };
+
+    return "";
+  }
+
+  if (operation === "upload") {
+    release.assets.push(
+      ...args
+        .slice(3, args.indexOf("--repo"))
+        .map((file) => file.split("/").at(-1))
+    );
+
+    return "";
+  }
+
+  if (operation === "download") {
+    if (!release) {
+      throw http404("release not found");
+    }
+
+    const pattern = args[args.indexOf("--pattern") + 1];
+    const source = release.files.find((file) => file.endsWith(`/${pattern}`));
+
+    if (!source) {
+      throw http404("no assets match the file pattern");
+    }
+
+    writeFileSync(
+      nodePath.join(args[args.indexOf("--dir") + 1], pattern),
+      readFileSync(source)
+    );
+
+    return "";
+  }
+
+  throw commandError("gh", args);
+};
+
 const world = ({
   published = {},
   tags = {},
@@ -152,222 +376,29 @@ const world = ({
   const calls = [];
   const state = { published, tags, releases };
 
-  const http404 = (message = "gh: Not Found (HTTP 404)") =>
-    Object.assign(new Error(message), { stderr: message });
-
   const run = (command, args) => {
     calls.push([command, ...args]);
-    const [first, second] = args;
+    const [operation] = args;
 
-    if (command === "npm" && first === "publish") {
-      const file = args[1];
-
-      const { name, version } = JSON.parse(
-        execFileSync("tar", ["-xOzf", file, "package/package.json"], {
-          encoding: "utf-8",
-        })
-      );
-
-      state.published[`${name}@${version}`] =
-        `sha512-${createHash("sha512").update(readFileSync(file)).digest("base64")}`;
-
-      return "";
+    if (command === "npm") {
+      return npmCommand(args, { published: state.published, latest, staging });
     }
 
-    if (command === "npm" && first === "view") {
-      return JSON.stringify(state.published[second]);
+    if (command === "gh" && operation === "api") {
+      return githubApi(args, {
+        environment,
+        contents,
+        tags: state.tags,
+        history,
+        runs,
+      });
     }
 
-    if (command === "npm" && first === "dist-tag") {
-      const channel = { latest, staging }[args[3]];
-
-      if (second === "add" && channel) {
-        channel[args[2].slice(0, args[2].lastIndexOf("@"))] = args[2].slice(
-          args[2].lastIndexOf("@") + 1
-        );
-      }
-
-      return "";
+    if (command === "gh" && operation === "release") {
+      return githubRelease(args, state.releases);
     }
 
-    if (command === "gh" && first === "api") {
-      const path = args.find((arg) => arg.startsWith("repos/"));
-
-      if (path.endsWith("/environments/production")) {
-        if (!environment) {
-          throw http404();
-        }
-
-        return JSON.stringify({
-          protection_rules: environment.length
-            ? [
-                {
-                  type: "required_reviewers",
-                  reviewers: environment.map((login) => ({
-                    reviewer: { login },
-                  })),
-                },
-              ]
-            : [],
-        });
-      }
-
-      const content = /\/contents\/(.+)\?ref=a{40}$/.exec(path)?.[1];
-
-      if (content) {
-        if (contents[decodeURIComponent(content)] === undefined) {
-          throw http404();
-        }
-
-        return contents[decodeURIComponent(content)];
-      }
-
-      const tag = /\/git\/ref\/tags\/(.+)$/.exec(path)?.[1];
-
-      if (tag) {
-        if (!state.tags[tag]) {
-          throw http404();
-        }
-
-        return JSON.stringify({
-          object: { type: "commit", sha: state.tags[tag] },
-        });
-      }
-
-      if (path.endsWith("/git/refs")) {
-        const ref = args
-          .find((arg) => arg.startsWith("ref="))
-          .slice("ref=refs/tags/".length);
-
-        state.tags[ref] = args.find((arg) => arg.startsWith("sha=")).slice(4);
-
-        return "";
-      }
-
-      const prefix = /\/git\/matching-refs\/tags\/([^?]*)\?/.exec(path)?.[1];
-
-      if (prefix !== undefined) {
-        return JSON.stringify(
-          Object.entries(state.tags)
-            .filter(([name]) => name.startsWith(prefix))
-            .map(([name, sha]) => ({
-              ref: `refs/tags/${name}`,
-              object: { type: "commit", sha },
-            }))
-        );
-      }
-
-      // `history` lists main's commits, oldest first.
-      const compared = /\/compare\/([a-f0-9]{40})\.\.\.([a-f0-9]{40})$/.exec(
-        path
-      );
-
-      if (compared) {
-        const [base, head] = [
-          history.indexOf(compared[1]),
-          history.indexOf(compared[2]),
-        ];
-
-        const status =
-          base < 0 || head < 0
-            ? "diverged"
-            : base < head
-              ? "ahead"
-              : base > head
-                ? "behind"
-                : "identical";
-
-        return JSON.stringify({ status });
-      }
-
-      if (/\/actions\/runs\/\d+$/.test(path)) {
-        return JSON.stringify({ workflow_id: 7 });
-      }
-
-      if (/\/actions\/workflows\/7\/runs\?/.test(path)) {
-        return JSON.stringify({ workflow_runs: runs });
-      }
-
-      if (/\/compare\/a{40}\.\.\.main$/.test(path)) {
-        return JSON.stringify({ status: "ahead" });
-      }
-
-      if (
-        /\/compare\/(?:[a-z0-9._-]+-)?v[^.]+(?:\..*)?\.\.\.a{40}$/.test(path)
-      ) {
-        return JSON.stringify({
-          total_commits: 2,
-          commits: [
-            { commit: { message: "feat: one\n\nbody" } },
-            { commit: { message: "fix: two" } },
-          ],
-        });
-      }
-    }
-
-    if (command === "gh" && first === "release") {
-      const tag = args[2];
-      const release = state.releases[tag];
-
-      if (second === "view") {
-        if (!release) {
-          throw http404("release not found");
-        }
-
-        return JSON.stringify({
-          isPrerelease: release.prerelease,
-          assets: release.assets.map((name) => ({ name })),
-        });
-      }
-
-      if (second === "create") {
-        const files = args.slice(3, args.indexOf("--repo"));
-        state.releases[tag] = {
-          prerelease: args.includes("--prerelease"),
-          assets: files.map((file) => file.split("/").at(-1)),
-          files,
-          notes: readFileSync(args[args.indexOf("--notes-file") + 1], "utf-8"),
-          title: args[args.indexOf("--title") + 1],
-        };
-
-        return "";
-      }
-
-      if (second === "upload") {
-        release.assets.push(
-          ...args
-            .slice(3, args.indexOf("--repo"))
-            .map((file) => file.split("/").at(-1))
-        );
-
-        return "";
-      }
-
-      if (second === "download") {
-        if (!release) {
-          throw http404("release not found");
-        }
-
-        const pattern = args[args.indexOf("--pattern") + 1];
-
-        const source = release.files.find((file) =>
-          file.endsWith(`/${pattern}`)
-        );
-
-        if (!source) {
-          throw http404("no assets match the file pattern");
-        }
-
-        writeFileSync(
-          nodePath.join(args[args.indexOf("--dir") + 1], pattern),
-          readFileSync(source)
-        );
-
-        return "";
-      }
-    }
-
-    if (command === "gh" && first === "attestation") {
+    if (command === "gh" && operation === "attestation") {
       if (!attested) {
         throw Object.assign(new Error("verification failed"), {
           stderr: "no attestations",
@@ -377,7 +408,7 @@ const world = ({
       return "";
     }
 
-    throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+    throw commandError(command, args);
   };
 
   const registry = async (name) => {
@@ -391,17 +422,12 @@ const world = ({
       }
     }
 
-    const tags = {};
+    const channelTags = {
+      ...(latest[name] && { latest: latest[name] }),
+      ...(staging[name] && { staging: staging[name] }),
+    };
 
-    if (latest[name]) {
-      tags.latest = latest[name];
-    }
-
-    if (staging[name]) {
-      tags.staging = staging[name];
-    }
-
-    return { versions, "dist-tags": tags };
+    return { versions, "dist-tags": channelTags };
   };
 
   return { calls, state, run, registry };
@@ -423,7 +449,7 @@ const publishWith = (fake, overrides = {}) =>
     ...(overrides.channel !== "production" && { bump: BUMP }),
     run: fake.run,
     registry: fake.registry,
-    log: () => {},
+    log: () => undefined,
     ...overrides,
   });
 
@@ -485,7 +511,7 @@ export {
   REPOSITORY,
   bumpTo,
   BUMP,
-  root,
+  fixturePath,
   setUp,
   tearDown,
   pack,

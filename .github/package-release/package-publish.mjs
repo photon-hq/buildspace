@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import semver from "semver";
 import {
   exec,
@@ -19,7 +20,7 @@ const CHANNEL_TAG = { staging: "staging", production: "latest" };
 
 /** Fail while CI on the exact commit has failed; wait while it is pending. */
 export const ciStatus = function ciStatus(response, { sha, workflow }) {
-  const latest = (response.workflow_runs ?? [])
+  const [latest] = (response.workflow_runs ?? [])
     .filter(
       (run) =>
         run.path === `.github/workflows/${workflow}` &&
@@ -27,7 +28,7 @@ export const ciStatus = function ciStatus(response, { sha, workflow }) {
         run.head_branch === "main" &&
         run.event === "push"
     )
-    .sort((left, right) => right.id - left.id)[0];
+    .toSorted((left, right) => right.id - left.id);
 
   if (latest?.status !== "completed") {
     return "pending";
@@ -49,7 +50,7 @@ export const waitForCi = async ({
   timeoutMs,
   run = exec,
   now = Date.now,
-  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
+  sleep = delay,
 }) => {
   if (!SHA.test(sha)) {
     throw new Error("An exact source commit is required");
@@ -94,7 +95,7 @@ export const tagCommit = function tagCommit(run, repository, tag) {
     throw error;
   }
 
-  for (let depth = 0; reference.type === "tag" && depth < 8; depth++) {
+  for (let depth = 0; reference.type === "tag" && depth < 8; depth += 1) {
     reference = JSON.parse(
       run("gh", ["api", `repos/${repository}/git/tags/${reference.sha}`])
     ).object;
@@ -130,7 +131,7 @@ export const changesSince = function changesSince(
     total: comparison.total_commits,
     subjects: (comparison.commits ?? [])
       .map((commit) => commit.commit.message.split("\n")[0])
-      .reverse(),
+      .toReversed(),
   };
 };
 
@@ -333,6 +334,67 @@ export const publishedIntegrity = async ({
   }
 };
 
+const publishCandidates = async ({
+  packages,
+  directory,
+  channel,
+  registryUrl,
+  target,
+  parking,
+  run,
+  registry,
+  log,
+  availabilityTimeoutMs,
+  now,
+  sleep,
+}) => {
+  const parked = [];
+
+  for (const pkg of packages) {
+    const { version, file, integrity: expected } = pkg[channel];
+    const existing = (await registry(pkg.name)).versions[version];
+
+    if (existing) {
+      if (existing.dist?.integrity !== expected) {
+        throw new Error(
+          `${pkg.name}@${version} is already published with different contents`
+        );
+      }
+
+      log(`${pkg.name}@${version} is already published with these contents`);
+      continue;
+    }
+
+    run("npm", [
+      "publish",
+      path.join(directory, file),
+      "--tag",
+      parking,
+      "--ignore-scripts",
+      ...(registryUrl === NPMJS ? ["--access", "public", "--provenance"] : []),
+      target,
+    ]);
+    parked.push(pkg.name);
+
+    const published = await publishedIntegrity({
+      registry,
+      name: pkg.name,
+      version,
+      timeoutMs: availabilityTimeoutMs,
+      now,
+      sleep,
+    });
+
+    if (published !== expected) {
+      throw new Error(
+        `${pkg.name}@${version} was published with different contents; investigate before retrying`
+      );
+    }
+  }
+
+  return parked;
+};
+
 /**
  * Publish one channel of a verified build. Every step can be retried: a version
  * already published with the same contents, an existing tag on the same commit
@@ -359,7 +421,7 @@ export const publish = async ({
   log = console.log,
   availabilityTimeoutMs = 30 * 60_000,
   now = Date.now,
-  sleep = (ms) => new Promise((done) => setTimeout(done, ms)),
+  sleep = delay,
 }) => {
   const manifest = await readManifest(directory);
 
@@ -372,7 +434,7 @@ export const publish = async ({
     registryUrl,
   });
 
-  registry ??= registryMetadata(names.registryUrl);
+  const lookup = registry ?? registryMetadata(names.registryUrl);
   const target = `--registry=${names.registryUrl}`;
 
   const uploaded =
@@ -397,51 +459,20 @@ export const publish = async ({
     throw new Error("Invalid run coordinates");
   }
 
-  const parked = [];
-
-  for (const pkg of manifest.packages) {
-    const { version, file, integrity: expected } = pkg[channel];
-    const existing = (await registry(pkg.name)).versions[version];
-
-    if (existing) {
-      if (existing.dist?.integrity !== expected) {
-        throw new Error(
-          `${pkg.name}@${version} is already published with different contents`
-        );
-      }
-
-      log(`${pkg.name}@${version} is already published with these contents`);
-      continue;
-    }
-
-    run("npm", [
-      "publish",
-      path.join(directory, file),
-      "--tag",
-      parking,
-      "--ignore-scripts",
-      ...(names.registryUrl === NPMJS
-        ? ["--access", "public", "--provenance"]
-        : []),
-      target,
-    ]);
-    parked.push(pkg.name);
-
-    const published = await publishedIntegrity({
-      registry,
-      name: pkg.name,
-      version,
-      timeoutMs: availabilityTimeoutMs,
-      now,
-      sleep,
-    });
-
-    if (published !== expected) {
-      throw new Error(
-        `${pkg.name}@${version} was published with different contents; investigate before retrying`
-      );
-    }
-  }
+  const parked = await publishCandidates({
+    packages: manifest.packages,
+    directory,
+    channel,
+    registryUrl: names.registryUrl,
+    target,
+    parking,
+    run,
+    registry: lookup,
+    log,
+    availabilityTimeoutMs,
+    now,
+    sleep,
+  });
 
   const released = manifest.packages.find(
     ({ name }) => name === manifest.package
@@ -453,7 +484,7 @@ export const publish = async ({
   let changes;
 
   if (channel === "production" && !manifest.bump) {
-    const { latest } = (await registry(manifest.package))["dist-tags"];
+    const { latest } = (await lookup(manifest.package))["dist-tags"];
 
     if (latest && latest !== released) {
       changes = changesSince(
@@ -485,7 +516,7 @@ export const publish = async ({
 
   for (const pkg of manifest.packages) {
     const { version } = pkg[channel];
-    const current = (await registry(pkg.name))["dist-tags"][channelTag];
+    const current = (await lookup(pkg.name))["dist-tags"][channelTag];
 
     if (!current || semver.gt(version, current)) {
       run("npm", [

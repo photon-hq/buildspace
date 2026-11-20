@@ -37,10 +37,14 @@ test("the real npm launcher verifies an exact version against a local registry",
     );
   });
 
-  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   t.after(async () => {
     server.closeAllConnections();
-    await new Promise((done) => server.close(done));
+    await new Promise((resolve) => {
+      server.close(resolve);
+    });
     rmSync(directory, { recursive: true, force: true });
   });
   const output = path.join(directory, "outputs");
@@ -88,9 +92,9 @@ test("the real npm launcher verifies an exact version against a local registry",
       diagnostics += chunk;
     });
 
-    const status = await new Promise((done, reject) => {
+    const status = await new Promise((resolve, reject) => {
       child.on("error", reject);
-      child.on("close", done);
+      child.on("close", resolve);
     });
 
     return { status, diagnostics };

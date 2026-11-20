@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { input, main, output } from "../runtime.mjs";
 
@@ -34,22 +35,22 @@ export const publishNpm = async ({
 
   let reportedError = false;
 
+  const checkErrorLine = (line) => {
+    if (/^npm (?:error|ERR!)/.test(line)) {
+      reportedError = true;
+    }
+  };
+
   for (const [source, destination] of [
     [child.stdout, process.stdout],
     [child.stderr, process.stderr],
   ]) {
     source.on("data", (chunk) => destination.write(chunk));
-    createInterface({ input: source }).on("line", (line) => {
-      if (/^npm (error|ERR!)/.test(line)) {
-        reportedError = true;
-      }
-    });
+    createInterface({ input: source }).on("line", checkErrorLine);
   }
 
-  const code = await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (status) => resolve(status ?? 1));
-  });
+  const [status] = await once(child, "close");
+  const code = status ?? 1;
 
   if (code !== 0 || reportedError) {
     const error = new Error(

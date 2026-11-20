@@ -21,7 +21,7 @@ export const waitNpmVersion = async ({
     );
   }
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const result = spawnSync(
       "bash",
       [
