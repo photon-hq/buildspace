@@ -25,6 +25,29 @@ jobs:
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
+  check-toolchain:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://npm.pkg.github.com
+          scope: "@photon-hq"
+      - name: Install development dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Lint JavaScript
+        run: npm run lint
+      - name: Check formatting
+        run: npm run fmt:check
+
   test-release-workflows:
     runs-on: ubuntu-24.04
     permissions:

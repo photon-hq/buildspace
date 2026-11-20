@@ -1,0 +1,18 @@
+{
+  "name": "buildspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "npm run fmt:check && npm run lint",
+    "fmt": "vp fmt --write",
+    "fmt:check": "vp fmt --check",
+    "lint": "vp lint --deny-warnings"
+  },
+  "devDependencies": {
+    "@photon-hq/vp-config": "0.2.0",
+    "vite-plus": "1.7.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

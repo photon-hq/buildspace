@@ -1,11 +1,26 @@
 import { appendFile, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import semver from "semver";
-import { cached, collect, GITHUB_PACKAGES, registryMetadata, releaseNames } from "./package-artifacts.mjs";
-import { crateVersionFindings, releasedCrates, resolveCandidate } from "./package-promotion.mjs";
-import { crateTable, packageTable, publish, releaseNotes, waitForCi } from "./package-publish.mjs";
+import {
+  cached,
+  collect,
+  GITHUB_PACKAGES,
+  registryMetadata,
+  releaseNames,
+} from "./package-artifacts.mjs";
+import {
+  crateVersionFindings,
+  releasedCrates,
+  resolveCandidate,
+} from "./package-promotion.mjs";
+import {
+  crateTable,
+  packageTable,
+  publish,
+  releaseNotes,
+  waitForCi,
+} from "./package-publish.mjs";
 import { bumpNotes, releaseBump, releaseChanges } from "./release-version.mjs";
 
 export {
@@ -24,6 +39,7 @@ export {
   readManifest,
   verifyManifest,
 } from "./package-artifacts.mjs";
+
 export {
   ciStatus,
   waitForCi,
@@ -35,6 +51,7 @@ export {
   publishedIntegrity,
   publish,
 } from "./package-publish.mjs";
+
 export {
   dependencyFindings,
   releasedCrates,
@@ -46,20 +63,106 @@ export {
   resolveCandidate,
 } from "./package-promotion.mjs";
 
-async function summarize(markdown) {
-  if (process.env.GITHUB_STEP_SUMMARY)
+const summarize = async (markdown) => {
+  if (process.env.GITHUB_STEP_SUMMARY) {
     await appendFile(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`);
-}
+  }
+};
 
-async function outputs(values) {
-  if (process.env.GITHUB_OUTPUT)
+const outputs = async (values) => {
+  if (process.env.GITHUB_OUTPUT) {
     await appendFile(
       process.env.GITHUB_OUTPUT,
-      Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join("")
+      Object.entries(values)
+        .map(([key, value]) => `${key}=${value}\n`)
+        .join("")
     );
-}
+  }
+};
 
-async function main() {
+const collectBuild = async ({ values, env, repository, crates, runUrl }) => {
+  const manifest = await collect({
+    stagingDirectory: path.resolve(values.staging),
+    productionDirectory: path.resolve(values.production),
+    crateDirectory:
+      values["crate-directory"] && path.resolve(values["crate-directory"]),
+    crates: crates ?? [],
+    suffix: values.suffix,
+    bump: JSON.parse(values.bump ?? "null"),
+    sourceSha: env.GITHUB_SHA,
+    repository,
+    packageInput: values.package,
+    packageSelection: values["package-selection"],
+    tagPrefix: values["tag-prefix"],
+    productionTagPrefix: values["production-tag-prefix"],
+    registryUrl: values.registry,
+    output: path.resolve(values.output),
+    runUrl,
+  });
+
+  const warnings = [];
+  const lookup = cached(registryMetadata(manifest.registry));
+
+  for (const pkg of manifest.packages) {
+    const { version, integrity: packed } = pkg.production;
+    const metadata = await lookup(pkg.name);
+    const released = metadata.versions[version];
+    const { latest } = metadata["dist-tags"];
+
+    if (
+      released
+        ? released.dist?.integrity !== packed
+        : latest && !semver.gt(version, latest)
+    ) {
+      warnings.push(
+        `${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Merge a change inside the build's paths, or a Release-As, and stage again.`
+      );
+    }
+  }
+
+  const crateHistory = releasedCrates({
+    repository,
+    latest: (await lookup(manifest.package))["dist-tags"].latest,
+  });
+
+  const findings = await crateVersionFindings(
+    manifest,
+    path.resolve(values.output),
+    crateHistory
+  );
+
+  for (const warning of warnings) {
+    console.log(`::warning::${warning}`);
+  }
+
+  if (findings.length) {
+    throw new Error(
+      `This build cannot be staged:\n${findings.map((finding) => `- ${finding}`).join("\n")}`
+    );
+  }
+
+  const primary = manifest.packages.find(
+    ({ name }) => name === manifest.package
+  );
+
+  await summarize(
+    [
+      "### Staged packages",
+      "",
+      ...packageTable(manifest, ["staging", "production"]),
+      ...crateTable(manifest, manifest.stagingTag),
+      "",
+      `Promote with \`staging-version: ${primary.staging.version}\`.`,
+      ...warnings.map((warning) => `\n> [!WARNING]\n> ${warning}`),
+    ].join("\n")
+  );
+  await outputs({
+    "staging-version": primary.staging.version,
+    "production-version": primary.production.version,
+  });
+};
+
+const main = async () => {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: {
@@ -87,12 +190,14 @@ async function main() {
       workflow: { type: "string" },
     },
   });
-  const env = process.env;
+
+  const { env } = process;
   const repository = env.GITHUB_REPOSITORY;
   const runUrl = `${env.GITHUB_SERVER_URL}/${repository}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}`;
   const crates = values.crates?.split(/\s+/).filter(Boolean);
+
   switch (positionals[0]) {
-    case "wait-ci":
+    case "wait-ci": {
       await waitForCi({
         repository,
         sha: env.GITHUB_SHA,
@@ -100,70 +205,51 @@ async function main() {
         timeoutMs: Number(values["timeout-minutes"]) * 60_000,
       });
       console.log(`${values.workflow} passed on ${env.GITHUB_SHA}`);
+
       return;
+    }
+
     case "version": {
-      const { productionTagPrefix: prefix } = releaseNames({ repository, productionTagPrefix: values["production-tag-prefix"] });
+      const { productionTagPrefix: prefix } = releaseNames({
+        repository,
+        productionTagPrefix: values["production-tag-prefix"],
+      });
+
       const paths = values.paths.split(/\s+/).filter(Boolean);
-      const pending = env.GITHUB_EVENT_NAME === "pull_request"
-        ? JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf8")).pull_request
-        : undefined;
-      const bump = releaseBump(releaseChanges({ repository, prefix, paths, head: env.GITHUB_SHA, pending }));
-      for (const warning of bump.warnings) console.log(`::warning::${warning}`);
+
+      const pending =
+        env.GITHUB_EVENT_NAME === "pull_request"
+          ? JSON.parse(await readFile(env.GITHUB_EVENT_PATH, "utf-8"))
+              .pull_request
+          : undefined;
+
+      const bump = releaseBump(
+        releaseChanges({
+          repository,
+          prefix,
+          paths,
+          head: env.GITHUB_SHA,
+          pending,
+        })
+      );
+
+      for (const warning of bump.warnings) {
+        console.log(`::warning::${warning}`);
+      }
+
       await summarize(bumpNotes(bump, repository).join("\n"));
       await outputs({ version: bump.version, bump: JSON.stringify(bump) });
+
       return;
     }
+
     case "collect": {
-      const manifest = await collect({
-        stagingDirectory: resolve(values.staging),
-        productionDirectory: resolve(values.production),
-        crateDirectory: values["crate-directory"] && resolve(values["crate-directory"]),
-        crates: crates ?? [],
-        suffix: values.suffix,
-        bump: JSON.parse(values.bump ?? "null"),
-        sourceSha: env.GITHUB_SHA,
-        repository,
-        packageInput: values.package,
-        packageSelection: values["package-selection"],
-        tagPrefix: values["tag-prefix"],
-        productionTagPrefix: values["production-tag-prefix"],
-        registryUrl: values.registry,
-        output: resolve(values.output),
-        runUrl,
-      });
-      const warnings = [];
-      const lookup = cached(registryMetadata(manifest.registry));
-      for (const pkg of manifest.packages) {
-        const { version, integrity: packed } = pkg.production;
-        const metadata = await lookup(pkg.name);
-        const released = metadata.versions[version];
-        const latest = metadata["dist-tags"].latest;
-        if (released ? released.dist?.integrity !== packed : latest && !semver.gt(version, latest))
-          warnings.push(`${pkg.name}@${version} cannot be promoted: ${released ? "it is released with other contents" : `latest is ${latest}`}. Merge a change inside the build's paths, or a Release-As, and stage again.`);
-      }
-      const crateHistory = releasedCrates({ repository, latest: (await lookup(manifest.package))["dist-tags"].latest });
-      const findings = await crateVersionFindings(manifest, resolve(values.output), crateHistory);
-      for (const warning of warnings) console.log(`::warning::${warning}`);
-      if (findings.length)
-        throw new Error(`This build cannot be staged:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
-      const primary = manifest.packages.find(({ name }) => name === manifest.package);
-      await summarize(
-        [
-          "### Staged packages",
-          "",
-          ...packageTable(manifest, ["staging", "production"]),
-          ...crateTable(manifest, manifest.stagingTag),
-          "",
-          `Promote with \`staging-version: ${primary.staging.version}\`.`,
-          ...warnings.map((warning) => `\n> [!WARNING]\n> ${warning}`),
-        ].join("\n")
-      );
-      await outputs({ "staging-version": primary.staging.version, "production-version": primary.production.version });
-      return;
+      return collectBuild({ values, env, repository, crates, runUrl });
     }
+
     case "publish": {
       const { tag } = await publish({
-        directory: resolve(values.directory),
+        directory: path.resolve(values.directory),
         channel: values.channel,
         repository,
         sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
@@ -177,9 +263,14 @@ async function main() {
         runAttempt: env.GITHUB_RUN_ATTEMPT,
         bump: values.bump && JSON.parse(values.bump),
       });
-      await summarize(`Published ${values.channel} release [\`${tag}\`](${env.GITHUB_SERVER_URL}/${repository}/releases/tag/${tag}).`);
+
+      await summarize(
+        `Published ${values.channel} release [\`${tag}\`](${env.GITHUB_SERVER_URL}/${repository}/releases/tag/${tag}).`
+      );
+
       return;
     }
+
     case "resolve": {
       const { manifest, changes, pending } = await resolveCandidate({
         repository,
@@ -193,13 +284,18 @@ async function main() {
         approvedBy: values["approved-by"],
         environment: values.environment,
         signerWorkflow: values["signer-workflow"],
-        output: resolve(values.output),
+        output: path.resolve(values.output),
       });
+
       if (!manifest) {
-        await summarize("### Nothing to release\n\nPackages are staged from `main`; a hotfix image releases none.");
+        await summarize(
+          "### Nothing to release\n\nPackages are staged from `main`; a hotfix image releases none."
+        );
         await outputs({ pending, version: "" });
+
         return;
       }
+
       await summarize(
         pending
           ? [
@@ -220,16 +316,22 @@ async function main() {
       );
       await outputs({
         pending,
-        version: manifest.packages.find(({ name }) => name === manifest.package).production.version,
+        version: manifest.packages.find(({ name }) => name === manifest.package)
+          .production.version,
       });
+
       return;
     }
-    default:
-      throw new Error("Usage: package-release.mjs wait-ci|version|collect|publish|resolve [options]");
-  }
-}
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    default: {
+      throw new Error(
+        "Usage: package-release.mjs wait-ci|version|collect|publish|resolve [options]"
+      );
+    }
+  }
+};
+
+if (process.argv[1] && path.resolve(process.argv[1]) === import.meta.filename) {
   try {
     await main();
   } catch (error) {
