@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import nodePath from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { parse, stringify } from "yaml";
@@ -16,35 +16,35 @@ import {
 const exec = promisify(execFile);
 const name = "@photon-hq/example";
 const indirect = "@photon-hq/indirect";
+
 const metadata = async () => ({
   versions: { "1.0.0": {}, "2.0.0": {} },
   "dist-tags": { latest: "2.0.0-staging.1" },
 });
-function fixture(version = "1.0.0") {
-  return {
-    source: "fixture",
-    workspace: { packages: ["apps/*"], catalog: { [name]: version } },
-    manifests: {
-      ".": { name: "root", private: true },
-      "apps/example": { name: "app", dependencies: { [name]: "catalog:" } },
-    },
-    lockfile: {
-      lockfileVersion: "9.0",
-      catalogs: { default: { [name]: { specifier: version, version } } },
-      importers: {
-        ".": {},
-        "apps/example": {
-          dependencies: { [name]: { specifier: "catalog:", version } },
-        },
-      },
-      packages: { [`${name}@${version}`]: {}, [`${indirect}@1.0.0`]: {} },
-      snapshots: {
-        [`${name}@${version}`]: { dependencies: { [indirect]: "1.0.0" } },
-        [`${indirect}@1.0.0`]: {},
+
+const fixture = (version = "1.0.0") => ({
+  source: "fixture",
+  workspace: { packages: ["apps/*"], catalog: { [name]: version } },
+  manifests: {
+    ".": { name: "root", private: true },
+    "apps/example": { name: "app", dependencies: { [name]: "catalog:" } },
+  },
+  lockfile: {
+    lockfileVersion: "9.0",
+    catalogs: { default: { [name]: { specifier: version, version } } },
+    importers: {
+      ".": {},
+      "apps/example": {
+        dependencies: { [name]: { specifier: "catalog:", version } },
       },
     },
-  };
-}
+    packages: { [`${name}@${version}`]: {}, [`${indirect}@1.0.0`]: {} },
+    snapshots: {
+      [`${name}@${version}`]: { dependencies: { [indirect]: "1.0.0" } },
+      [`${indirect}@1.0.0`]: {},
+    },
+  },
+});
 
 test("checks exact published pins, including transitives, without selecting a newer version", async () => {
   const inputs = fixture();
@@ -53,6 +53,7 @@ test("checks exact published pins, including transitives, without selecting a ne
   assert.deepEqual(
     await checkProductionDependencies(inputs, async (pkg) => {
       checked.push(pkg);
+
       return metadata();
     }),
     [`${name}@1.0.0`, `${indirect}@1.0.0`]
@@ -78,6 +79,7 @@ test("staging, feature, beta, rc, ranges, tags, and non-registry pins fail witho
     await assert.rejects(
       checkProductionDependencies(inputs, async (pkg) => {
         checked.push(pkg);
+
         return metadata();
       }),
       /exact stable production version/
@@ -106,6 +108,7 @@ test("indirect and peer-context prereleases cannot hide behind a stable direct c
       /indirect@2.0.0-staging.1/
     );
   }
+
   const inputs = fixture();
   inputs.lockfile.snapshots["public@1.0.0(@photon-hq/indirect@2.0.0-rc.1)"] =
     {};
@@ -156,16 +159,25 @@ test("dev, optional, and workspace peer declarations must match their locked sta
 });
 
 test("a workspace peer may be a stable range that its locked version satisfies", async () => {
-  for (const range of ["1.0.0", ">=1.0.0", "^1.0.0", ">=1.0.0 <2", "1.x || 2.x"]) {
+  for (const range of [
+    "1.0.0",
+    ">=1.0.0",
+    "^1.0.0",
+    ">=1.0.0 <2",
+    "1.x || 2.x",
+  ]) {
     const inputs = fixture();
     inputs.manifests["apps/example"].peerDependencies = { [name]: range };
     const report = await auditProductionDependencies(inputs, metadata);
     assert.deepEqual(report.errors, []);
     assert.deepEqual(
-      report.packages.filter((row) => row.name === name).map((row) => row.version),
+      report.packages
+        .filter((row) => row.name === name)
+        .map((row) => row.version),
       ["1.0.0"]
     );
   }
+
   for (const range of [">=2.0.0", "<1.0.0"]) {
     const inputs = fixture();
     inputs.manifests["apps/example"].peerDependencies = { [name]: range };
@@ -174,12 +186,16 @@ test("a workspace peer may be a stable range that its locked version satisfies",
       /lockfile importer 1.0.0 does not satisfy the peer range/
     );
   }
+
   const unlocked = fixture();
-  unlocked.manifests["apps/example"].peerDependencies = { [indirect]: ">=1.0.0" };
+  unlocked.manifests["apps/example"].peerDependencies = {
+    [indirect]: ">=1.0.0",
+  };
   await assert.rejects(
     checkProductionDependencies(unlocked, metadata),
     /lockfile importer missing does not satisfy the peer range/
   );
+
   // A range that admits a prerelease is not a production range.
   for (const range of [">=1.0.0-staging.1", "^1.0.0-rc.1", "latest"]) {
     const inputs = fixture();
@@ -264,42 +280,55 @@ test("the strict check requires a published non-deprecated stable version and re
         assert.match(error.message, /@photon-hq\/example/);
         assert.match(error.message, /@photon-hq\/indirect/);
         assert.match(error.message, /not published|deprecated|HTTP 403/);
+
         return true;
       }
     );
   }
 });
 
-async function writeInputs(root, inputs) {
-  await mkdir(join(root, "apps/example"), { recursive: true });
+const writeInputs = async (root, inputs) => {
+  await mkdir(nodePath.join(root, "apps/example"), { recursive: true });
   await writeFile(
-    join(root, "pnpm-workspace.yaml"),
+    nodePath.join(root, "pnpm-workspace.yaml"),
     stringify(inputs.workspace)
   );
-  await writeFile(join(root, "pnpm-lock.yaml"), stringify(inputs.lockfile));
-  for (const [path, manifest] of Object.entries(inputs.manifests))
-    await writeFile(join(root, path, "package.json"), JSON.stringify(manifest));
-}
+  await writeFile(
+    nodePath.join(root, "pnpm-lock.yaml"),
+    stringify(inputs.lockfile)
+  );
 
-function toolchainFixture() {
-  return {
-    lockfileVersion: "9.0",
-    importers: { ".": { configDependencies: {}, packageManagerDependencies: {
-      pnpm: { specifier: "12.11.2", version: "12.11.2" },
-    } } },
-    packages: { "pnpm@12.11.2": {} },
-    snapshots: { "pnpm@12.11.2": {} },
-  };
-}
+  for (const [path, manifest] of Object.entries(inputs.manifests)) {
+    await writeFile(
+      nodePath.join(root, path, "package.json"),
+      JSON.stringify(manifest)
+    );
+  }
+};
 
-async function writeLockfiles(root, documents) {
-  await writeFile(join(root, "pnpm-lock.yaml"), documents.map(
-    (document) => `---\n${stringify(document)}`
-  ).join("\n"));
-}
+const toolchainFixture = () => ({
+  lockfileVersion: "9.0",
+  importers: {
+    ".": {
+      configDependencies: {},
+      packageManagerDependencies: {
+        pnpm: { specifier: "12.11.2", version: "12.11.2" },
+      },
+    },
+  },
+  packages: { "pnpm@12.11.2": {} },
+  snapshots: { "pnpm@12.11.2": {} },
+});
+
+const writeLockfiles = async (root, documents) => {
+  await writeFile(
+    nodePath.join(root, "pnpm-lock.yaml"),
+    documents.map((document) => `---\n${stringify(document)}`).join("\n")
+  );
+};
 
 test("pnpm 12 reads the application importer after the toolchain document and audits both graphs", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "production-pnpm12-"));
+  const root = await mkdtemp(nodePath.join(tmpdir(), "production-pnpm12-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const inputs = fixture();
   await writeInputs(root, inputs);
@@ -308,52 +337,89 @@ test("pnpm 12 reads the application importer after the toolchain document and au
   await checkProductionDependencies(await readProductionInputs(root), metadata);
   // Selecting only the first document would miss this application prerelease.
   await writeLockfiles(root, [tools, fixture("1.0.0-staging.1").lockfile]);
-  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /example@1.0.0-staging.1/);
+  await assert.rejects(
+    checkProductionDependencies(await readProductionInputs(root), metadata),
+    /example@1.0.0-staging.1/
+  );
+
   // Toolchain importer entries cannot hide pins by omitting their graph records.
   for (const field of ["configDependencies", "packageManagerDependencies"]) {
     const missing = toolchainFixture();
-    missing.importers["."][field][indirect] = { specifier: "1.0.0", version: "1.0.0" };
+    missing.importers["."][field][indirect] = {
+      specifier: "1.0.0",
+      version: "1.0.0",
+    };
     await writeLockfiles(root, [missing, inputs.lockfile]);
-    await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /missing lockfile package or snapshot/);
+    await assert.rejects(
+      checkProductionDependencies(await readProductionInputs(root), metadata),
+      /missing lockfile package or snapshot/
+    );
   }
+
   // Selecting only the last document would miss toolchain transitives.
   tools.packages[`${indirect}@2.0.0-staging.1`] = {};
   tools.snapshots[`${indirect}@2.0.0-staging.1`] = {};
-  tools.snapshots["pnpm@12.11.2"].dependencies = { [indirect]: "2.0.0-staging.1" };
+  tools.snapshots["pnpm@12.11.2"].dependencies = {
+    [indirect]: "2.0.0-staging.1",
+  };
   await writeLockfiles(root, [tools, inputs.lockfile]);
-  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /indirect@2.0.0-staging.1/);
+  await assert.rejects(
+    checkProductionDependencies(await readProductionInputs(root), metadata),
+    /indirect@2.0.0-staging.1/
+  );
 });
 
 test("toolchain config dependencies must match stable workspace declarations, including a missing boot document", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "production-pnpm-config-"));
+  const root = await mkdtemp(
+    nodePath.join(tmpdir(), "production-pnpm-config-")
+  );
+
   t.after(() => rm(root, { recursive: true, force: true }));
   const inputs = fixture();
   inputs.workspace.configDependencies = { [indirect]: "1.0.0" };
   await writeInputs(root, inputs);
   const tools = toolchainFixture();
-  tools.importers["."].configDependencies[indirect] = { specifier: "1.0.0", version: "1.0.0" };
+  tools.importers["."].configDependencies[indirect] = {
+    specifier: "1.0.0",
+    version: "1.0.0",
+  };
   tools.packages[`${indirect}@1.0.0`] = {};
   tools.snapshots[`${indirect}@1.0.0`] = {};
   await writeLockfiles(root, [tools, inputs.lockfile]);
   await checkProductionDependencies(await readProductionInputs(root), metadata);
   tools.importers["."].configDependencies = {};
   await writeLockfiles(root, [tools, inputs.lockfile]);
-  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /does not match its workspace declaration/);
+  await assert.rejects(
+    checkProductionDependencies(await readProductionInputs(root), metadata),
+    /does not match its workspace declaration/
+  );
   await writeLockfiles(root, [inputs.lockfile]);
-  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /does not match its workspace declaration/);
+  await assert.rejects(
+    checkProductionDependencies(await readProductionInputs(root), metadata),
+    /does not match its workspace declaration/
+  );
   inputs.workspace.configDependencies[indirect] = "2.0.0-staging.1";
   await writeInputs(root, inputs);
   await writeLockfiles(root, [tools, inputs.lockfile]);
-  await assert.rejects(checkProductionDependencies(await readProductionInputs(root), metadata), /indirect@2.0.0-staging.1/);
+  await assert.rejects(
+    checkProductionDependencies(await readProductionInputs(root), metadata),
+    /indirect@2.0.0-staging.1/
+  );
 });
 
 test("pnpm lockfile documents fail closed on malformed, incomplete, or unrecognized layouts", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "production-pnpm-layout-"));
+  const root = await mkdtemp(
+    nodePath.join(tmpdir(), "production-pnpm-layout-")
+  );
+
   t.after(() => rm(root, { recursive: true, force: true }));
   const inputs = fixture();
   await writeInputs(root, inputs);
+
   for (const documents of [
-    [], [null], ["unexpected"],
+    [],
+    [null],
+    ["unexpected"],
     [inputs.lockfile, inputs.lockfile],
     [toolchainFixture(), toolchainFixture()],
     [toolchainFixture(), { ...inputs.lockfile, importers: {} }],
@@ -361,25 +427,42 @@ test("pnpm lockfile documents fail closed on malformed, incomplete, or unrecogni
     [toolchainFixture(), null],
   ]) {
     await writeLockfiles(root, documents);
-    await assert.rejects(readProductionInputs(root), /Expected one pnpm lockfile|only toolchain importers|must contain application importers/);
+    await assert.rejects(
+      readProductionInputs(root),
+      /Expected one pnpm lockfile|only toolchain importers|must contain application importers/
+    );
   }
+
   for (const section of ["importers", "packages", "snapshots"]) {
     const tools = toolchainFixture();
     delete tools[section];
     await writeLockfiles(root, [tools, inputs.lockfile]);
-    await assert.rejects(async () => checkProductionDependencies(await readProductionInputs(root), metadata), /only toolchain importers|complete pnpm v9/);
+    await assert.rejects(
+      async () =>
+        checkProductionDependencies(await readProductionInputs(root), metadata),
+      /only toolchain importers|complete pnpm v9/
+    );
   }
-  await writeFile(join(root, "pnpm-lock.yaml"), `---\ninvalid: [\n---\n${stringify(inputs.lockfile)}`);
+
+  await writeFile(
+    nodePath.join(root, "pnpm-lock.yaml"),
+    `---\ninvalid: [\n---\n${stringify(inputs.lockfile)}`
+  );
   await assert.rejects(readProductionInputs(root));
 });
 
 test("ref checks the immutable release target, never later main or dirty files, without changing the checkout", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "production-check-"));
+  const root = await mkdtemp(nodePath.join(tmpdir(), "production-check-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+
   const git = async (...args) =>
     (await exec("git", args, { cwd: root })).stdout;
+
   await writeInputs(root, fixture("1.0.0-staging.1"));
-  await writeLockfiles(root, [toolchainFixture(), fixture("1.0.0-staging.1").lockfile]);
+  await writeLockfiles(root, [
+    toolchainFixture(),
+    fixture("1.0.0-staging.1").lockfile,
+  ]);
   await git("init", "-q");
   await git("add", ".");
   await git(
@@ -407,7 +490,7 @@ test("ref checks the immutable release target, never later main or dirty files, 
     "-qm",
     "later stable pins"
   );
-  await writeFile(join(root, "untracked.txt"), "keep me");
+  await writeFile(nodePath.join(root, "untracked.txt"), "keep me");
   await writeInputs(root, fixture("2.0.0-staging.1"));
   const before = await git("diff");
   await assert.rejects(
@@ -426,7 +509,10 @@ test("ref checks the immutable release target, never later main or dirty files, 
     /example@2.0.0-staging.1/
   );
   assert.equal(await git("diff"), before);
-  assert.equal(await readFile(join(root, "untracked.txt"), "utf8"), "keep me");
+  assert.equal(
+    await readFile(nodePath.join(root, "untracked.txt"), "utf-8"),
+    "keep me"
+  );
 });
 
 test("a mixed-channel report lists every detected version once and verifies the stable rows", async () => {
@@ -513,21 +599,21 @@ test("comment rendering escapes Markdown, HTML, newlines, and mentions in detect
     ],
     errors: ["@someone <bad>"],
   });
+
   assert.ok(!body.includes("@someone"));
   assert.ok(!body.includes("<script>"));
   assert.match(body, /a&#124;&#64;someone&#10;&#60;script&#62;/);
 });
 
 test("CLI writes a report on input failure and still exits nonzero", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "production-report-"));
+  const root = await mkdtemp(nodePath.join(tmpdir(), "production-report-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const path = join(root, "report.md");
+  const path = nodePath.join(root, "report.md");
   await assert.rejects(
     exec(
       process.execPath,
       [
-        new URL("./check-production-dependencies.mjs", import.meta.url)
-          .pathname,
+        new URL("check-production-dependencies.mjs", import.meta.url).pathname,
         "--ref",
         "missing-ref",
         "--report-file",
@@ -537,7 +623,7 @@ test("CLI writes a report on input failure and still exits nonzero", async (t) =
     ),
     (error) => error.code === 1
   );
-  const body = await readFile(path, "utf8");
+  const body = await readFile(path, "utf-8");
   assert.match(body, /check failed/);
   assert.match(body, /No package inventory is available/);
 });
@@ -565,21 +651,28 @@ test("workspace source packages are not registry releases, but their internal de
   const local = "@photon-hq/local-contract";
   inputs.workspace.packages.push("packages/*");
   inputs.manifests["packages/local-contract"] = {
-    name: local, version: "0.0.0", dependencies: { [name]: "1.0.0" },
+    name: local,
+    version: "0.0.0",
+    dependencies: { [name]: "1.0.0" },
   };
   inputs.lockfile.importers["packages/local-contract"] = {
     dependencies: { [name]: { specifier: "1.0.0", version: "1.0.0" } },
   };
   inputs.manifests["apps/example"].dependencies[local] = "workspace:*";
   inputs.lockfile.importers["apps/example"].dependencies[local] = {
-    specifier: "workspace:*", version: "link:../../packages/local-contract",
+    specifier: "workspace:*",
+    version: "link:../../packages/local-contract",
   };
   const report = await auditProductionDependencies(inputs, metadata);
   assert.deepEqual(report.errors, []);
-  assert.ok(!report.packages.some(row => row.name === local));
-  assert.ok(report.packages.some(row => row.name === name && row.production));
-  inputs.manifests["packages/local-contract"].dependencies[name] = "2.0.0-staging.1";
-  await assert.rejects(checkProductionDependencies(inputs, metadata), /2.0.0-staging.1/);
+  assert.ok(!report.packages.some((row) => row.name === local));
+  assert.ok(report.packages.some((row) => row.name === name && row.production));
+  inputs.manifests["packages/local-contract"].dependencies[name] =
+    "2.0.0-staging.1";
+  await assert.rejects(
+    checkProductionDependencies(inputs, metadata),
+    /2.0.0-staging.1/
+  );
 });
 
 test("a published package's peer resolved to a workspace package is that source package", async () => {
@@ -589,95 +682,199 @@ test("a published package's peer resolved to a workspace package is that source 
   inputs.manifests["packages/kit"] = { name: kit, version: "0.1.2" };
   inputs.lockfile.importers["packages/kit"] = {};
   // The registry package peers on the kit; pnpm links that peer to the workspace.
-  inputs.lockfile.snapshots[`${name}@1.0.0`].dependencies[kit] = "link:packages/kit";
+  inputs.lockfile.snapshots[`${name}@1.0.0`].dependencies[kit] =
+    "link:packages/kit";
   inputs.lockfile.snapshots[`${name}@1.0.0(${kit}@link:packages/kit)`] = {
     dependencies: { [kit]: "link:packages/kit" },
   };
   const report = await auditProductionDependencies(inputs, metadata);
   assert.deepEqual(report.errors, []);
   assert.ok(!report.packages.some((row) => row.name === kit));
+
   // Only a link to the package of that name inside the workspace is local.
-  for (const target of ["link:../outside", "link:packages/missing", "link:packages/wrong"]) {
+  for (const target of [
+    "link:../outside",
+    "link:packages/missing",
+    "link:packages/wrong",
+  ]) {
     const linked = fixture();
     linked.workspace.packages.push("packages/*");
     linked.manifests["packages/kit"] = { name: kit, version: "0.1.2" };
-    linked.manifests["packages/wrong"] = { name: "@photon-hq/different-package" };
+    linked.manifests["packages/wrong"] = {
+      name: "@photon-hq/different-package",
+    };
     linked.lockfile.snapshots[`${name}@1.0.0`].dependencies[kit] = target;
-    await assert.rejects(checkProductionDependencies(linked, metadata), /exact stable production version/);
+    await assert.rejects(
+      checkProductionDependencies(linked, metadata),
+      /exact stable production version/
+    );
   }
 });
 
 test("workspace links must resolve to the declared package inside the reviewed workspace", async () => {
-  for (const target of ["link:../../../outside", "link:../../packages/missing", "link:../../packages/wrong"]) {
+  for (const target of [
+    "link:../../../outside",
+    "link:../../packages/missing",
+    "link:../../packages/wrong",
+  ]) {
     const inputs = fixture();
-    inputs.manifests["packages/wrong"] = { name: "@photon-hq/different-package" };
+    inputs.manifests["packages/wrong"] = {
+      name: "@photon-hq/different-package",
+    };
     inputs.manifests["apps/example"].dependencies[name] = "workspace:*";
-    inputs.lockfile.importers["apps/example"].dependencies[name] = { specifier: "workspace:*", version: target };
-    await assert.rejects(checkProductionDependencies(inputs, metadata), /exact stable production version/);
+    inputs.lockfile.importers["apps/example"].dependencies[name] = {
+      specifier: "workspace:*",
+      version: target,
+    };
+    await assert.rejects(
+      checkProductionDependencies(inputs, metadata),
+      /exact stable production version/
+    );
   }
 });
 
 test("the action selects main, hotfix and manual commits without accepting malformed tags", async (t) => {
-  const action = parse(await readFile(new URL("./action.yaml", import.meta.url), "utf8"));
+  const action = parse(
+    await readFile(new URL("action.yaml", import.meta.url), "utf-8")
+  );
+
   const step = action.runs.steps.at(-1);
-  const root = await mkdtemp(join(tmpdir(), "production-action-"));
+  const root = await mkdtemp(nodePath.join(tmpdir(), "production-action-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   // Stub the CLI so the real action shell can be exercised without registry calls.
-  await writeFile(join(root, "check-production-dependencies.mjs"), "console.log(process.argv.slice(2).join(' '));\n");
-  const sha = "a".repeat(40), baseline = "b".repeat(40);
-  for (const [tag, ref, expected] of [[`main-${sha}`, "", sha], [`hotfix-${baseline}-${sha}`, "", sha], ["", "main", "main"]]) {
-    const { stdout } = await exec("bash", ["-c", step.run], { env: { ...process.env, IMAGE_TAG: tag, SOURCE_REF: ref, CHECKER_PATH: root } });
+  await writeFile(
+    nodePath.join(root, "check-production-dependencies.mjs"),
+    "console.log(process.argv.slice(2).join(' '));\n"
+  );
+  const sha = "a".repeat(40);
+  const baseline = "b".repeat(40);
+
+  for (const [tag, ref, expected] of [
+    [`main-${sha}`, "", sha],
+    [`hotfix-${baseline}-${sha}`, "", sha],
+    ["", "main", "main"],
+  ]) {
+    const { stdout } = await exec("bash", ["-c", step.run], {
+      env: {
+        ...process.env,
+        IMAGE_TAG: tag,
+        SOURCE_REF: ref,
+        CHECKER_PATH: root,
+      },
+    });
+
     assert.equal(stdout.trim(), `--ref ${expected}`);
   }
-  for (const [tag, ref] of [["", ""], ["latest", ""], ["main-abcd", ""], [`main-${sha}`, "main"], [`hotfix-bad-${sha}`, ""]]) {
-    await assert.rejects(exec("bash", ["-c", step.run], { env: { ...process.env, IMAGE_TAG: tag, SOURCE_REF: ref, CHECKER_PATH: root } }));
+
+  for (const [tag, ref] of [
+    ["", ""],
+    ["latest", ""],
+    ["main-abcd", ""],
+    [`main-${sha}`, "main"],
+    [`hotfix-bad-${sha}`, ""],
+  ]) {
+    await assert.rejects(
+      exec("bash", ["-c", step.run], {
+        env: {
+          ...process.env,
+          IMAGE_TAG: tag,
+          SOURCE_REF: ref,
+          CHECKER_PATH: root,
+        },
+      })
+    );
   }
 });
 
 const crateCommit = "c".repeat(40);
 const errorCommit = "e".repeat(40);
+
 const lockedCrate = (crate, version, repository, pin, commit, extra = {}) => ({
   name: crate,
   version,
   source: `git+https://github.com/photon-hq/${repository}?${pin}#${commit}`,
   ...extra,
 });
-function cargoFixture() {
-  return {
-    source: "fixture",
-    cargo: {
-      lockfile: {
-        version: 4,
-        package: [
-          { name: "service", version: "0.0.0", dependencies: ["photon-example", "serde"] },
-          { name: "service-api", version: "0.0.0" },
-          lockedCrate("photon-example", "1.2.0", "example", "tag=v3.0.0", crateCommit, { dependencies: ["photon-error"] }),
-          lockedCrate("photon-error", "0.1.0", "error", "tag=v0.3.0", errorCommit),
-          { name: "serde", version: "1.0.0", source: "registry+https://github.com/rust-lang/crates.io-index", checksum: "0" },
-          { name: "public", version: "1.0.0-rc.1", source: `git+https://github.com/someone/public?branch=main#${crateCommit}` },
-        ],
-      },
-      manifests: {
-        ".": {
-          package: { name: "service", version: "0.0.0" },
-          workspace: {
-            members: ["crates/*"],
-            dependencies: {
-              "photon-example": { version: "=1.2.0", git: "https://github.com/photon-hq/example", tag: "v3.0.0" },
+
+const cargoFixture = () => ({
+  source: "fixture",
+  cargo: {
+    lockfile: {
+      version: 4,
+      package: [
+        {
+          name: "service",
+          version: "0.0.0",
+          dependencies: ["photon-example", "serde"],
+        },
+        { name: "service-api", version: "0.0.0" },
+        lockedCrate(
+          "photon-example",
+          "1.2.0",
+          "example",
+          "tag=v3.0.0",
+          crateCommit,
+          { dependencies: ["photon-error"] }
+        ),
+        lockedCrate(
+          "photon-error",
+          "0.1.0",
+          "error",
+          "tag=v0.3.0",
+          errorCommit
+        ),
+        {
+          name: "serde",
+          version: "1.0.0",
+          source: "registry+https://github.com/rust-lang/crates.io-index",
+          checksum: "0",
+        },
+        {
+          name: "public",
+          version: "1.0.0-rc.1",
+          source: `git+https://github.com/someone/public?branch=main#${crateCommit}`,
+        },
+      ],
+    },
+    manifests: {
+      ".": {
+        package: { name: "service", version: "0.0.0" },
+        workspace: {
+          members: ["crates/*"],
+          dependencies: {
+            "photon-example": {
+              version: "=1.2.0",
+              git: "https://github.com/photon-hq/example",
+              tag: "v3.0.0",
             },
           },
-          dependencies: { "photon-example": { workspace: true, features: ["axum"] }, serde: "1" },
         },
-        "crates/api": { package: { name: "service-api", version: "0.0.0" } },
+        dependencies: {
+          "photon-example": { workspace: true, features: ["axum"] },
+          serde: "1",
+        },
       },
+      "crates/api": { package: { name: "service-api", version: "0.0.0" } },
     },
-  };
-}
+  },
+});
+
 const releases = {
-  "photon-hq/example v3.0.0": { draft: false, prerelease: false, commit: crateCommit },
-  "photon-hq/error v0.3.0": { draft: false, prerelease: false, commit: errorCommit },
+  "photon-hq/example v3.0.0": {
+    draft: false,
+    prerelease: false,
+    commit: crateCommit,
+  },
+  "photon-hq/error v0.3.0": {
+    draft: false,
+    prerelease: false,
+    commit: errorCommit,
+  },
 };
-const release = async (repository, tag) => releases[`${repository} ${tag}`] ?? null;
+
+const release = async (repository, tag) =>
+  releases[`${repository} ${tag}`] ?? null;
+
 const noRegistry = async () => {
   throw new Error("a Cargo workspace has no registry packages");
 };
@@ -687,10 +884,15 @@ test("a Cargo workspace passes when every internal crate, transitive ones includ
   const before = JSON.stringify(inputs);
   const checked = [];
   assert.deepEqual(
-    await checkProductionDependencies(inputs, noRegistry, async (repository, tag) => {
-      checked.push(`${repository} ${tag}`);
-      return release(repository, tag);
-    }),
+    await checkProductionDependencies(
+      inputs,
+      noRegistry,
+      async (repository, tag) => {
+        checked.push(`${repository} ${tag}`);
+
+        return release(repository, tag);
+      }
+    ),
     ["photon-error@0.1.0", "photon-example@1.2.0"]
   );
   assert.deepEqual(checked.sort(), Object.keys(releases).sort());
@@ -702,17 +904,36 @@ test("crates resolved from a rev, branch, default branch, staging tag or prerele
     [`rev=${errorCommit}`, "0.1.0", /at rev e{40}, not a release tag/],
     ["branch=main", "0.1.0", /at branch main, not a release tag/],
     ["", "0.1.0", /at its default branch, not a release tag/],
-    ["tag=error-staging-0.3.0-staging.1.1", "0.1.0", /at tag error-staging-0.3.0-staging.1.1, not a release tag/],
-    ["tag=v0.3.0", "0.1.0-rc.1", /photon-error@0.1.0-rc.1: must be an exact stable production version/],
+    [
+      "tag=error-staging-0.3.0-staging.1.1",
+      "0.1.0",
+      /at tag error-staging-0.3.0-staging.1.1, not a release tag/,
+    ],
+    [
+      "tag=v0.3.0",
+      "0.1.0-rc.1",
+      /photon-error@0.1.0-rc.1: must be an exact stable production version/,
+    ],
   ]) {
     const inputs = cargoFixture();
-    inputs.cargo.lockfile.package[3] = lockedCrate("photon-error", version, "error", pin, errorCommit);
+    inputs.cargo.lockfile.package[3] = lockedCrate(
+      "photon-error",
+      version,
+      "error",
+      pin,
+      errorCommit
+    );
     const checked = [];
     await assert.rejects(
-      checkProductionDependencies(inputs, noRegistry, async (repository, tag) => {
-        checked.push(repository);
-        return release(repository, tag);
-      }),
+      checkProductionDependencies(
+        inputs,
+        noRegistry,
+        async (repository, tag) => {
+          checked.push(repository);
+
+          return release(repository, tag);
+        }
+      ),
       expected
     );
     assert.deepEqual(checked, ["photon-hq/example"]);
@@ -721,32 +942,88 @@ test("crates resolved from a rev, branch, default branch, staging tag or prerele
 
 test("declared internal crates must pin a release tag and an exact version that Cargo.lock resolves", async () => {
   for (const [change, expected] of [
-    [(pin) => delete pin.version, /Cargo.toml: photon-example must require an exact stable version \(=X.Y.Z\), not any version/],
-    [(pin) => (pin.version = "1.2"), /must require an exact stable version \(=X.Y.Z\), not 1.2/],
-    [(pin) => (pin.version = "=1.2.0-rc.1"), /must require an exact stable version/],
-    [(pin) => { delete pin.tag; pin.rev = crateCommit; }, /must pin a release tag vX.Y.Z of photon-hq\/example, not rev c{40}/],
-    [(pin) => (pin.branch = "main"), /must pin a release tag vX.Y.Z of photon-hq\/example, not branch main/],
-    [(pin) => (pin.tag = "v3.1.0"), /photon-example =1.2.0 at v3.1.0 has no matching Cargo.lock package/],
-    [(pin) => (pin.version = "=1.3.0"), /photon-example =1.3.0 at v3.0.0 has no matching Cargo.lock package/],
+    [
+      (pin) => delete pin.version,
+      /Cargo.toml: photon-example must require an exact stable version \(=X.Y.Z\), not any version/,
+    ],
+    [
+      (pin) => (pin.version = "1.2"),
+      /must require an exact stable version \(=X.Y.Z\), not 1.2/,
+    ],
+    [
+      (pin) => (pin.version = "=1.2.0-rc.1"),
+      /must require an exact stable version/,
+    ],
+    [
+      (pin) => {
+        delete pin.tag;
+        pin.rev = crateCommit;
+      },
+      /must pin a release tag vX.Y.Z of photon-hq\/example, not rev c{40}/,
+    ],
+    [
+      (pin) => (pin.branch = "main"),
+      /must pin a release tag vX.Y.Z of photon-hq\/example, not branch main/,
+    ],
+    [
+      (pin) => (pin.tag = "v3.1.0"),
+      /photon-example =1.2.0 at v3.1.0 has no matching Cargo.lock package/,
+    ],
+    [
+      (pin) => (pin.version = "=1.3.0"),
+      /photon-example =1.3.0 at v3.0.0 has no matching Cargo.lock package/,
+    ],
   ]) {
     const inputs = cargoFixture();
-    change(inputs.cargo.manifests["."].workspace.dependencies["photon-example"]);
-    await assert.rejects(checkProductionDependencies(inputs, noRegistry, release), expected);
+    change(
+      inputs.cargo.manifests["."].workspace.dependencies["photon-example"]
+    );
+    await assert.rejects(
+      checkProductionDependencies(inputs, noRegistry, release),
+      expected
+    );
   }
 });
 
 test("dev, build, target and renamed declarations in every workspace package are audited", async () => {
-  const pin = { git: "ssh://git@GitHub.com/Photon-HQ/Example.git", branch: "main" };
+  const pin = {
+    git: "ssh://git@GitHub.com/Photon-HQ/Example.git",
+    branch: "main",
+  };
+
   for (const [declare, expected] of [
-    [(manifest) => (manifest["dev-dependencies"] = { "photon-example": pin }), /crates\/api\/Cargo.toml: photon-example must pin a release tag/],
-    [(manifest) => (manifest["build-dependencies"] = { "photon-example": pin }), /crates\/api\/Cargo.toml: photon-example must pin a release tag/],
-    [(manifest) => (manifest.target = { "cfg(unix)": { dependencies: { "photon-example": pin } } }), /crates\/api\/Cargo.toml: photon-example must pin a release tag/],
-    [(manifest) => (manifest.dependencies = { example: { ...pin, package: "photon-example" } }), /crates\/api\/Cargo.toml: photon-example must pin a release tag/],
+    [
+      (manifest) => (manifest["dev-dependencies"] = { "photon-example": pin }),
+      /crates\/api\/Cargo.toml: photon-example must pin a release tag/,
+    ],
+    [
+      (manifest) =>
+        (manifest["build-dependencies"] = { "photon-example": pin }),
+      /crates\/api\/Cargo.toml: photon-example must pin a release tag/,
+    ],
+    [
+      (manifest) =>
+        (manifest.target = {
+          "cfg(unix)": { dependencies: { "photon-example": pin } },
+        }),
+      /crates\/api\/Cargo.toml: photon-example must pin a release tag/,
+    ],
+    [
+      (manifest) =>
+        (manifest.dependencies = {
+          example: { ...pin, package: "photon-example" },
+        }),
+      /crates\/api\/Cargo.toml: photon-example must pin a release tag/,
+    ],
   ]) {
     const inputs = cargoFixture();
     declare(inputs.cargo.manifests["crates/api"]);
-    await assert.rejects(checkProductionDependencies(inputs, noRegistry, release), expected);
+    await assert.rejects(
+      checkProductionDependencies(inputs, noRegistry, release),
+      expected
+    );
   }
+
   // A manifest outside the workspace is not part of what Cargo.lock builds.
   const inputs = cargoFixture();
   inputs.cargo.manifests["compat/consumer"] = {
@@ -758,37 +1035,100 @@ test("dev, build, target and renamed declarations in every workspace package are
 
 test("a Cargo.lock of an unknown format or naming a package without a manifest fails closed", async () => {
   for (const [change, expected] of [
-    [(cargo) => (cargo.lockfile.version = 5), /Expected a Cargo.lock of version 3 or 4/],
-    [(cargo) => delete cargo.lockfile.version, /Expected a Cargo.lock of version 3 or 4/],
-    [(cargo) => delete cargo.lockfile.package, /Expected a Cargo.lock of version 3 or 4/],
-    [(cargo) => delete cargo.manifests["crates/api"], /service-api: Cargo.lock package has no Cargo.toml in the source/],
+    [
+      (cargo) => (cargo.lockfile.version = 5),
+      /Expected a Cargo.lock of version 3 or 4/,
+    ],
+    [
+      (cargo) => delete cargo.lockfile.version,
+      /Expected a Cargo.lock of version 3 or 4/,
+    ],
+    [
+      (cargo) => delete cargo.lockfile.package,
+      /Expected a Cargo.lock of version 3 or 4/,
+    ],
+    [
+      (cargo) => delete cargo.manifests["crates/api"],
+      /service-api: Cargo.lock package has no Cargo.toml in the source/,
+    ],
   ]) {
     const inputs = cargoFixture();
     change(inputs.cargo);
-    await assert.rejects(checkProductionDependencies(inputs, noRegistry, release), expected);
+    await assert.rejects(
+      checkProductionDependencies(inputs, noRegistry, release),
+      expected
+    );
   }
 });
 
 test("a crate is production only when its tag is a published release at the resolved commit", async () => {
   for (const [load, production, reason, finding] of [
-    [async () => null, false, "Not released", /photon-hq\/error has no release v0.3.0/],
-    [async () => ({ draft: false, prerelease: true, commit: errorCommit }), false, "Not a production release", /release v0.3.0 is a draft or prerelease/],
-    [async () => ({ draft: true, prerelease: false, commit: errorCommit }), false, "Not a production release", /release v0.3.0 is a draft or prerelease/],
-    [async () => ({ draft: false, prerelease: false, commit: crateCommit }), false, "Release tag is at another commit", /tag v0.3.0 is at c{40}, but Cargo.lock resolved e{40}/],
-    [async () => { throw new Error("repository returned HTTP 404"); }, null, "Release lookup failed", /photon-hq\/error: repository returned HTTP 404/],
+    [
+      async () => null,
+      false,
+      "Not released",
+      /photon-hq\/error has no release v0.3.0/,
+    ],
+    [
+      async () => ({ draft: false, prerelease: true, commit: errorCommit }),
+      false,
+      "Not a production release",
+      /release v0.3.0 is a draft or prerelease/,
+    ],
+    [
+      async () => ({ draft: true, prerelease: false, commit: errorCommit }),
+      false,
+      "Not a production release",
+      /release v0.3.0 is a draft or prerelease/,
+    ],
+    [
+      async () => ({ draft: false, prerelease: false, commit: crateCommit }),
+      false,
+      "Release tag is at another commit",
+      /tag v0.3.0 is at c{40}, but Cargo.lock resolved e{40}/,
+    ],
+    [
+      async () => {
+        throw new Error("repository returned HTTP 404");
+      },
+      null,
+      "Release lookup failed",
+      /photon-hq\/error: repository returned HTTP 404/,
+    ],
   ]) {
-    const report = await auditProductionDependencies(cargoFixture(), noRegistry, (repository, tag) =>
-      repository === "photon-hq/error" ? load() : release(repository, tag)
+    const report = await auditProductionDependencies(
+      cargoFixture(),
+      noRegistry,
+      (repository, tag) =>
+        repository === "photon-hq/error" ? load() : release(repository, tag)
     );
+
     assert.equal(report.packages, undefined);
     assert.deepEqual(report.crates, [
-      { name: "photon-error", version: "0.1.0", repository: "photon-hq/error", reference: "tag v0.3.0", production, reason },
-      { name: "photon-example", version: "1.2.0", repository: "photon-hq/example", reference: "tag v3.0.0", production: true, reason: "Production release" },
+      {
+        name: "photon-error",
+        version: "0.1.0",
+        repository: "photon-hq/error",
+        reference: "tag v0.3.0",
+        production,
+        reason,
+      },
+      {
+        name: "photon-example",
+        version: "1.2.0",
+        repository: "photon-hq/example",
+        reference: "tag v3.0.0",
+        production: true,
+        reason: "Production release",
+      },
     ]);
     assert.equal(report.errors.length, 1);
     assert.match(report.errors[0], finding);
     const body = renderProductionReport(report);
-    assert.match(body, /\| Internal crate \| Version \| Source \| Prod\? \| Reason \|/);
+    assert.match(
+      body,
+      /\| Internal crate \| Version \| Source \| Prod\? \| Reason \|/
+    );
     assert.ok(!body.includes("Internal package"));
     assert.match(body, production === null ? /❓ Unknown/ : /❌ No/);
     assert.match(body, /photon-hq\/example tag v3.0.0 \| ✅ Yes/);
@@ -797,62 +1137,142 @@ test("a crate is production only when its tag is a published release at the reso
 
 test("a source with both workspaces is audited for packages and crates", async () => {
   const inputs = { ...fixture(), cargo: cargoFixture().cargo };
-  assert.deepEqual(await checkProductionDependencies(inputs, metadata, release), [
-    `${name}@1.0.0`,
-    `${indirect}@1.0.0`,
-    "photon-error@0.1.0",
-    "photon-example@1.2.0",
-  ]);
-  const body = renderProductionReport(await auditProductionDependencies(inputs, metadata, release));
+  assert.deepEqual(
+    await checkProductionDependencies(inputs, metadata, release),
+    [
+      `${name}@1.0.0`,
+      `${indirect}@1.0.0`,
+      "photon-error@0.1.0",
+      "photon-example@1.2.0",
+    ]
+  );
+
+  const body = renderProductionReport(
+    await auditProductionDependencies(inputs, metadata, release)
+  );
+
   assert.match(body, /check passed/);
   assert.match(body, /\| Internal package \|/);
   assert.match(body, /\| Internal crate \|/);
-  await assert.rejects(checkProductionDependencies({ ...fixture("1.0.0-staging.1"), cargo: inputs.cargo }, metadata, release), /example@1.0.0-staging.1/);
-  await assert.rejects(checkProductionDependencies(inputs, metadata, async () => null), /has no release/);
-  await assert.rejects(checkProductionDependencies({ source: "fixture" }, metadata, release), /No pnpm workspace or Cargo workspace/);
+  await assert.rejects(
+    checkProductionDependencies(
+      { ...fixture("1.0.0-staging.1"), cargo: inputs.cargo },
+      metadata,
+      release
+    ),
+    /example@1.0.0-staging.1/
+  );
+  await assert.rejects(
+    checkProductionDependencies(inputs, metadata, async () => null),
+    /has no release/
+  );
+  await assert.rejects(
+    checkProductionDependencies({ source: "fixture" }, metadata, release),
+    /No pnpm workspace or Cargo workspace/
+  );
 });
 
 test("a Rust-only commit is read from Git; a commit with neither workspace or without Cargo.lock is refused", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "production-cargo-"));
+  const root = await mkdtemp(nodePath.join(tmpdir(), "production-cargo-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const git = async (...args) => (await exec("git", args, { cwd: root })).stdout;
+
+  const git = async (...args) =>
+    (await exec("git", args, { cwd: root })).stdout;
+
   const commit = async (message) => {
     await git("add", "-A");
-    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-qm", message);
+    await git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-qm",
+      message
+    );
+
     return (await git("rev-parse", "HEAD")).trim();
   };
+
   await git("init", "-q");
-  await writeFile(join(root, "README.md"), "no workspace\n");
+  await writeFile(nodePath.join(root, "README.md"), "no workspace\n");
   const empty = await commit("no workspace");
-  await mkdir(join(root, "crates/api"), { recursive: true });
-  await mkdir(join(root, "fixtures/broken"), { recursive: true });
+  await mkdir(nodePath.join(root, "crates/api"), { recursive: true });
+  await mkdir(nodePath.join(root, "fixtures/broken"), { recursive: true });
   await writeFile(
-    join(root, "Cargo.toml"),
+    nodePath.join(root, "Cargo.toml"),
     `[package]\nname = "service"\nversion = "0.0.0"\n\n[workspace]\nmembers = ["crates/*"]\n\n[workspace.dependencies]\nphoton-error = { version = "=0.1.0", git = "https://github.com/photon-hq/error", rev = "${errorCommit}" }\n\n[dependencies]\nphoton-error = { workspace = true }\n`
   );
-  await writeFile(join(root, "crates/api/Cargo.toml"), `[package]\nname = "service-api"\nversion = "0.0.0"\n`);
-  await writeFile(join(root, "fixtures/broken/Cargo.toml"), "not = [toml");
+  await writeFile(
+    nodePath.join(root, "crates/api/Cargo.toml"),
+    `[package]\nname = "service-api"\nversion = "0.0.0"\n`
+  );
+  await writeFile(
+    nodePath.join(root, "fixtures/broken/Cargo.toml"),
+    "not = [toml"
+  );
   const unlocked = await commit("manifest without a lockfile");
+
   const lock = (pin) =>
     `version = 4\n\n[[package]]\nname = "photon-error"\nversion = "0.1.0"\nsource = "git+https://github.com/photon-hq/error?${pin}#${errorCommit}"\n\n[[package]]\nname = "service"\nversion = "0.0.0"\ndependencies = ["photon-error"]\n\n[[package]]\nname = "service-api"\nversion = "0.0.0"\n`;
-  await writeFile(join(root, "Cargo.lock"), lock(`rev=${errorCommit}`));
+
+  await writeFile(
+    nodePath.join(root, "Cargo.lock"),
+    lock(`rev=${errorCommit}`)
+  );
   const pinnedByRev = await commit("rev pin");
-  await writeFile(join(root, "Cargo.toml"), (await readFile(join(root, "Cargo.toml"), "utf8")).replace(`rev = "${errorCommit}"`, 'tag = "v0.3.0"'));
-  await writeFile(join(root, "Cargo.lock"), lock("tag=v0.3.0"));
+  await writeFile(
+    nodePath.join(root, "Cargo.toml"),
+    (await readFile(nodePath.join(root, "Cargo.toml"), "utf-8")).replace(
+      `rev = "${errorCommit}"`,
+      'tag = "v0.3.0"'
+    )
+  );
+  await writeFile(nodePath.join(root, "Cargo.lock"), lock("tag=v0.3.0"));
   await commit("release tag pin");
 
-  await assert.rejects(readProductionInputs(root, empty), /neither a pnpm workspace nor a Cargo workspace/);
-  await assert.rejects(readProductionInputs(root, unlocked), /needs a committed root Cargo.lock/);
+  await assert.rejects(
+    readProductionInputs(root, empty),
+    /neither a pnpm workspace nor a Cargo workspace/
+  );
+  await assert.rejects(
+    readProductionInputs(root, unlocked),
+    /needs a committed root Cargo.lock/
+  );
   const inputs = await readProductionInputs(root, pinnedByRev);
   assert.equal(inputs.workspace, undefined);
-  assert.deepEqual(Object.keys(inputs.cargo.manifests).sort(), [".", "crates/api"]);
-  await assert.rejects(checkProductionDependencies(inputs, noRegistry, release), /Cargo.toml: photon-error must pin a release tag vX.Y.Z of photon-hq\/error, not rev/);
-  assert.deepEqual(await checkProductionDependencies(await readProductionInputs(root, "HEAD"), noRegistry, release), ["photon-error@0.1.0"]);
-  assert.deepEqual(await checkProductionDependencies(await readProductionInputs(root), noRegistry, release), ["photon-error@0.1.0"]);
+  assert.deepEqual(Object.keys(inputs.cargo.manifests).sort(), [
+    ".",
+    "crates/api",
+  ]);
+  await assert.rejects(
+    checkProductionDependencies(inputs, noRegistry, release),
+    /Cargo.toml: photon-error must pin a release tag vX.Y.Z of photon-hq\/error, not rev/
+  );
+  assert.deepEqual(
+    await checkProductionDependencies(
+      await readProductionInputs(root, "HEAD"),
+      noRegistry,
+      release
+    ),
+    ["photon-error@0.1.0"]
+  );
+  assert.deepEqual(
+    await checkProductionDependencies(
+      await readProductionInputs(root),
+      noRegistry,
+      release
+    ),
+    ["photon-error@0.1.0"]
+  );
 });
 
 test("release lookups tell an unreleased tag from a repository the token cannot read", async (t) => {
-  const { fetchCrateRelease, internalRepository } = await import("./internal-crates.mjs");
+  const { fetchCrateRelease, internalRepository } =
+    await import("./internal-crates.mjs");
+
   for (const [git, expected] of [
     ["https://github.com/photon-hq/error", "photon-hq/error"],
     ["https://github.com/Photon-HQ/Error.git", "photon-hq/error"],
@@ -861,17 +1281,23 @@ test("release lookups tell an unreleased tag from a repository the token cannot 
     ["https://example.com/photon-hq/error", null],
     ["not a url", null],
     [undefined, null],
-  ])
+  ]) {
     assert.equal(internalRepository(git), expected);
+  }
 
   const realFetch = globalThis.fetch;
   const realToken = process.env.CRATES_TOKEN;
   t.after(() => {
     globalThis.fetch = realFetch;
-    if (realToken === undefined) delete process.env.CRATES_TOKEN;
-    else process.env.CRATES_TOKEN = realToken;
+
+    if (realToken === undefined) {
+      delete process.env.CRATES_TOKEN;
+    } else {
+      process.env.CRATES_TOKEN = realToken;
+    }
   });
   const base = "https://api.github.com/repos/photon-hq/error";
+
   const serve = (responses) => {
     const requested = [];
     globalThis.fetch = async (url, options) => {
@@ -879,35 +1305,78 @@ test("release lookups tell an unreleased tag from a repository the token cannot 
       assert.equal(options.headers.authorization, "Bearer token");
       assert.equal(options.redirect, "manual");
       const [status, body = ""] = responses[url] ?? [500];
-      return new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+
+      return new Response(
+        typeof body === "string" ? body : JSON.stringify(body),
+        { status }
+      );
     };
+
     return requested;
   };
-  delete process.env.CRATES_TOKEN;
-  await assert.rejects(fetchCrateRelease("photon-hq/error", "v0.3.0"), /CRATES_TOKEN is required/);
-  process.env.CRATES_TOKEN = "token";
-  await assert.rejects(fetchCrateRelease("photon-hq/error", "main"), /Not an internal crate release/);
-  await assert.rejects(fetchCrateRelease("photon-hq/a/b", "v0.3.0"), /Not an internal crate release/);
 
-  let requested = serve({
-    [`${base}/releases/tags/v0.3.0`]: [200, { draft: false, prerelease: false }],
+  delete process.env.CRATES_TOKEN;
+  await assert.rejects(
+    fetchCrateRelease("photon-hq/error", "v0.3.0"),
+    /CRATES_TOKEN is required/
+  );
+  process.env.CRATES_TOKEN = "token";
+  await assert.rejects(
+    fetchCrateRelease("photon-hq/error", "main"),
+    /Not an internal crate release/
+  );
+  await assert.rejects(
+    fetchCrateRelease("photon-hq/a/b", "v0.3.0"),
+    /Not an internal crate release/
+  );
+
+  const requested = serve({
+    [`${base}/releases/tags/v0.3.0`]: [
+      200,
+      { draft: false, prerelease: false },
+    ],
     [`${base}/commits/refs/tags/v0.3.0`]: [200, `${errorCommit}\n`],
   });
-  assert.deepEqual(await fetchCrateRelease("photon-hq/error", "v0.3.0"), { draft: false, prerelease: false, commit: errorCommit });
+
+  assert.deepEqual(await fetchCrateRelease("photon-hq/error", "v0.3.0"), {
+    draft: false,
+    prerelease: false,
+    commit: errorCommit,
+  });
   assert.equal(requested.length, 2);
 
   serve({ [`${base}/releases/tags/v0.3.0`]: [404], [base]: [200, {}] });
   assert.equal(await fetchCrateRelease("photon-hq/error", "v0.3.0"), null);
   serve({ [`${base}/releases/tags/v0.3.0`]: [404], [base]: [404] });
-  await assert.rejects(fetchCrateRelease("photon-hq/error", "v0.3.0"), /repository returned HTTP 404; the token must be able to read/);
+  await assert.rejects(
+    fetchCrateRelease("photon-hq/error", "v0.3.0"),
+    /repository returned HTTP 404; the token must be able to read/
+  );
   serve({ [`${base}/releases/tags/v0.3.0`]: [301] });
-  await assert.rejects(fetchCrateRelease("photon-hq/error", "v0.3.0"), /release v0.3.0 returned HTTP 301/);
-  serve({ [`${base}/releases/tags/v0.3.0`]: [200, { draft: false, prerelease: false }] });
-  await assert.rejects(fetchCrateRelease("photon-hq/error", "v0.3.0"), /tag v0.3.0 returned HTTP 500/);
+  await assert.rejects(
+    fetchCrateRelease("photon-hq/error", "v0.3.0"),
+    /release v0.3.0 returned HTTP 301/
+  );
+  serve({
+    [`${base}/releases/tags/v0.3.0`]: [
+      200,
+      { draft: false, prerelease: false },
+    ],
+  });
+  await assert.rejects(
+    fetchCrateRelease("photon-hq/error", "v0.3.0"),
+    /tag v0.3.0 returned HTTP 500/
+  );
 });
 
 test("the action reads crate releases with crates-token, falling back to the calling repository's token", async () => {
-  const action = parse(await readFile(new URL("./action.yaml", import.meta.url), "utf8"));
+  const action = parse(
+    await readFile(new URL("action.yaml", import.meta.url), "utf-8")
+  );
+
   assert.equal(action.inputs["crates-token"].default, "");
-  assert.equal(action.runs.steps.at(-1).env.CRATES_TOKEN, "${{ inputs.crates-token || inputs.github-token }}");
+  assert.equal(
+    action.runs.steps.at(-1).env.CRATES_TOKEN,
+    "${{ inputs.crates-token || inputs.github-token }}"
+  );
 });

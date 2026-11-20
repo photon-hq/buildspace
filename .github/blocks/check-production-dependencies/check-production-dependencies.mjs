@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
-import { access, appendFile, glob, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, matchesGlob, normalize, resolve } from "node:path";
+import {
+  access,
+  appendFile,
+  glob,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
+import nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import semver from "semver";
@@ -10,16 +16,20 @@ import { auditCrates, fetchCrateRelease } from "./internal-crates.mjs";
 import { fetchPackageMetadata, INTERNAL_PREFIX } from "./internal-packages.mjs";
 
 const exec = promisify(execFile);
+
 const FIELDS = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
   "peerDependencies",
 ];
+
 const internal = (name) => name.startsWith(INTERNAL_PREFIX);
 const baseVersion = (version) => String(version ?? "").split("(")[0];
+
 const exactStable = (version) => {
   const parsed = typeof version === "string" ? semver.parse(version) : null;
+
   return (
     parsed !== null &&
     parsed.prerelease.length === 0 &&
@@ -27,6 +37,7 @@ const exactStable = (version) => {
       version
   );
 };
+
 // Carets, tildes and X-ranges end below X.Y.Z-0, which admits no prerelease.
 const stableRange = (range) =>
   typeof range === "string" &&
@@ -40,10 +51,11 @@ const stableRange = (range) =>
     );
 
 // Read a ref directly from Git: never check out or rewrite the caller's files.
-export async function readProductionInputs(root, ref) {
+export const readProductionInputs = async (root, ref) => {
   const git = async (...args) =>
     (await exec("git", args, { cwd: root, maxBuffer: 16 * 1024 * 1024 }))
       .stdout;
+
   const source = ref
     ? (
         await git(
@@ -54,110 +66,168 @@ export async function readProductionInputs(root, ref) {
         )
       ).trim()
     : "working tree";
+
   const read = ref
     ? (path) => git("show", `${source}:${path}`)
-    : (path) => readFile(join(root, path), "utf8");
+    : (path) => readFile(nodePath.join(root, path), "utf-8");
+
   const tree = ref
     ? (await git("ls-tree", "-rz", "--name-only", source)).split("\0")
     : null;
+
   const exists = (path) =>
     tree
       ? tree.includes(path)
-      : access(join(root, path)).then(
+      : access(nodePath.join(root, path)).then(
           () => true,
           () => false
         );
+
   const inputs = { source };
-  if (await exists("pnpm-workspace.yaml"))
+
+  if (await exists("pnpm-workspace.yaml")) {
     Object.assign(inputs, await readPnpmInputs(root, read, tree));
-  if ((await exists("Cargo.toml")) || (await exists("Cargo.lock")))
+  }
+
+  if ((await exists("Cargo.toml")) || (await exists("Cargo.lock"))) {
     inputs.cargo = await readCargoInputs(root, read, tree);
-  if (!inputs.workspace && !inputs.cargo)
+  }
+
+  if (!inputs.workspace && !inputs.cargo) {
     throw new Error(
       `${source} has neither a pnpm workspace nor a Cargo workspace to check`
     );
-  return inputs;
-}
+  }
 
-async function readPnpmInputs(root, read, tree) {
+  return inputs;
+};
+
+const readPnpmInputs = async (root, read, tree) => {
   const workspace = parse(await read("pnpm-workspace.yaml"));
   const patterns = workspace.packages ?? [];
+
   const included = (path) =>
     patterns.some(
-      (pattern) => !pattern.startsWith("!") && matchesGlob(path, pattern)
+      (pattern) =>
+        !pattern.startsWith("!") && nodePath.matchesGlob(path, pattern)
     ) &&
     !patterns.some(
       (pattern) =>
-        pattern.startsWith("!") && matchesGlob(path, pattern.slice(1))
+        pattern.startsWith("!") && nodePath.matchesGlob(path, pattern.slice(1))
     );
+
   let paths;
+
   if (tree) {
     paths = tree.filter(
-      (path) => path.endsWith("/package.json") && included(dirname(path))
+      (path) =>
+        path.endsWith("/package.json") && included(nodePath.dirname(path))
     );
   } else {
     paths = [];
+
     for (const pattern of patterns.filter((entry) => !entry.startsWith("!"))) {
       for await (const path of glob(`${pattern}/package.json`, {
         cwd: root,
         exclude: ["**/node_modules/**", "**/.git/**"],
       })) {
-        if (included(dirname(path))) paths.push(path);
+        if (included(nodePath.dirname(path))) {
+          paths.push(path);
+        }
       }
     }
   }
+
   const manifests = Object.fromEntries(
     await Promise.all(
       [...new Set(["package.json", ...paths])].map(async (path) => [
-        dirname(path),
+        nodePath.dirname(path),
         JSON.parse(await read(path)),
       ])
     )
   );
+
   const documents = parseAllDocuments(await read("pnpm-lock.yaml"));
+
   for (const document of documents) {
-    if (document.errors.length) throw document.errors[0];
+    if (document.errors.length) {
+      throw document.errors[0];
+    }
   }
+
   const lockfiles = documents.map((document) => document.toJS());
-  if (lockfiles.length < 1 || lockfiles.length > 2 ||
-      lockfiles.some((lockfile) => !lockfile || typeof lockfile !== "object" || Array.isArray(lockfile)))
-    throw new Error("Expected one pnpm lockfile or a toolchain document followed by the application lockfile");
+
+  if (
+    lockfiles.length < 1 ||
+    lockfiles.length > 2 ||
+    lockfiles.some(
+      (lockfile) =>
+        !lockfile || typeof lockfile !== "object" || Array.isArray(lockfile)
+    )
+  ) {
+    throw new Error(
+      "Expected one pnpm lockfile or a toolchain document followed by the application lockfile"
+    );
+  }
+
   if (lockfiles.length === 2) {
     // pnpm 12 prepends its package-manager/config dependency graph. Do not
     // silently select a document from an arbitrary multi-document YAML file.
-    const importers = lockfiles[0].importers;
+    const { importers } = lockfiles[0];
     const importer = importers?.["."];
     const application = lockfiles[1].importers?.["."];
-    if (!application || Object.keys(application).some(
-      (field) => ["configDependencies", "packageManagerDependencies"].includes(field)))
-      throw new Error("The second pnpm lockfile document must contain application importers");
-    if (!importer || Object.keys(importers).length !== 1 ||
-        !Object.keys(importer).length || Object.keys(importer).some(
-          (field) => !["configDependencies", "packageManagerDependencies"].includes(field)))
-      throw new Error("The first pnpm lockfile document must contain only toolchain importers");
+
+    if (
+      !application ||
+      Object.keys(application).some((field) =>
+        ["configDependencies", "packageManagerDependencies"].includes(field)
+      )
+    ) {
+      throw new Error(
+        "The second pnpm lockfile document must contain application importers"
+      );
+    }
+
+    if (
+      !importer ||
+      Object.keys(importers).length !== 1 ||
+      !Object.keys(importer).length ||
+      Object.keys(importer).some(
+        (field) =>
+          !["configDependencies", "packageManagerDependencies"].includes(field)
+      )
+    ) {
+      throw new Error(
+        "The first pnpm lockfile document must contain only toolchain importers"
+      );
+    }
   }
+
   return {
     workspace,
     manifests,
     lockfile: lockfiles.at(-1),
     toolchainLockfiles: lockfiles.slice(0, -1),
   };
-}
+};
 
 // The root Cargo.lock names the workspace's own packages; their manifests are
 // found by package name, so every Cargo.toml of the commit is read.
-async function readCargoInputs(root, read, tree) {
+const readCargoInputs = async (root, read, tree) => {
   const required = async (path) => {
     try {
       return parseToml(await read(path));
     } catch (error) {
       throw new Error(
-        `A Cargo workspace needs a committed root ${path}: ${error.message}`
+        `A Cargo workspace needs a committed root ${path}: ${error.message}`,
+        { cause: error }
       );
     }
   };
+
   const manifests = { ".": await required("Cargo.toml") };
   const lockfile = await required("Cargo.lock");
+
   const paths = tree
     ? tree.filter((path) => path.endsWith("/Cargo.toml"))
     : await Array.fromAsync(
@@ -166,89 +236,142 @@ async function readCargoInputs(root, read, tree) {
           exclude: ["**/node_modules/**", "**/.git/**", "**/target/**"],
         })
       );
+
   for (const path of paths.filter((entry) => entry !== "Cargo.toml")) {
     try {
-      manifests[dirname(path)] = parseToml(await read(path));
+      manifests[nodePath.dirname(path)] = parseToml(await read(path));
     } catch {
       // Not a manifest Cargo could have built; a package Cargo.lock names
       // still needs a readable one.
     }
   }
+
   return { lockfile, manifests };
-}
+};
 
 /** Audit the declared pins and the entire resolved internal dependency graph. */
-export function inspectProductionDependencies(inputs) {
-  const result = inspectPnpmGraph(inputs);
-  // Audit every document's graph: toolchain transitive pins must not hide an
-  // internal prerelease simply because they are not application importers.
-  const toolchains = inputs.toolchainLockfiles?.length ? inputs.toolchainLockfiles :
-    inputs.workspace.configDependencies ? [{ lockfileVersion: "9.0", importers: {}, packages: {}, snapshots: {} }] : [];
-  for (const lockfile of toolchains) {
-    const audit = inspectPnpmGraph({ workspace: inputs.workspace, manifests: {}, lockfile, toolchain: true });
-    result.errors.push(...audit.errors);
-    for (const [name, versions] of audit.versions) {
-      if (!result.versions.has(name)) result.versions.set(name, new Set());
-      for (const version of versions) result.versions.get(name).add(version);
-    }
-  }
-  result.errors = [...new Set(result.errors)].sort();
-  return result;
-}
+export const inspectProductionDependencies =
+  function inspectProductionDependencies(inputs) {
+    const result = inspectPnpmGraph(inputs);
 
-function inspectPnpmGraph({
+    // Audit every document's graph: toolchain transitive pins must not hide an
+    // internal prerelease simply because they are not application importers.
+    const toolchains = inputs.toolchainLockfiles?.length
+      ? inputs.toolchainLockfiles
+      : inputs.workspace.configDependencies
+        ? [
+            {
+              lockfileVersion: "9.0",
+              importers: {},
+              packages: {},
+              snapshots: {},
+            },
+          ]
+        : [];
+
+    for (const lockfile of toolchains) {
+      const audit = inspectPnpmGraph({
+        workspace: inputs.workspace,
+        manifests: {},
+        lockfile,
+        toolchain: true,
+      });
+
+      result.errors.push(...audit.errors);
+
+      for (const [name, versions] of audit.versions) {
+        if (!result.versions.has(name)) {
+          result.versions.set(name, new Set());
+        }
+
+        for (const version of versions) {
+          result.versions.get(name).add(version);
+        }
+      }
+    }
+
+    result.errors = [...new Set(result.errors)].sort();
+
+    return result;
+  };
+
+const inspectPnpmGraph = ({
   workspace,
   manifests,
   lockfile,
   toolchain = false,
-}) {
+}) => {
   const errors = new Set();
   const versions = new Map();
   const localPackages = new Map();
+
   for (const [path, manifest] of Object.entries(manifests)) {
-    if (localPackages.has(manifest.name))
+    if (localPackages.has(manifest.name)) {
       errors.add(`Duplicate workspace package: ${manifest.name}`);
+    }
+
     localPackages.set(manifest.name, path);
   }
+
   const localLink = (name, version, from) =>
     typeof version === "string" &&
     version.startsWith("link:") &&
-    localPackages.get(name) === normalize(join(from, version.slice(5)));
+    localPackages.get(name) ===
+      nodePath.normalize(nodePath.join(from, version.slice(5)));
 
   const add = (name, version) => {
-    if (!versions.has(name)) versions.set(name, new Set());
+    if (!versions.has(name)) {
+      versions.set(name, new Set());
+    }
+
     versions.get(name).add(String(version ?? "missing"));
+
     if (!exactStable(version)) {
       errors.add(
         `${name}@${version}: must be pinned to an exact stable production version`
       );
     }
   };
+
   const catalogs = { default: workspace.catalog ?? {}, ...workspace.catalogs };
+
   const pin = (name, value) => {
     const version =
       typeof value === "string" && value.startsWith("catalog:")
         ? catalogs[value.slice(8) || "default"]?.[name]
         : value;
+
     add(name, version);
+
     return version;
   };
+
   const rejectAlias = (name, value) => {
     if (!internal(name) && /^(?:npm:)?@photon-hq\//.test(String(value))) {
       const target = /^(?:npm:)?(@photon-hq\/[^@()/\s]+)(?:@(.+))?$/.exec(
         String(value)
       );
-      if (target) add(target[1], baseVersion(target[2] || "latest"));
+
+      if (target) {
+        add(target[1], baseVersion(target[2] || "latest"));
+      }
+
       errors.add(
         `${name}: internal package aliases are not supported; use the @photon-hq package name`
       );
     }
   };
+
   const resolved = (name, value) => {
     rejectAlias(name, value);
-    if (!internal(name)) return;
+
+    if (!internal(name)) {
+      return;
+    }
+
     const version = baseVersion(value);
     add(name, version);
+
     if (
       !lockfile.packages?.[`${name}@${version}`] ||
       !lockfile.snapshots?.[`${name}@${value}`]
@@ -258,6 +381,7 @@ function inspectPnpmGraph({
       );
     }
   };
+
   if (
     String(lockfile.lockfileVersion) !== "9.0" ||
     !lockfile.importers ||
@@ -268,19 +392,29 @@ function inspectPnpmGraph({
       "Expected a complete pnpm v9 lockfile (importers, packages, and snapshots)"
     );
   }
+
   for (const catalog of Object.values(catalogs)) {
     for (const [name, version] of Object.entries(catalog)) {
       rejectAlias(name, version);
-      if (internal(name)) add(name, version);
+
+      if (internal(name)) {
+        add(name, version);
+      }
     }
   }
+
   for (const [catalogName, catalog] of Object.entries(
     lockfile.catalogs ?? {}
   )) {
     for (const [name, entry] of Object.entries(catalog)) {
       rejectAlias(name, entry.version);
-      if (!internal(name)) continue;
+
+      if (!internal(name)) {
+        continue;
+      }
+
       add(name, baseVersion(entry.version));
+
       if (
         entry.specifier !== catalogs[catalogName]?.[name] ||
         baseVersion(entry.version) !== catalogs[catalogName]?.[name]
@@ -291,22 +425,43 @@ function inspectPnpmGraph({
       }
     }
   }
+
   if (toolchain) {
-    for (const [name, value] of Object.entries(workspace.configDependencies ?? {})) {
+    for (const [name, value] of Object.entries(
+      workspace.configDependencies ?? {}
+    )) {
       rejectAlias(name, value);
-      if (!internal(name)) continue;
+
+      if (!internal(name)) {
+        continue;
+      }
+
       const version = pin(name, value);
       const entry = lockfile.importers?.["."]?.configDependencies?.[name];
-      if (!entry || entry.specifier !== value || baseVersion(entry.version) !== version)
-        errors.add(`${name}: toolchain config dependency does not match its workspace declaration`);
+
+      if (
+        !entry ||
+        entry.specifier !== value ||
+        baseVersion(entry.version) !== version
+      ) {
+        errors.add(
+          `${name}: toolchain config dependency does not match its workspace declaration`
+        );
+      }
     }
   }
+
   for (const [path, manifest] of Object.entries(manifests)) {
     for (const field of FIELDS) {
       for (const [name, value] of Object.entries(manifest[field] ?? {})) {
         rejectAlias(name, value);
-        if (!internal(name)) continue;
+
+        if (!internal(name)) {
+          continue;
+        }
+
         const importer = lockfile.importers?.[path];
+
         // pnpm installs workspace peer dependencies as dependencies/devDependencies.
         const entry =
           field === "peerDependencies"
@@ -314,21 +469,29 @@ function inspectPnpmGraph({
               importer?.devDependencies?.[name] ??
               importer?.optionalDependencies?.[name])
             : importer?.[field]?.[name];
+
         if (
           String(value).startsWith("workspace:") &&
           entry?.specifier === value &&
           localLink(name, entry.version, path)
-        ) continue;
+        ) {
+          continue;
+        }
+
         // A peer range is what consumers may install. This workspace builds
         // with the version it locked, which the importer audit below pins.
         if (field === "peerDependencies" && stableRange(value)) {
-          if (!entry || !semver.satisfies(baseVersion(entry.version), value))
+          if (!entry || !semver.satisfies(baseVersion(entry.version), value)) {
             errors.add(
               `${path}: ${name} lockfile importer ${entry?.version ?? "missing"} does not satisfy the peer range ${value}`
             );
+          }
+
           continue;
         }
+
         const version = pin(name, value);
+
         if (
           !entry ||
           baseVersion(entry.version) !== version ||
@@ -338,22 +501,36 @@ function inspectPnpmGraph({
             `${path}: ${name} lockfile importer does not match ${value} (${version})`
           );
         }
+
         if (String(value).startsWith("catalog:")) {
           const catalogName = value.slice(8) || "default";
-          if (!lockfile.catalogs?.[catalogName]?.[name])
+
+          if (!lockfile.catalogs?.[catalogName]?.[name]) {
             errors.add(`${name}: missing lockfile catalog ${catalogName}`);
+          }
         }
       }
     }
   }
+
   for (const [path, importer] of Object.entries(lockfile.importers ?? {})) {
-    const fields = toolchain ? ["configDependencies", "packageManagerDependencies"] : FIELDS;
+    const fields = toolchain
+      ? ["configDependencies", "packageManagerDependencies"]
+      : FIELDS;
+
     for (const field of fields) {
       for (const [name, entry] of Object.entries(importer[field] ?? {})) {
-        if (toolchain && internal(name)) pin(name, entry.specifier);
-        if (!localLink(name, entry.version, path)) resolved(name, entry.version);
+        if (toolchain && internal(name)) {
+          pin(name, entry.specifier);
+        }
+
+        if (!localLink(name, entry.version, path)) {
+          resolved(name, entry.version);
+        }
+
         if (
-          !toolchain && internal(name) &&
+          !toolchain &&
+          internal(name) &&
           !FIELDS.some((key) => manifests[path]?.[key]?.[name])
         ) {
           errors.add(
@@ -363,58 +540,75 @@ function inspectPnpmGraph({
       }
     }
   }
+
   for (const section of ["packages", "snapshots"]) {
     for (const [key, entry] of Object.entries(lockfile[section] ?? {})) {
       // Include peer contexts, including internal peers of third-party packages.
       // A peer resolved to a workspace package is that source package, like a
       // workspace: dependency; lockfile links are relative to the root.
       for (const match of key.matchAll(/(@photon-hq\/[^@()/\s]+)@([^()]+)/g)) {
-        if (localLink(match[1], match[2], ".")) continue;
+        if (localLink(match[1], match[2], ".")) {
+          continue;
+        }
+
         add(match[1], match[2]);
-        if (!lockfile.packages?.[`${match[1]}@${match[2]}`])
+
+        if (!lockfile.packages?.[`${match[1]}@${match[2]}`]) {
           errors.add(
             `${match[1]}@${match[2]}: missing lockfile package record`
           );
+        }
       }
+
       if (section === "snapshots") {
         for (const field of ["dependencies", "optionalDependencies"]) {
-          for (const [name, value] of Object.entries(entry[field] ?? {}))
-            if (!localLink(name, value, ".")) resolved(name, value);
+          for (const [name, value] of Object.entries(entry[field] ?? {})) {
+            if (!localLink(name, value, ".")) {
+              resolved(name, value);
+            }
+          }
         }
       }
     }
   }
+
   return { errors: [...errors].sort(), versions };
-}
+};
 
 /**
  * Return a full report even when some pins or lookups fail. Each ecosystem the
  * source has is audited: its pnpm workspace, its Cargo workspace, or both.
  */
-export async function auditProductionDependencies(
+export const auditProductionDependencies = async (
   inputs,
   loadMetadata = fetchPackageMetadata,
   loadRelease = fetchCrateRelease
-) {
+) => {
   const errors = [];
   const report = { source: inputs.source };
+
   if (inputs.workspace) {
     const audit = await auditPackages(inputs, loadMetadata);
     report.packages = audit.packages;
     errors.push(...audit.errors);
   }
+
   if (inputs.cargo) {
     const audit = await auditCrates(inputs.cargo, loadRelease);
     report.crates = audit.crates;
     errors.push(...audit.errors);
   }
-  if (!inputs.workspace && !inputs.cargo)
-    errors.push("No pnpm workspace or Cargo workspace to check");
-  return { ...report, errors: errors.sort() };
-}
 
-async function auditPackages(inputs, loadMetadata) {
+  if (!inputs.workspace && !inputs.cargo) {
+    errors.push("No pnpm workspace or Cargo workspace to check");
+  }
+
+  return { ...report, errors: errors.sort() };
+};
+
+const auditPackages = async (inputs, loadMetadata) => {
   const { errors, versions } = inspectProductionDependencies(inputs);
+
   const packages = [...versions]
     .flatMap(([name, pins]) =>
       [...pins].map((version) => ({
@@ -430,6 +624,7 @@ async function auditPackages(inputs, loadMetadata) {
       (a, b) =>
         a.name.localeCompare(b.name) || a.version.localeCompare(b.version)
     );
+
   // Verify stable rows even when other packages are on staging, so the PR
   // table reports each package independently without ever selecting new pins.
   await Promise.all(
@@ -437,54 +632,68 @@ async function auditPackages(inputs, loadMetadata) {
       const rows = packages.filter(
         (entry) => entry.name === name && entry.production === null
       );
-      if (!rows.length) return;
+
+      if (!rows.length) {
+        return;
+      }
+
       try {
         const metadata = await loadMetadata(name);
+
         for (const row of rows) {
           const release = metadata.versions?.[row.version];
           row.production = Boolean(release && !release.deprecated);
-          row.reason = !release
-            ? "Not published"
-            : release.deprecated
+          row.reason = release
+            ? release.deprecated
               ? "Deprecated"
-              : "Published stable version";
-          if (!row.production)
+              : "Published stable version"
+            : "Not published";
+
+          if (!row.production) {
             errors.push(
               `${name}@${row.version}: exact version is ${release ? "deprecated" : "not published"}`
             );
+          }
         }
       } catch (error) {
-        for (const row of rows) row.reason = "Registry lookup failed";
+        for (const row of rows) {
+          row.reason = "Registry lookup failed";
+        }
+
         errors.push(`${name}: ${error.message}`);
       }
     })
   );
-  return { packages, errors };
-}
 
-export async function checkProductionDependencies(
+  return { packages, errors };
+};
+
+export const checkProductionDependencies = async (
   inputs,
   loadMetadata = fetchPackageMetadata,
   loadRelease = fetchCrateRelease
-) {
+) => {
   const report = await auditProductionDependencies(
     inputs,
     loadMetadata,
     loadRelease
   );
-  if (report.errors.length)
+
+  if (report.errors.length) {
     throw new Error(
       `Production dependency check failed:\n${report.errors.map((error) => `- ${error}`).join("\n")}\nPublish and review compatible stable pins and their lockfile before releasing.`
     );
+  }
+
   return [...(report.packages ?? []), ...(report.crates ?? [])]
     .map(({ name, version }) => `${name}@${version}`)
     .sort();
-}
+};
 
 // Escape data before putting it in a Markdown table or comment. Package metadata
 // must not inject rows, HTML, or user mentions into the bot's report.
 const markdown = (value) =>
-  String(value).replace(
+  String(value).replaceAll(
     /[&<>|`*_[\]@\r\n\\]/g,
     (character) => `&#${character.charCodeAt(0)};`
   );
@@ -496,10 +705,16 @@ const verdict = (production) =>
       ? "❌ No"
       : "❓ Unknown";
 
-export function renderProductionReport({ source, packages, crates, errors }) {
+export const renderProductionReport = function renderProductionReport({
+  source,
+  packages,
+  crates,
+  errors,
+}) {
   // A source that could not be read has no inventory; say so in the npm table.
   const tables = [];
-  if (packages || !crates)
+
+  if (packages || !crates) {
     tables.push(
       "| Internal package | Version | Prod? | Reason |",
       "| --- | --- | --- | --- |",
@@ -512,7 +727,9 @@ export function renderProductionReport({ source, packages, crates, errors }) {
       "Prod means the exact version is stable, published, and not deprecated. Includes direct and transitive `@photon-hq/*` dependencies. Unknown means registry status could not be verified.",
       ""
     );
-  if (crates)
+  }
+
+  if (crates) {
     tables.push(
       "| Internal crate | Version | Source | Prod? | Reason |",
       "| --- | --- | --- | --- | --- |",
@@ -525,6 +742,8 @@ export function renderProductionReport({ source, packages, crates, errors }) {
       "Prod means Cargo.lock resolves the crate at an exact stable version from a `vX.Y.Z` release tag of its repository, and that tag is a published release at the resolved commit. Includes direct and transitive crates fetched from the owner's GitHub repositories. Unknown means the release could not be verified.",
       ""
     );
+  }
+
   return [
     "## Production dependencies",
     "",
@@ -546,17 +765,19 @@ export function renderProductionReport({ source, packages, crates, errors }) {
         ]
       : []),
   ].join("\n");
-}
+};
 
 if (
   process.argv[1] &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  nodePath.resolve(process.argv[1]) === import.meta.filename
 ) {
   try {
     const { values } = parseArgs({
       options: { ref: { type: "string" }, "report-file": { type: "string" } },
     });
+
     let report;
+
     try {
       const inputs = await readProductionInputs(process.cwd(), values.ref);
       report = await auditProductionDependencies(inputs);
@@ -567,12 +788,21 @@ if (
         errors: [error.message],
       };
     }
+
     const body = renderProductionReport(report);
     console.info(body);
-    if (values["report-file"]) await writeFile(values["report-file"], body);
-    if (process.env.GITHUB_STEP_SUMMARY)
+
+    if (values["report-file"]) {
+      await writeFile(values["report-file"], body);
+    }
+
+    if (process.env.GITHUB_STEP_SUMMARY) {
       await appendFile(process.env.GITHUB_STEP_SUMMARY, body);
-    if (report.errors.length) process.exitCode = 1;
+    }
+
+    if (report.errors.length) {
+      process.exitCode = 1;
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
