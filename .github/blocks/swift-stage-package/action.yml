@@ -26,6 +26,9 @@ inputs:
   entitlements:
     description: Entitlements plist the binary is ad-hoc signed with
     default: ''
+  signing-identifier:
+    description: Code signing identifier for the ad-hoc signature (codesign -i); used only with entitlements, empty keeps codesign's default
+    default: ''
   secret-env-vars:
     description: Lines added to the .env the build compiles with
     default: ''
@@ -55,7 +58,11 @@ runs:
       env:
         BINARY: ${{ steps.build.outputs.bin-path }}/${{ inputs.package-name }}
         ENTITLEMENTS: ${{ inputs.entitlements }}
-      run: codesign -s - --entitlements "$ENTITLEMENTS" -f "$BINARY"
+        SIGNING_IDENTIFIER: ${{ inputs.signing-identifier }}
+      run: |
+        args=(-s - --entitlements "$ENTITLEMENTS" -f)
+        if [ -n "$SIGNING_IDENTIFIER" ]; then args+=(-i "$SIGNING_IDENTIFIER"); fi
+        codesign "${args[@]}" "$BINARY"
     - name: Stage the binary
       if: inputs.kind != 'payload'
       uses: $/.github/primitives/stage-file

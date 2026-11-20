@@ -31,6 +31,10 @@ on:
         description: Entitlements plist the binary is ad-hoc signed with
         default: ''
         type: string
+      signing-identifier:
+        description: Code signing identifier for the ad-hoc signature (codesign -i); used only with entitlements, empty keeps codesign's default
+        default: ''
+        type: string
       private-deps:
         description: Mint an APP_ID/APP_PRIVATE_KEY token so SwiftPM can clone the owner's private dependencies
         default: false
@@ -92,12 +96,13 @@ jobs:
           PAYLOAD_PATH: ${{ inputs.payload-path }}
           RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
           ENTITLEMENTS: ${{ inputs.entitlements }}
+          SIGNING_IDENTIFIER: ${{ inputs.signing-identifier }}
           PRIVATE_DEPS: ${{ inputs.private-deps }}
         run: |
           [[ "$KIND" =~ ^(executable|payload|library)$ ]] ||
             { echo "::error::kind must be executable, payload or library, not $KIND" >&2; exit 1; }
-          [[ "$KIND" != payload || ( -n "$PAYLOAD_PATH" && -z "$RESOURCE_BUNDLES$ENTITLEMENTS" && "$PRIVATE_DEPS" != true ) ]] ||
-            { echo "::error::A payload needs payload-path and takes no resource-bundles, entitlements or private-deps" >&2; exit 1; }
+          [[ "$KIND" != payload || ( -n "$PAYLOAD_PATH" && -z "$RESOURCE_BUNDLES$ENTITLEMENTS$SIGNING_IDENTIFIER" && "$PRIVATE_DEPS" != true ) ]] ||
+            { echo "::error::A payload needs payload-path and takes no resource-bundles, entitlements, signing-identifier or private-deps" >&2; exit 1; }
       - name: Fetch the release tools of this workflow's commit
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -216,6 +221,7 @@ jobs:
           payload-path: ${{ inputs.payload-path }}
           resource-bundles: ${{ inputs.resource-bundles }}
           entitlements: ${{ inputs.entitlements }}
+          signing-identifier: ${{ inputs.signing-identifier }}
           secret-env-vars: ${{ secrets.SECRET_ENV_VARS }}
           kind: ${{ inputs.kind }}
       - name: Build the production candidate
@@ -230,6 +236,7 @@ jobs:
           payload-path: ${{ inputs.payload-path }}
           resource-bundles: ${{ inputs.resource-bundles }}
           entitlements: ${{ inputs.entitlements }}
+          signing-identifier: ${{ inputs.signing-identifier }}
           secret-env-vars: ${{ secrets.SECRET_ENV_VARS }}
           kind: ${{ inputs.kind }}
       - name: Require the builds to leave tracked files unchanged

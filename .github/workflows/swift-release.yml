@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         description: "Path to an entitlements plist for ad-hoc codesigning the built binary."
+      signing-identifier:
+        type: string
+        required: false
+        default: ""
+        description: "Code signing identifier for the ad-hoc signature (codesign -i). Used only with entitlements; empty keeps codesign's default."
       private-deps:
         type: boolean
         required: false
@@ -141,6 +146,7 @@ jobs:
           binary-name: ${{ inputs.package-name }}
           use-cache: "false"
           entitlements: ${{ inputs.entitlements }}
+          signing-identifier: ${{ inputs.signing-identifier }}
           github-token: ${{ steps.app-token.outputs.token }}
           compile-env: |-
             VERSION=${{ needs.prepare-release.outputs.version }}

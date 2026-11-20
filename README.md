@@ -1040,7 +1040,7 @@ jobs:
 
 - **Inputs.** `kind` is `executable` (the default), `payload` or `library`.
   `package-name`, `identifier`, `scripts-path`, `payload-path`,
-  `resource-bundles`, `entitlements` and `private-deps` (with the `APP_ID` and
+  `resource-bundles`, `entitlements`, `signing-identifier` and `private-deps` (with the `APP_ID` and
   `APP_PRIVATE_KEY` secrets) work as in [Swift Release](#swift-release).
   `paths`, `ci-workflow`, `ci-wait-minutes`, `environment` (default `staging`)
   and `dry-run` work as in `package-stage`. The promote call names the same
@@ -1053,7 +1053,7 @@ jobs:
   sets up no Swift toolchain and skips the `.env`, compile and binary steps,
   so `pkgbuild` packages the contents of the required `payload-path` at the
   install root `/` with `scripts-path`, `identifier` and the version, unsigned.
-  `resource-bundles`, `entitlements` and `private-deps` are
+  `resource-bundles`, `entitlements`, `signing-identifier` and `private-deps` are
   refused. Versions, attestation, the staging prerelease, approval and Jamf
   work as for any package. Payload promotion checks `Package.resolved` when
   present, otherwise `Package.swift`. It skips SwiftPM dependency checks only
@@ -1163,6 +1163,7 @@ The label-driven pipeline that Swift Stage and Promote replaces. Complete releas
 | `payload-path` | string | No | `""` | Path to additional payload directory whose contents mirror the install root |
 | `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
 | `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
+| `signing-identifier` | string | No | `""` | Code signing identifier for the ad-hoc signature (`codesign -i`); used only with `entitlements`, empty keeps codesign's default. Some system services allow a client by this identifier, e.g. macOS 27 StatusKit |
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
 | `prerelease` | boolean | No | `false` | Enable an RC release, mark the GitHub release as prerelease, and skip Jamf |
 | `release` | boolean | No | `false` | Enable the legacy release; a prerelease input or label still selects RC mode |
@@ -1303,6 +1304,7 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 | `payload-path` | string | No | `""` | Path to additional payload directory whose contents mirror the install root |
 | `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
 | `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
+| `signing-identifier` | string | No | `""` | Code signing identifier for the ad-hoc signature (`codesign -i`); used only with `entitlements`, empty keeps codesign's default. Some system services allow a client by this identifier, e.g. macOS 27 StatusKit |
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
 | `build-flags` | string | No | `""` | Extra `swift build` arguments for the PR build only, split on whitespace. `-Xswiftc -Onone` skips optimisation (about a third less compile time) yet, unlike a debug build, still compiles code under `#if !DEBUG`; the PR `.pkg` is then unoptimised |
 | `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS Swift/package build stays on `macos-26` |

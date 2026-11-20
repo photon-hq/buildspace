@@ -21,6 +21,10 @@ inputs:
     description: "Path to an entitlements plist (relative to repo root). When set, the built binary is ad-hoc codesigned with these entitlements. Needed for daemons that require private entitlements (e.g. to connect to imagent)."
     required: false
     default: ""
+  signing-identifier:
+    description: "Code signing identifier for the ad-hoc signature (codesign -i). Used only with entitlements. Empty keeps codesign's default identifier. Some system services allow a client by its signing identifier (e.g. macOS 27 StatusKit)."
+    required: false
+    default: ""
   github-token:
     description: "Token with read access to private/internal SPM dependencies. When set, git is configured to use it for github.com clones (so SwiftPM can fetch private deps)."
     required: false
@@ -108,7 +112,11 @@ runs:
       env:
         BINARY: ${{ steps.build.outputs.binary-path }}
         ENTITLEMENTS: ${{ inputs.entitlements }}
-      run: codesign -s - --entitlements "$ENTITLEMENTS" -f "$BINARY"
+        SIGNING_IDENTIFIER: ${{ inputs.signing-identifier }}
+      run: |
+        args=(-s - --entitlements "$ENTITLEMENTS" -f)
+        if [ -n "$SIGNING_IDENTIFIER" ]; then args+=(-i "$SIGNING_IDENTIFIER"); fi
+        codesign "${args[@]}" "$BINARY"
     - name: Stage binary
       uses: $/.github/primitives/stage-file
       with:
