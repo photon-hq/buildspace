@@ -75,6 +75,13 @@ function world({ tags = {}, releases = {}, environment = ["octocat"], attested =
         const repo = repos[owner];
         if (!repo || (repo.private && !privileged)) throw missing();
         if (!rest) return JSON.stringify({ full_name: owner });
+        // The newest 30 releases as GitHub lists them: here, the first 30 declared.
+        if (rest === "/releases?per_page=30")
+          return JSON.stringify(
+            Object.entries(repo.releases)
+              .slice(0, 30)
+              .map(([tag_name, release], index) => ({ id: index + 1, tag_name, draft: Boolean(release.draft), prerelease: Boolean(release.prerelease), published_at: release.published ?? null, created_at: release.published ?? "2026-01-01T00:00:00Z" }))
+          );
         const named = /^\/(?:releases\/tags|git\/ref\/tags)\/(.+)$/.exec(rest)?.[1];
         const release = repo.releases[named];
         if (!release) throw missing();
@@ -433,6 +440,104 @@ test("a private dependency's releases are read with the dependency token", async
   const { pending, dependencies } = await resolveWith(fake, { dependencyRun: fake.dependencyRun });
   assert.equal(pending, true);
   assert.deepEqual(dependencies, [{ dependency: "photon-hq/IMAgentKit", version: "0.1.0" }]);
+});
+
+const PACKAGES = "Sources/MacrocosmPackages.swift";
+const packagesWith = (...lines) => `import Astrolabe
+
+struct MacrocosmPackages: Setup {
+    @SetupBuilder private var packages: some Setup {
+${lines.map((line) => `        ${line}`).join("\n")}
+    }
+}
+`;
+/** The owner's GitGate package repositories, with each release's publish time. */
+const INSTALLED = {
+  "photon-hq/prism": { releases: { "v2.3.0": { sha: sha("1"), published: "2026-01-10T00:00:00Z" }, "v2.4.0-staging.900.1": { sha: sha("2"), prerelease: true, published: "2026-01-12T00:00:00Z" } } },
+  "photon-hq/BlueStatus": { private: true, releases: { "v1.0.0": { sha: sha("3"), published: "2026-01-01T00:00:00Z" }, "v1.1.0": { sha: sha("4"), published: "2026-01-05T00:00:00Z" } } },
+  "photon-hq/Tailor": { releases: { "v1.2.0": { sha: sha("5"), published: "2026-01-05T00:00:00Z" }, "v1.1.1": { sha: sha("6"), published: "2026-01-08T00:00:00Z" } } },
+  "photon-hq/remotegate": { releases: { "v0.1.0-staging.43730153069.1": { sha: sha("7"), prerelease: true, published: "2026-01-11T00:00:00Z" } } },
+  "photon-hq/Drafted": { releases: { "v1.0.0": { sha: sha("8"), draft: true, published: "2026-01-11T00:00:00Z" } } },
+  "photon-hq/Unreleased": { releases: {} },
+};
+
+test("promotion lists the release production hosts install of every GitGate package the build declares", async () => {
+  const files = {
+    "Package.swift": MANIFEST_ONLY,
+    [PACKAGES]: packagesWith(
+      'Pkg(GitGate("photon-hq/prism", version: version, rollout: rollout))',
+      "    .priority(6)",
+      '// Pkg(GitGate("photon-hq/Unreleased", version: version, rollout: rollout))',
+      '/* Pkg(GitGate("photon-hq/Drafted", version: version)) */',
+      "if !isLatestProduction {",
+      '    Pkg(GitGate("photon-hq/BlueStatus", version: version, rollout: rollout))',
+      "}",
+      "Pkg(",
+      "    GitGate(",
+      '        "photon-hq/BlueStatus", version: version,',
+      '        installCheck: .binaryName("bluestatus"), rollout: rollout)',
+      ")",
+      'Pkg(GitGate("photon-hq/Tailor", version: version, installCheck: .binaryName("tailor"), rollout: rollout))',
+      "let url = URL(string: GitGate.baseURL)!"
+    ),
+  };
+  const { fake } = await staged({ world: { files, repos: INSTALLED } });
+  const { pending, packages } = await resolveWith(fake, { gitGatePackages: PACKAGES, dependencyRun: fake.dependencyRun });
+  assert.equal(pending, true);
+  // Each package once, at the newest published production release, whatever its tag.
+  assert.deepEqual(packages, [
+    { package: "photon-hq/prism", release: "v2.3.0" },
+    { package: "photon-hq/BlueStatus", release: "v1.1.0" },
+    { package: "photon-hq/Tailor", release: "v1.1.1" },
+  ]);
+  assert.deepEqual(contentReads(fake.calls), ["Package.resolved", "Package.swift", PACKAGES]);
+  assert.equal(fake.calls.filter((call) => call.some((arg) => String(arg).includes("BlueStatus"))).length, 1);
+  assert.ok(fake.calls.every((call) => !call.some((arg) => /Unreleased|Drafted/.test(String(arg)))));
+  fake.calls.length = 0;
+  assert.deepEqual((await resolveWith(fake)).packages, []);
+  assert.deepEqual(contentReads(fake.calls), ["Package.resolved", "Package.swift"]);
+});
+
+test("promotion refuses a build that declares a GitGate package production hosts cannot install", async (t) => {
+  const declared = packagesWith(
+    'Pkg(GitGate("photon-hq/prism", version: version, rollout: rollout))',
+    'Pkg(GitGate("photon-hq/remotegate", version: version, rollout: rollout))',
+    'Pkg(GitGate("photon-hq/Drafted", version: version, rollout: rollout))',
+    'Pkg(GitGate("photon-hq/Unreleased", version: version, rollout: rollout))',
+    'Pkg(GitGate("photon-hq/BlueStatus", version: version, rollout: rollout))',
+    "Pkg(GitGate(koyomi,",
+    "        version: version, rollout: rollout))",
+    'Pkg(GitGate("macrocosm-koyomi", version: version, rollout: rollout))'
+  );
+  const { fake } = await staged({ world: { files: { [PACKAGES]: declared }, repos: INSTALLED } });
+  const error = await resolveWith(fake, { gitGatePackages: PACKAGES }).catch((caught) => caught);
+  assert.match(error.message, /^v1\.27\.0-staging\.900\.1 cannot be promoted until every GitGate package it installs has a production release:\n/);
+  for (const finding of [
+    `- ${PACKAGES}: write the repository of GitGate(koyomi, version: version, rollout: rollout) as an owner/repository string literal so promotion can check it`,
+    `- ${PACKAGES}: write the repository of GitGate("macrocosm-koyomi", version: version, rollout: rollout) as an owner/repository string literal so promotion can check it`,
+    "- photon-hq/remotegate has no production release; promote it first",
+    "- photon-hq/Drafted has no production release; promote it first",
+    "- photon-hq/Unreleased has no production release; promote it first",
+    "- photon-hq/BlueStatus is not readable to check its releases; promote with private-deps",
+  ])
+    assert.ok(error.message.includes(finding), finding);
+  assert.equal(error.message.split("\n").length, 7);
+  assert.ok(!error.message.includes("prism"));
+  await t.test("a private package's releases are read with the dependency token", async () => {
+    const { fake } = await staged({ world: { files: { [PACKAGES]: packagesWith('Pkg(GitGate("photon-hq/BlueStatus", version: version, rollout: rollout))') }, repos: INSTALLED } });
+    await assert.rejects(resolveWith(fake, { gitGatePackages: PACKAGES }), /BlueStatus is not readable to check its releases; promote with private-deps/);
+    assert.deepEqual((await resolveWith(fake, { gitGatePackages: PACKAGES, dependencyRun: fake.dependencyRun })).packages, [{ package: "photon-hq/BlueStatus", release: "v1.1.0" }]);
+  });
+  await t.test("a production release buried under the 30 releases GitGate lists", async () => {
+    const buried = Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`v0.2.0-staging.${index}.1`, { sha: sha("9"), prerelease: true }]));
+    const repos = { "photon-hq/prism": { releases: { ...buried, "v0.1.0": { sha: sha("1") } } } };
+    const { fake } = await staged({ world: { files: { [PACKAGES]: packagesWith('Pkg(GitGate("photon-hq/prism", version: version, rollout: rollout))') }, repos } });
+    await assert.rejects(resolveWith(fake, { gitGatePackages: PACKAGES }), /photon-hq\/prism has no production release among its newest 30 releases, which are all GitGate lists; promote it first/);
+  });
+  await t.test("a commit without the declared source", async () => {
+    const { fake } = await staged({ world: { files: {} } });
+    await assert.rejects(resolveWith(fake, { gitGatePackages: PACKAGES }), new RegExp(`${SHA} has no ${PACKAGES} to read its GitGate packages from`));
+  });
 });
 
 test("a library, and a package without Package.resolved, are held to the requirements in Package.swift", async (t) => {

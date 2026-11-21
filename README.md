@@ -1048,7 +1048,8 @@ jobs:
       skip-minimum-age-reason: ${{ inputs.skip-minimum-age-reason }}
       minimum-staging-age: 2h # optional; 2h is the default
       jamf-url: ${{ vars.JAMF_URL }} # optional
-      private-deps: true # optional: a dependency is one of the owner's private repositories
+      gitgate-packages: Sources/MacrocosmPackages.swift # optional: the build installs GitGate packages, which must have production releases
+      private-deps: true # optional: a dependency or a GitGate package is one of the owner's private repositories
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
@@ -1062,8 +1063,10 @@ jobs:
   `APP_PRIVATE_KEY` secrets) work as in [Swift Release](#swift-release).
   `paths`, `ci-workflow`, `ci-wait-minutes`, `environment` (default `staging`)
   and `dry-run` work as in `package-stage`. The promote call names the same
-  `package-name` and `kind`, and sets `private-deps` (with the same
-  secrets) when a dependency is one of the owner's private repositories.
+  `package-name` and `kind`, sets `gitgate-packages` when the build
+  installs GitGate packages, and sets `private-deps` (with the same
+  secrets) when a dependency or a GitGate package is one of the owner's
+  private repositories.
   Callers that passed `library: true` pass `kind: library` to both
   `swift-stage` and `swift-promote`.
 - **Payloads.** `kind: payload` packages a `.pkg` with no
@@ -1096,6 +1099,20 @@ jobs:
   `private-deps`. The reviewer's summary lists each release it checked: the
   pinned version from `Package.resolved`, or the lowest version
   `Package.swift` requires, which SwiftPM may resolve higher.
+- **GitGate packages.** A package that installs other packages through
+  GitGate, as macrocosm-astrolabe does, names the Swift source that declares
+  them in `gitgate-packages` (`Sources/MacrocosmPackages.swift`). Production
+  hosts install the newest published, non-prerelease release of each, from
+  the 30 newest releases GitGate lists, so a package without one fails to
+  install on every production host until it is promoted. Promotion reads the
+  file at the source commit from GitHub, never running it, takes the
+  `owner/repo` literal each `GitGate(...)` opens with, comments dropped, and
+  refuses the build while any such repository has no production release
+  among its 30 newest, or opens with anything but an `owner/repo` literal.
+  A package the build declares under a condition counts whatever the
+  condition. Reading a private repository's releases takes `private-deps`.
+  The reviewer's summary lists the release each package resolves to, which
+  is what a production host installs when the build reaches it.
 - **Staging age.** Promotion waits until every change the build carries
   since the latest `vX.Y.Z` has been on staging for `minimum-staging-age`
   (default `2h`; minutes, hours or days such as `30m`, `2h`, `1d`). The time
@@ -1140,7 +1157,8 @@ jobs:
   the caller repository, `refs/heads/main` and the source commit), whose
   version is not newer than the latest `vX.Y.Z`, or that depends on the
   owner's repositories other than through production releases (see
-  **Dependencies**), or whose changes have not run on staging for their
+  **Dependencies**), or that declares a GitGate package without a production
+  release (see **GitGate packages**), or whose changes have not run on staging for their
   minimum age without a `skip-minimum-age-reason` (see **Staging age**), and
   it refuses unless the
   `production` environment requires a reviewer. A build already released as
