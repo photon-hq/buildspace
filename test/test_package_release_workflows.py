@@ -1,4 +1,6 @@
 """Check the package stage/promote workflows' trust boundaries and pack step."""
+import json
+from itertools import product
 import os
 from pathlib import Path
 import re
@@ -73,8 +75,8 @@ class WorkflowTests(unittest.TestCase):
 
     def test_staging_publication_requires_main_and_attests_before_publishing(self):
         publish = STAGE['jobs']['publish']
+        self.assertEqual(publish['needs'], ['version', 'build', 'verify-ci'])
         self.assertEqual(publish['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
-        self.assertEqual(publish['needs'], ['version', 'build'])
         names = [s.get('name') for s in publish['steps']]
         self.assertLess(names.index('Attest every packed file'), names.index('Publish the staging build and attach its candidates'))
         self.assertLess(names.index('Attest every packaged crate'), names.index('Publish the staging build and attach its candidates'))
@@ -188,6 +190,97 @@ class WorkflowTests(unittest.TestCase):
         upload = next(s for s in resolve['steps'] if 'upload-artifact' in s.get('uses', ''))
         self.assertEqual(upload['if'], "steps.resolve.outputs.pending == 'true'")
         self.assertEqual(PROMOTE['on']['workflow_call']['outputs']['pending']['value'], '${{ jobs.resolve.outputs.pending }}')
+
+
+class CiGateTests(unittest.TestCase):
+    def test_wait_step_requires_the_latest_matching_green_main_push(self):
+        sha = 'a' * 40
+        workflow = 'verify-contracts.yaml'
+        green = dict(id=5, path=f'.github/workflows/{workflow}', head_sha=sha,
+                     head_branch='main', event='push', status='completed', conclusion='success')
+        gate = step(STAGE['jobs']['verify-ci'], 'Require CI to pass on this exact commit')
+        with tempfile.TemporaryDirectory() as directory:
+            gh = Path(directory, 'gh')
+            gh.write_text('#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = api ] && [ "$2" = "$ENDPOINT" ] || exit 7\nprintf "%s" "$RESPONSE"\n')
+            gh.chmod(0o755)
+            env = dict(PATH=f"{directory}:{os.environ['PATH']}", HOME=directory, GITHUB_SHA=sha,
+                       GITHUB_REPOSITORY='example/package', RELEASE_TOOLS=str(Path('.github/package-release').resolve()),
+                       CI_WORKFLOW=workflow, CI_WAIT_MINUTES='0',
+                       ENDPOINT=f'repos/example/package/actions/workflows/{workflow}/runs?head_sha={sha}&event=push&branch=main&per_page=100')
+            for runs, error in (
+                ([green], None),
+                ([green, dict(green, id=6, conclusion='failure')], 'concluded failure'),
+                ([green, dict(green, id=6, conclusion='cancelled')], 'concluded cancelled'),
+                ([green, dict(green, id=6, status='queued', conclusion=None)], 'Timed out'),
+                ([], 'Timed out'),
+                ([dict(green, head_sha='b' * 40), dict(green, event='pull_request'),
+                  dict(green, head_branch='staging'), dict(green, path='.github/workflows/other.yml')], 'Timed out'),
+            ):
+                with self.subTest(runs=runs):
+                    response = json.dumps({'workflow_runs': runs})
+                    result = subprocess.run(['bash', '-euo', 'pipefail', '-c', gate['run']], cwd=directory,
+                                            env={**env, 'RESPONSE': response}, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 1 if error else 0, result.stderr)
+                    self.assertIn(error or f'{workflow} passed on {sha}', result.stderr if error else result.stdout)
+
+    def test_gate_fetch_uses_public_release_tools_and_only_reads_actions(self):
+        gate = STAGE['jobs']['verify-ci']
+        self.assertEqual(gate['needs'], 'version')
+        self.assertEqual(gate['permissions'], {'actions': 'read'})
+        self.assertNotIn('environment', gate)
+        fetch, wait = gate['steps']
+        version_fetch = STAGE['jobs']['version']['steps'][0]
+        self.assertEqual(fetch['env'], version_fetch['env'])
+        self.assertEqual(fetch['run'], version_fetch['run'])
+        self.assertEqual(fetch['if'], "inputs.ci-workflow != ''")
+        self.assertNotIn('GH_TOKEN', fetch['env'])
+        self.assertNotIn('env', gate)
+        self.assertNotIn('uses', fetch)
+        self.assertNotIn('uses', wait)
+        self.assertEqual(wait['env']['CI_WORKFLOW'], '${{ inputs.ci-workflow }}')
+        self.assertEqual(wait['env']['GH_TOKEN'], '${{ github.token }}')
+
+    def test_inline_and_external_verification_are_independent_publication_gates(self):
+        build = STAGE['jobs']['build']
+        gate = STAGE['jobs']['verify-ci']
+        publish = STAGE['jobs']['publish']
+        self.assertEqual(gate['if'], "github.ref == 'refs/heads/main' && !inputs.dry-run")
+        self.assertEqual(publish['if'], gate['if'])
+        self.assertEqual(set(publish['needs']), {'version', 'build', 'verify-ci'})
+        verify = step(build, 'Verify')
+        wait = step(gate, 'Require CI to pass on this exact commit')
+        self.assertNotIn('if', verify)
+        self.assertNotIn('if', wait)
+        for prerequisite in (build, gate, verify, wait):
+            self.assertNotIn('continue-on-error', prerequisite)
+        self.assertEqual(verify['env'], dict(VERIFY='${{ inputs.verify }}', CI_WORKFLOW='${{ inputs.ci-workflow }}',
+                                             DRY_RUN='${{ inputs.dry-run }}'))
+        def execute(script, env):
+            return subprocess.run(['bash', '-euo', 'pipefail', '-c', script], env=env,
+                                  capture_output=True, text=True, timeout=5)
+
+        with tempfile.TemporaryDirectory() as directory:
+            poll = Path(directory, 'node')
+            poll.write_text('#!/bin/sh\nexit "$POLL_EXIT"\n')
+            poll.chmod(0o755)
+            cases = product((False, True), ('', ' \t', 'ci.yml'), ('', ' \n', 'exit 0', 'exit 19'), (0, 23))
+            for dry, workflow, inline, external in cases:
+                with self.subTest(dry=dry, workflow=workflow, inline=inline, external=external):
+                    env = dict(PATH=f'{directory}:/usr/bin:/bin', VERIFY=inline, CI_WORKFLOW=workflow,
+                               DRY_RUN=str(dry).lower(), POLL_EXIT=str(external),
+                               RELEASE_TOOLS=directory, CI_WAIT_MINUTES='1')
+                    result = execute(verify['run'], env)
+                    missing = not dry and not workflow.strip() and not inline.strip()
+                    if missing:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('Set ci-workflow or verify', result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 19 if inline == 'exit 19' else 0)
+                    if not dry:
+                        result = execute(wait['run'], env)
+                        self.assertEqual(result.returncode, external if workflow.strip() else 0)
+                        if not workflow.strip():
+                            self.assertIn('inline verification', result.stdout)
 
 
 class PackStepTests(unittest.TestCase):

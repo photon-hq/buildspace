@@ -1,14 +1,34 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import semver from "semver";
 import {
-  exec, MANIFEST, notFound, NPMJS, readManifest, registryMetadata, releaseNames,
+  exec, logLayers, MANIFEST, notFound, NPMJS, readManifest, registryMetadata, releaseNames,
   SHA, verifyManifest,
 } from "./package-artifacts.mjs";
 import { bumpNotes } from "./release-version.mjs";
 
 const CHANNEL_TAG = { staging: "staging", production: "latest" };
+const execFileAsync = promisify(execFile);
+const MAX_PUBLISHERS = 5;
+
+async function npmPublish(args) {
+  const scratch = await mkdtemp(join(tmpdir(), "npm-publish-"));
+  try {
+    await execFileAsync("npm", args, {
+      cwd: scratch,
+      env: { ...process.env, TMPDIR: scratch, XDG_DATA_HOME: scratch, npm_config_cache: join(scratch, "cache") },
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch (error) {
+    const code = /^npm error code ([A-Z0-9_]+)$/m.exec(error.stderr)?.[1] ?? error.code ?? error.signal;
+    throw new Error(`npm publish failed (${code})`);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
 
 /** Fail while CI on the exact commit has failed; wait while it is pending. */
 export function ciStatus(response, { sha, workflow }) {
@@ -235,7 +255,9 @@ export async function publish({
   runAttempt,
   bump,
   run = exec,
+  runPublish = npmPublish,
   registry,
+  dryRun = false,
   log = console.log,
   availabilityTimeoutMs = 30 * 60_000,
   now = Date.now,
@@ -243,10 +265,10 @@ export async function publish({
 }) {
   const manifest = await readManifest(directory);
   const names = releaseNames({ repository, packageInput, packageSelection, tagPrefix, productionTagPrefix, registryUrl });
-  registry ??= registryMetadata(names.registryUrl);
+  if (!Object.hasOwn(CHANNEL_TAG, channel)) throw new Error(`Invalid release channel: ${channel}`);
   const target = `--registry=${names.registryUrl}`;
   const uploaded = channel === "staging" ? ["staging", "production"] : ["production"];
-  await verifyManifest(directory, manifest, {
+  const plans = await verifyManifest(directory, manifest, {
     repository,
     sourceSha,
     runId: channel === "staging" ? runId : undefined,
@@ -261,32 +283,47 @@ export async function publish({
   });
   const parking = `candidate-${runId}-${runAttempt}`;
   if (!/^candidate-\d+-\d+$/.test(parking)) throw new Error("Invalid run coordinates");
-  const parked = [];
-  for (const pkg of manifest.packages) {
-    const { version, file, integrity: expected } = pkg[channel];
-    const existing = (await registry(pkg.name)).versions[version];
+  const layers = plans[channel];
+  const tag = channel === "staging" ? manifest.stagingTag : manifest.productionTag;
+  logLayers(channel, layers, log);
+  if (dryRun) return { manifest, tag };
+  registry ??= registryMetadata(names.registryUrl);
+  const candidates = new Map(manifest.packages.map((pkg) => [pkg.name, pkg[channel]]));
+  const publishOne = async (name) => {
+    const { version, file, integrity: expected } = candidates.get(name);
+    const existing = (await registry(name)).versions[version];
     if (existing) {
       if (existing.dist?.integrity !== expected)
-        throw new Error(`${pkg.name}@${version} is already published with different contents`);
-      log(`${pkg.name}@${version} is already published with these contents`);
-      continue;
+        throw new Error(`${name}@${version} is already published with different contents`);
+      log(`${name}@${version} is already published with these contents`);
+      return;
     }
-    run("npm", [
+    log(`Publishing ${name}@${version} under ${parking}`);
+    await runPublish([
       "publish",
-      join(directory, file),
+      resolve(directory, file),
       "--tag",
       parking,
       "--ignore-scripts",
       ...(names.registryUrl === NPMJS ? ["--access", "public", "--provenance"] : []),
       target,
     ]);
-    parked.push(pkg.name);
-    const published = await publishedIntegrity({ registry, name: pkg.name, version, timeoutMs: availabilityTimeoutMs, now, sleep });
+    const published = await publishedIntegrity({ registry, name, version, timeoutMs: availabilityTimeoutMs, now, sleep });
     if (published !== expected)
-      throw new Error(`${pkg.name}@${version} was published with different contents; investigate before retrying`);
+      throw new Error(`${name}@${version} was published with different contents; investigate before retrying`);
+    log(`Verified ${name}@${version}`);
+  };
+  for (const layer of layers) {
+    for (let i = 0; i < layer.length; i += MAX_PUBLISHERS) {
+      const batch = layer.slice(i, i + MAX_PUBLISHERS);
+      const results = await Promise.allSettled(batch.map(publishOne));
+      const errors = results.flatMap((result, index) =>
+        result.status === "rejected" ? [`${batch[index]}: ${result.reason?.message ?? result.reason}`] : []
+      );
+      if (errors.length) throw new Error(`Package publication failed:\n${errors.join("\n")}`);
+    }
   }
   const released = manifest.packages.find(({ name }) => name === manifest.package)[channel].version;
-  const tag = channel === "staging" ? manifest.stagingTag : manifest.productionTag;
   let changes;
   if (channel === "production" && !manifest.bump) {
     const latest = (await registry(manifest.package))["dist-tags"].latest;
@@ -308,14 +345,22 @@ export async function publish({
     notes: releaseNotes(manifest, channel, changes),
   });
   const channelTag = CHANNEL_TAG[channel];
-  for (const pkg of manifest.packages) {
-    const { version } = pkg[channel];
-    const current = (await registry(pkg.name))["dist-tags"][channelTag];
+  const parked = [];
+  const ownParkingTag = new RegExp(`^candidate-${runId}-(\\d+)$`);
+  for (const name of layers.flat()) {
+    const { version } = candidates.get(name);
+    const tags = (await registry(name))["dist-tags"];
+    const current = tags[channelTag];
     if (!current || semver.gt(version, current))
-      run("npm", ["dist-tag", "add", `${pkg.name}@${version}`, channelTag, target]);
-    else log(`Kept ${pkg.name}@${channelTag} on ${current}, which is not older than ${version}`);
+      run("npm", ["dist-tag", "add", `${name}@${version}`, channelTag, target]);
+    else log(`Kept ${name}@${channelTag} on ${current}, which is not older than ${version}`);
+    for (const [candidate, parkedVersion] of Object.entries(tags)) {
+      const attempt = ownParkingTag.exec(candidate)?.[1];
+      if (parkedVersion === version && attempt && Number(attempt) <= Number(runAttempt))
+        parked.push([name, candidate]);
+    }
   }
-  for (const name of parked)
-    run("npm", ["dist-tag", "rm", name, parking, target]);
+  for (const [name, candidate] of parked)
+    run("npm", ["dist-tag", "rm", name, candidate, target]);
   return { manifest, tag };
 }

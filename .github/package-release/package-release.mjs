@@ -67,6 +67,7 @@ async function main() {
       "crate-directory": { type: "string" },
       crates: { type: "string" },
       directory: { type: "string" },
+      "dry-run": { type: "boolean", default: false },
       "approved-by": { type: "string", default: "" },
       bump: { type: "string" },
       environment: { type: "string" },
@@ -130,6 +131,7 @@ async function main() {
         registryUrl: values.registry,
         output: resolve(values.output),
         runUrl,
+        log: console.log,
       });
       const warnings = [];
       const lookup = cached(registryMetadata(manifest.registry));
@@ -165,6 +167,7 @@ async function main() {
       const { tag } = await publish({
         directory: resolve(values.directory),
         channel: values.channel,
+        dryRun: values["dry-run"],
         repository,
         sourceSha: values.channel === "staging" ? env.GITHUB_SHA : undefined,
         packageInput: values.package,
@@ -177,7 +180,7 @@ async function main() {
         runAttempt: env.GITHUB_RUN_ATTEMPT,
         bump: values.bump && JSON.parse(values.bump),
       });
-      await summarize(`Published ${values.channel} release [\`${tag}\`](${env.GITHUB_SERVER_URL}/${repository}/releases/tag/${tag}).`);
+      await summarize(values["dry-run"] ? `Verified the local ${values.channel} publish plan; nothing published.` : `Published ${values.channel} release [\`${tag}\`](${env.GITHUB_SERVER_URL}/${repository}/releases/tag/${tag}).`);
       return;
     }
     case "resolve": {

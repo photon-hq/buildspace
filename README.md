@@ -398,8 +398,19 @@ source commit, and moves `latest`.
   continues to select Bun in its place.
 - **Several packages** from one repository are staged and promoted together, all
   at the build's version, so dependencies between them pin `$RELEASE_VERSION`.
-  They are published in dependency order, and the build is named after
-  `package` (default `@<owner>/<repository>`), which must be one of them.
+  The publisher reads dependencies, optional dependencies and peer dependencies
+  from each channel's verified tarballs. It publishes independent packages
+  up to five at a time under temporary candidate tags. Five splits Spectrum's
+  observed ten-adapter layer into two batches rather than ten simultaneous
+  writes; it is a rollout limit, not an npm quota. Dependents wait until the registry
+  serves the expected integrity for all their prerequisites. A failed package
+  drains its in-flight batch and stops later batches and layers. This includes
+  a final npm publish error such as `E429` or an HTTP 429 reading package
+  metadata. No GitHub release or channel tag advances until every package is
+  verified. Once the limit clears, rerun the failed publish job with the same
+  artifact: it verifies versions already accepted and publishes the missing
+  ones. A mismatched integrity blocks the retry. The build is named after `package` (default
+  `@<owner>/<repository>`), which must be one of them.
   `tag-prefix` overrides the staging tag prefix.
 - **Packages of one repository released separately** each get their own call
   to the stage workflow, in one run, with their own `package`, `tag-prefix`,
@@ -555,10 +566,15 @@ source commit, and moves `latest`.
   release missing assets. Anything else stops before writing. Channel tags never
   move to an older version; a temporary `candidate-<run>-<attempt>` dist-tag is
   left only by a failed run.
-- `ci-workflow` waits up to `ci-wait-minutes` (default 20) for that workflow's
-  push run on the exact commit to succeed. `dry-run: true` verifies and packs
-  without publishing and is the only mode allowed outside `main`, so a pull
-  request branch can dispatch it.
+- **Exact-commit verification.** Set `ci-workflow`, inline `verify`, or both
+  for a real publication. After version selection, the read-only build runs
+  inline verification on the source SHA; a separate job waits only when a
+  workflow is named, up to `ci-wait-minutes` (default 20) for its main push on
+  that SHA. Without a workflow, this job reports that the build is responsible
+  and does not poll. The publisher needs both jobs to succeed. Neither a
+  missing gate nor a failed, skipped, or cancelled prerequisite can publish.
+  `dry-run: true` verifies and packs without publishing and is the only mode
+  allowed outside `main`.
 - **Checking a pull request.** Run the stage call as a dry run on
   `pull_request` to find on the pull request what staging would refuse after
   it merges. The run builds the merge commit GitHub tests, and the version job

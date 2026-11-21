@@ -23,7 +23,7 @@ on:
         default: ''
         type: string
       ci-workflow:
-        description: Workflow file (for example ci.yml) whose push run on this exact commit must succeed first
+        description: Optional main push workflow (for example ci.yml) that must pass on this exact commit; a real publish needs this or inline verify
         default: ''
         type: string
       ci-wait-minutes:
@@ -108,11 +108,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Fetch the release tools of this workflow's commit
-        env:
+      - &fetch-release-tools
+        name: Fetch the release tools of this workflow's commit
+        env: &release-tools-revision
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
+        run: &fetch-release-tools-script |
           set -euo pipefail
           [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
           git init -q "$RUNNER_TEMP/buildspace"
@@ -132,7 +133,31 @@ jobs:
           PATHS: ${{ inputs.paths }}
         run: node "$RELEASE_TOOLS/package-release.mjs" version --production-tag-prefix "$PRODUCTION_TAG_PREFIX" --paths "$PATHS"
 
-  # Runs the caller's code. It can read packages but write nothing.
+  verify-ci:
+    needs: version
+    if: github.ref == 'refs/heads/main' && !inputs.dry-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+    steps:
+      - name: Fetch release tools for the exact-commit check
+        if: inputs.ci-workflow != ''
+        env: *release-tools-revision
+        run: *fetch-release-tools-script
+      - name: Require CI to pass on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
+        run: |
+          if [[ -z "${CI_WORKFLOW//[[:space:]]/}" ]]; then
+            echo "No external CI workflow; the build must pass its inline verification."
+            exit 0
+          fi
+          node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
+
+  # Runs the caller's code with read-only permissions. Its artifact is not a release.
   build:
     needs: version
     if: github.ref == 'refs/heads/main' || inputs.dry-run
@@ -149,29 +174,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       NODE_AUTH_TOKEN: ${{ github.token }}
     steps:
-      - name: Fetch the release tools of this workflow's commit
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
-          git init -q "$RUNNER_TEMP/buildspace"
-          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
-          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
-          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
-          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - *fetch-release-tools
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require CI to pass on this exact commit
-        if: inputs.ci-workflow != '' && !inputs.dry-run
-        env:
-          CI_WORKFLOW: ${{ inputs.ci-workflow }}
-          CI_WAIT_MINUTES: ${{ inputs.ci-wait-minutes }}
-        run: node "$RELEASE_TOOLS/package-release.mjs" wait-ci --workflow "$CI_WORKFLOW" --timeout-minutes "$CI_WAIT_MINUTES"
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         if: inputs.setup-pnpm && inputs.bun-version == ''
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -191,10 +199,17 @@ jobs:
           INSTALL_TOKEN: ${{ secrets.INSTALL_TOKEN }}
         run: bash -euo pipefail -c "$INSTALL"
       - name: Verify
-        if: inputs.verify != ''
         env:
           VERIFY: ${{ inputs.verify }}
-        run: bash -euo pipefail -c "$VERIFY"
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [[ -n "${VERIFY//[[:space:]]/}" ]]; then
+            bash -euo pipefail -c "$VERIFY"
+          elif [[ "$DRY_RUN" != true && -z "${CI_WORKFLOW//[[:space:]]/}" ]]; then
+            echo "::error::Set ci-workflow or verify for a real package release." >&2
+            exit 1
+          fi
       # Cargo records the commit in each .crate and refuses uncommitted changes.
       - name: Package the Rust crates
         if: inputs.crates != ''
@@ -256,7 +271,7 @@ jobs:
 
   # Never runs the caller's code: it attests and publishes the build job's files.
   publish:
-    needs: [version, build]
+    needs: [version, build, verify-ci]
     if: github.ref == 'refs/heads/main' && !inputs.dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -273,18 +288,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       NODE_AUTH_TOKEN: ${{ github.token }}
     steps:
-      - name: Fetch the release tools of this workflow's commit
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
-          git init -q "$RUNNER_TEMP/buildspace"
-          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
-          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
-          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/package-release" --ignore-scripts --no-audit --no-fund
-          echo "RELEASE_TOOLS=$RUNNER_TEMP/buildspace/.github/package-release" >> "$GITHUB_ENV"
+      - *fetch-release-tools
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24

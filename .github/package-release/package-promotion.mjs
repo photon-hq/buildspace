@@ -4,7 +4,7 @@ import { join, posix } from "node:path";
 import semver from "semver";
 import { parse as parseToml } from "smol-toml";
 import {
-  cached, DEPENDENCY_FIELDS, exec, MANIFEST, matchesPackage, notFound, readCrate,
+  cached, DEPENDENCY_FIELDS, dependencyTarget, exec, MANIFEST, matchesPackage, notFound, readCrate,
   readManifest, readTarballManifest, registryMetadata, releaseNames, sha256,
   STABLE, verifyManifest,
 } from "./package-artifacts.mjs";
@@ -21,7 +21,8 @@ export async function dependencyFindings(candidates, selection, registry) {
   const findings = [];
   for (const { name, manifest } of candidates) {
     for (const field of DEPENDENCY_FIELDS)
-      for (const [dependency, spec] of Object.entries(manifest[field] ?? {})) {
+      for (const [nameInManifest, requirement] of Object.entries(manifest[field] ?? {})) {
+        const [dependency, spec] = dependencyTarget(nameInManifest, requirement);
         if (!matchesPackage(dependency, selection)) continue;
         if (!STABLE.test(spec)) {
           findings.push(`${name} ${field}: ${dependency}@${spec} is not an exact stable version`);
@@ -36,7 +37,8 @@ export async function dependencyFindings(candidates, selection, registry) {
         if (!release) findings.push(`${name} ${field}: ${dependency}@${spec} is not published`);
         else if (release.deprecated) findings.push(`${name} ${field}: ${dependency}@${spec} is deprecated`);
       }
-    for (const [dependency, range] of Object.entries(manifest.peerDependencies ?? {})) {
+    for (const [nameInManifest, requirement] of Object.entries(manifest.peerDependencies ?? {})) {
+      const [dependency, range] = dependencyTarget(nameInManifest, requirement);
       if (!matchesPackage(dependency, selection)) continue;
       if (!semver.validRange(range)) {
         findings.push(`${name} peerDependencies: ${dependency}@${range} is not a version range`);

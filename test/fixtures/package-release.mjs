@@ -71,9 +71,9 @@ const collectBoth = (overrides = {}) =>
     ...overrides,
   });
 
-function world({ published = {}, tags = {}, releases = {}, latest = {}, staging = {}, environment = ["octocat"], attested = true, contents = {}, history = [], runs = [] } = {}) {
+function world({ published = {}, tags = {}, releases = {}, latest = {}, staging = {}, parking = {}, environment = ["octocat"], attested = true, contents = {}, history = [], runs = [] } = {}) {
   const calls = [];
-  const state = { published, tags, releases };
+  const state = { published, tags, releases, parking };
   const http404 = (message = "gh: Not Found (HTTP 404)") => Object.assign(new Error(message), { stderr: message });
   const run = (command, args) => {
     calls.push([command, ...args]);
@@ -82,12 +82,14 @@ function world({ published = {}, tags = {}, releases = {}, latest = {}, staging 
       const file = args[1];
       const { name, version } = JSON.parse(execFileSync("tar", ["-xOzf", file, "package/package.json"], { encoding: "utf8" }));
       state.published[`${name}@${version}`] = `sha512-${createHash("sha512").update(readFileSync(file)).digest("base64")}`;
+      (parking[name] ??= {})[args[args.indexOf("--tag") + 1]] = version;
       return "";
     }
     if (command === "npm" && first === "view") return JSON.stringify(state.published[second]);
     if (command === "npm" && first === "dist-tag") {
       const channel = { latest, staging }[args[3]];
       if (second === "add" && channel) channel[args[2].slice(0, args[2].lastIndexOf("@"))] = args[2].slice(args[2].lastIndexOf("@") + 1);
+      if (second === "rm") delete parking[args[2]][args[3]];
       return "";
     }
     if (command === "gh" && first === "api") {
@@ -168,7 +170,7 @@ function world({ published = {}, tags = {}, releases = {}, latest = {}, staging 
       const at = key.lastIndexOf("@");
       if (key.slice(0, at) === name) versions[key.slice(at + 1)] = { dist: { integrity: value } };
     }
-    const tags = {};
+    const tags = { ...parking[name] };
     if (latest[name]) tags.latest = latest[name];
     if (staging[name]) tags.staging = staging[name];
     return { versions, "dist-tags": tags };
@@ -189,6 +191,7 @@ const publishWith = (fake, overrides = {}) =>
     runAttempt: "1",
     ...(overrides.channel !== "production" && { bump: BUMP }),
     run: fake.run,
+    runPublish: (args) => fake.run("npm", args),
     registry: fake.registry,
     log: () => {},
     ...overrides,
