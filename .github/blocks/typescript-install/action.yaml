@@ -1,0 +1,37 @@
+name: 'TypeScript Install'
+description: 'Configure Node and pnpm in the caller checkout and install its frozen lockfile'
+
+inputs:
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '24'
+  buf-token:
+    description: 'Optional buf.build read token; used only by install'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Set up pnpm
+      uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+    - name: Set up Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+        cache-dependency-path: pnpm-lock.yaml
+        registry-url: https://npm.pkg.github.com
+        scope: '@${{ github.repository_owner }}'
+    - name: Install dependencies
+      shell: bash
+      env:
+        BUF_TOKEN: ${{ inputs.buf-token }}
+        NODE_AUTH_TOKEN: ${{ github.token }}
+      run: |
+        args=(--frozen-lockfile)
+        if [[ -n "$BUF_TOKEN" ]]; then
+          args+=("--config.//buf.build/gen/npm/v1/:_authToken=$BUF_TOKEN")
+        fi
+        pnpm install "${args[@]}"

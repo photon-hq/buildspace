@@ -39,6 +39,7 @@ BuildSpace gives you three layers of CI/CD automation:
   - [Blocks (Composite Actions)](#blocks-composite-actions)
   - [check-pr-label](#check-pr-label)
   - [check-readme](#check-readme-1)
+  - [validate-image-source](#validate-image-source)
   - [generate-release-info](#generate-release-info)
   - [determine-publish-version](#determine-publish-version)
   - [create-github-release](#create-github-release)
@@ -48,6 +49,7 @@ BuildSpace gives you three layers of CI/CD automation:
   - [publish-github-packages](#publish-github-packages)
   - [publish-npm-packages](#publish-npm-packages)
   - [rust-build](#rust-build)
+  - [typescript-install](#typescript-install)
   - [typescript-build](#typescript-build)
   - [sync-crates-version](#sync-crates-version)
   - [update-tap](#update-tap)
@@ -1543,6 +1545,57 @@ first-release base is Git's empty tree. Missing tags fail. The diff is capped at
     release-notes: ${{ github.event.release.body }}
 ```
 
+### validate-image-source
+
+**Path:** `.github/blocks/validate-image-source/action.yaml`
+
+Validates the source identity for a service image and emits one immutable
+`tag`. On a `main` push it takes the event SHA directly and does not check out
+the repository or query a release. On a `hotfix/<namespace>/<baseline>` push it
+checks out the complete history at the event SHA, requires the matching stable
+release, proves that the release tag identifies the baseline commit, and proves
+that the event commit descends from that baseline. Any malformed namespace,
+branch, release, tag, or ancestry check fails closed.
+
+This block owns release eligibility, while `publish-image.yml` owns image
+building, digest tagging, and provenance. The publisher validates the supplied
+tag and source ref; it does not decide whether a hotfix baseline is a stable
+release or whether the source is descended from it. Keep this block before
+both CI and publishing when a caller's image policy requires that guard.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `namespace` | string | Yes | — | Lowercase service namespace used in the hotfix branch and release name |
+
+#### Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| `tag` | string | `main-<event-sha>` or `hotfix-<baseline>-<event-sha>` |
+
+#### Usage
+
+```yaml
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - id: identity
+        uses: photon-hq/buildspace/.github/blocks/validate-image-source@<reviewed-commit-sha>
+        with:
+          namespace: account
+```
+
+The caller's job should grant only `contents: read` and pass the resulting
+output to the publisher. The block does not publish, deploy, dispatch, mutate
+settings, or retain checkout credentials.
+
+---
+
 ### check-pr-label
 
 **Path:** `.github/blocks/check-pr-label/action.yaml`
@@ -1983,6 +2036,50 @@ Builds a TypeScript project using Bun.
 
 ---
 
+### typescript-install
+
+**Path:** `.github/blocks/typescript-install/action.yaml`
+
+Run this block **after checkout**; the caller selects the source ref, history
+depth and Git credentials. The block reads pnpm's version from the root
+`packageManager` field, configures Node and the pnpm store cache, then runs
+`pnpm install --frozen-lockfile` even on a cache hit.
+
+The GitHub Packages scope follows the caller's repository owner. Grant
+`packages: read` when the lockfile needs private GitHub packages. If it also
+needs private packages from buf.build, pass `buf-token`; otherwise omit the
+input for a plain frozen install. Only the install step receives registry
+credentials. The block has no outputs and runs no build or release command.
+
+#### Inputs
+
+| Input | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `node-version` | string | No | `24` | Node.js version |
+| `buf-token` | secret | No | `""` | buf.build read token, used only by install |
+
+#### Usage
+
+```yaml
+permissions:
+  contents: read
+  packages: read
+
+steps:
+  - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+    with:
+      persist-credentials: false
+  - uses: photon-hq/buildspace/.github/blocks/typescript-install@<reviewed-commit-sha>
+    with:
+      buf-token: ${{ secrets.BUF_TOKEN }}
+```
+
+The root `packageManager` field remains the source of truth for pnpm. A caller
+with more than one lockfile or a non-pnpm install should keep its existing
+setup rather than forcing this block into a different repository shape.
+
+---
+
 ### sync-crates-version
 
 **Path:** `.github/blocks/sync-crates-version/action.yaml`
@@ -2324,7 +2421,9 @@ buildspace/
 │   │   ├── swift-pkg/                 # macOS .pkg creation
 │   │   ├── swift-stage-package/       # One swift-stage channel's .pkg
 │   │   ├── sync-crates-version/       # Workspace version sync
+│   │   ├── typescript-install/        # Node/pnpm setup and frozen install
 │   │   ├── typescript-build/          # TypeScript builds
+│   │   ├── validate-image-source/     # Main/hotfix source identity policy
 │   │   ├── update-docs/               # AI docs update via Claude Code
 │   │   └── update-skills/             # AI skills update via Claude Code
 │   │

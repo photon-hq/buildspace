@@ -1,0 +1,58 @@
+name: 'Validate Image Source'
+description: 'Validate an immutable main or hotfix image source and emit its tag'
+
+inputs:
+  namespace:
+    description: 'Lowercase service namespace used in the hotfix branch and release name'
+    required: true
+
+outputs:
+  tag:
+    description: 'Immutable image tag for this source commit'
+    value: ${{ steps.identity.outputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check out hotfix history
+      if: github.ref != 'refs/heads/main'
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Validate source and select immutable build identity
+      id: identity
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NAMESPACE: ${{ inputs.namespace }}
+      run: |
+        set -euo pipefail
+        [[ "$NAMESPACE" =~ ^[a-z0-9]+([a-z0-9-]*[a-z0-9])?$ ]] || {
+          echo "::error::namespace must contain only lowercase letters, digits, and internal hyphens" >&2
+          exit 1
+        }
+        if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+          echo "tag=main-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        [[ "$GITHUB_REF" =~ ^refs/heads/hotfix/$NAMESPACE/([a-f0-9]{40})$ ]] || {
+          echo "::error::hotfix ref must be hotfix/$NAMESPACE/<40 lowercase hex baseline>" >&2
+          exit 1
+        }
+        baseline="${BASH_REMATCH[1]}"
+        release="$NAMESPACE-$baseline"
+        gh release view "$release" --json isDraft,isPrerelease | jq -e '.isDraft == false and .isPrerelease == false' >/dev/null || {
+          echo "::error::stable release $release is required" >&2
+          exit 1
+        }
+        [[ "$(git rev-parse "refs/tags/$release^{commit}")" == "$baseline" ]] || {
+          echo "::error::stable release $release does not identify the hotfix baseline" >&2
+          exit 1
+        }
+        git merge-base --is-ancestor "$baseline" "$GITHUB_SHA" || {
+          echo "::error::hotfix commit is not descended from the stable baseline" >&2
+          exit 1
+        }
+        echo "tag=hotfix-$baseline-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
