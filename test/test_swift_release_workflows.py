@@ -150,6 +150,17 @@ class WorkflowTests(unittest.TestCase):
             if name != 'resolve':
                 self.assertNotIn('required-releases', yaml.dump(job), name)
 
+    def test_the_required_releases_input_reaches_the_resolve_command(self):
+        resolving = step(PROMOTE['jobs']['resolve'], 'Resolve and verify the candidate')
+        inputs = {'inputs.required-releases': '.github/required-releases.txt'}
+        expand = lambda text: re.sub(r'\$\{\{ ([\w.-]+) \}\}', lambda match: inputs.get(match[1], ''), text)
+        with tempfile.TemporaryDirectory() as directory:
+            executable(Path(directory) / 'node', 'printf "%s\\n" "$@" > "$RUNNER_TEMP/node-args"\n')
+            env = {**os.environ, **{name: expand(value) for name, value in resolving['env'].items()}, 'PATH': f'{directory}:{os.environ["PATH"]}', 'RUNNER_TEMP': directory}
+            result = subprocess.run(['bash', '-eo', 'pipefail', '-c', resolving['run']], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('--required-releases=.github/required-releases.txt', (Path(directory) / 'node-args').read_text().splitlines())
+
     def test_jamf_receives_only_the_released_package_of_an_approved_promotion(self):
         jamf = PROMOTE['jobs']['jamf-upload']
         self.assertEqual(jamf['needs'], ['resolve', 'publish'])
