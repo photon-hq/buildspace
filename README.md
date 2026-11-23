@@ -1108,12 +1108,12 @@ jobs:
   repository's releases takes `private-deps`. Findings from SwiftPM and from
   the list are reported together in one failure.
 - **Summary.** The reviewer's summary lists, in one table with the file that
-  requires each, the release every dependency resolved to: the pinned
-  version from `Package.resolved`, the lowest version `Package.swift`
-  requires, or a required repository's latest release. It records the
-  releases available when promotion resolved; SwiftPM may resolve a
-  `Package.swift` requirement higher, and a release published later can
-  change what a host that installs the latest release selects.
+  requires each, the release every dependency resolved to: the release tag
+  of the version `Package.resolved` pins or of the lowest version
+  `Package.swift` requires, or a required repository's latest release. It
+  records the releases available when promotion resolved; SwiftPM may
+  resolve a `Package.swift` requirement higher, and a release published
+  later can change what a host that installs the latest release selects.
 - **Staging age.** Promotion waits until every change the build carries
   since the latest `vX.Y.Z` has been on staging for `minimum-staging-age`
   (default `2h`; minutes, hours or days such as `30m`, `2h`, `1d`). The time

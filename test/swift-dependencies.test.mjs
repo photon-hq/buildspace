@@ -39,8 +39,8 @@ test("promotion lists the production releases a package's Package.resolved pins"
   const { pending, dependencies } = await resolveWith(fake);
   assert.equal(pending, true);
   assert.deepEqual(dependencies, [
-    { repository: "photon-hq/SignozSwift", release: "v0.4.2", source: "Package.resolved" },
-    { repository: "photon-hq/opentelemetry-swift", release: "3.0.0", source: "Package.resolved" },
+    { repository: "photon-hq/SignozSwift", release: "v0.4.2", requiredBy: "Package.resolved" },
+    { repository: "photon-hq/opentelemetry-swift", release: "3.0.0", requiredBy: "Package.resolved" },
   ]);
   assert.deepEqual(contentReads(fake.calls), ["Package.resolved"]);
   assert.ok(fake.calls.every((call) => !call.some((arg) => String(arg).includes("swift-argument-parser"))));
@@ -80,7 +80,7 @@ test("a private dependency's releases are read with the dependency token", async
   await assert.rejects(resolveWith(fake), /IMAgentKit is not readable to check its releases; promote with private-deps/);
   const { pending, dependencies } = await resolveWith(fake, { dependencyRun: fake.dependencyRun });
   assert.equal(pending, true);
-  assert.deepEqual(dependencies, [{ repository: "photon-hq/IMAgentKit", release: "v0.1.0", source: "Package.resolved" }]);
+  assert.deepEqual(dependencies, [{ repository: "photon-hq/IMAgentKit", release: "v0.1.0", requiredBy: "Package.resolved" }]);
 });
 
 test("a library, and a package without Package.resolved, are held to the requirements in Package.swift", async (t) => {
@@ -92,8 +92,8 @@ test("a library, and a package without Package.resolved, are held to the require
     '.package(path: "../Local")'
   );
   const expected = [
-    { repository: "photon-hq/SignozSwift", release: "v0.4.2", source: "Package.swift" },
-    { repository: "photon-hq/opentelemetry-swift", release: "3.0.0", source: "Package.swift" },
+    { repository: "photon-hq/SignozSwift", release: "v0.4.2", requiredBy: "Package.swift" },
+    { repository: "photon-hq/opentelemetry-swift", release: "3.0.0", requiredBy: "Package.swift" },
   ];
   await t.test("a library ignores its Package.resolved", async () => {
     const library = { library: true };
@@ -154,9 +154,9 @@ test("promotion lists each required repository's latest release beside the Swift
   const { fake } = await staged({ world: { files, repos: { ...RELEASED, ...REQUIRED } } });
   const { dependencies } = await resolveWith(fake, { requiredReleases: LIST });
   assert.deepEqual(dependencies, [
-    { repository: "photon-hq/SignozSwift", release: "v0.4.2", source: "Package.resolved" },
-    { repository: "photon-hq/remotegate", release: "v0.1.0", source: LIST },
-    { repository: "photon-hq/prism", release: "v2.0.3-rc.23", source: LIST },
+    { repository: "photon-hq/SignozSwift", release: "v0.4.2", requiredBy: "Package.resolved" },
+    { repository: "photon-hq/remotegate", release: "v0.1.0", requiredBy: LIST },
+    { repository: "photon-hq/prism", release: "v2.0.3-rc.23", requiredBy: LIST },
   ]);
 });
 
@@ -184,7 +184,7 @@ test("a private required repository's releases are read with the dependency toke
   const { fake } = await staged({ world: { files, repos: REQUIRED } });
   await assert.rejects(resolveWith(fake, { requiredReleases: LIST }), /photon-hq\/agent is not readable to check its releases; promote with private-deps/);
   const { dependencies } = await resolveWith(fake, { requiredReleases: LIST, dependencyRun: fake.dependencyRun });
-  assert.deepEqual(dependencies, [{ repository: "photon-hq/agent", release: "v0.3.0", source: LIST }]);
+  assert.deepEqual(dependencies, [{ repository: "photon-hq/agent", release: "v0.3.0", requiredBy: LIST }]);
 });
 
 test("a build is refused when its list of required releases is missing or names no repository", async (t) => {

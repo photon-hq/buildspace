@@ -131,10 +131,10 @@ function swiftPackageFindings({ repository, sourceSha, library, run, dependencyR
   const stable = (version) => VERSION.test(version) && !semver.prerelease(version);
   const findings = [];
   const dependencies = [];
-  const check = (source, subject, dependency, version, revision) => {
+  const check = (requiredBy, subject, dependency, version, revision) => {
     const { release, problem } = versionRelease(dependencyRun, dependency, version, revision);
     if (problem) findings.push(`${subject}: ${problem}`);
-    else dependencies.push({ repository: dependency, release, source });
+    else dependencies.push({ repository: dependency, release, requiredBy });
   };
   const resolved = library ? undefined : sourceFile(run, repository, sourceSha, "Package.resolved");
   if (resolved !== undefined) {
@@ -197,7 +197,7 @@ function requiredReleaseFindings({ repository, sourceSha, path, run, dependencyR
     }
     const { release, problem } = latestRelease(dependencyRun, required, asset);
     if (problem) findings.push(`${path} requires ${required}: ${problem}`);
-    else dependencies.push({ repository: required, release, source: path });
+    else dependencies.push({ repository: required, release, requiredBy: path });
   }
   if (!entries) findings.push(`${path} names no repository; list the repositories the build requires, or stop setting required-releases`);
   return { dependencies, findings };

@@ -570,7 +570,7 @@ async function main() {
             "",
             "| Repository | Release | Required by |",
             "| --- | --- | --- |",
-            ...dependencies.map(({ repository: name, release, source }) => `| ${name} | \`${release}\` | ${source} |`),
+            ...dependencies.map(({ repository: name, release, requiredBy }) => `| ${name} | \`${release}\` | ${requiredBy} |`),
             "",
           ]
         : [];
