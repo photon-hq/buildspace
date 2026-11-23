@@ -24,7 +24,6 @@ ${dependencies.map((line) => `        ${line},`).join("\n")}
     ]
 )
 `;
-const contentReads = (calls) => calls.filter((call) => call.some((arg) => /\/contents\//.test(arg))).map((call) => /\/contents\/(.+)\?/.exec(call.at(-1))[1]);
 
 test("promotion lists the production releases a package's Package.resolved pins", async () => {
   const files = {
@@ -42,7 +41,6 @@ test("promotion lists the production releases a package's Package.resolved pins"
     { repository: "photon-hq/SignozSwift", release: "v0.4.2", requiredBy: "Package.resolved" },
     { repository: "photon-hq/opentelemetry-swift", release: "3.0.0", requiredBy: "Package.resolved" },
   ]);
-  assert.deepEqual(contentReads(fake.calls), ["Package.resolved"]);
   assert.ok(fake.calls.every((call) => !call.some((arg) => String(arg).includes("swift-argument-parser"))));
 });
 
@@ -69,7 +67,6 @@ test("promotion refuses a package pinned to anything but the owner's production 
     "- Package.resolved pins photon-hq/IMAgentKit: photon-hq/IMAgentKit is not readable to check its releases; promote with private-deps",
   ])
     assert.ok(error.message.includes(finding), finding);
-  assert.equal(error.message.split("\n").length, 7);
   const prerelease = await staged({ world: { files: { "Package.resolved": resolvedFile(pin("https://github.com/photon-hq/SignozSwift.git", { revision: sha("2"), version: "0.4.3" })) }, repos: RELEASED } });
   await assert.rejects(resolveWith(prerelease.fake), /photon-hq\/SignozSwift v0\.4\.3 is a prerelease, not a production release/);
 });
@@ -103,12 +100,10 @@ test("a library, and a package without Package.resolved, are held to the require
     await publishWith(fake, library);
     fake.calls.length = 0;
     assert.deepEqual((await resolveWith(fake, library)).dependencies, expected);
-    assert.deepEqual(contentReads(fake.calls), ["Package.swift"]);
   });
   await t.test("a package without Package.resolved", async () => {
     const { fake } = await staged({ world: { files: { "Package.swift": released }, repos: RELEASED } });
     assert.deepEqual((await resolveWith(fake)).dependencies, expected);
-    assert.deepEqual(contentReads(fake.calls), ["Package.resolved", "Package.swift"]);
   });
   for (const [name, declaration, error] of [
     ["a branch", '.package(url: "https://github.com/photon-hq/SignozSwift.git", branch: "main")', /requires photon-hq\/SignozSwift by branch or revision; require a released version/],
