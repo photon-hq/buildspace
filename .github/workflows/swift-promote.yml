@@ -27,8 +27,12 @@ on:
         description: Environment whose required reviewers approve the promotion
         default: production
         type: string
+      required-releases:
+        description: Path, at the source commit, of a list of owner/repo, one per line, optionally followed by an asset pattern such as *.pkg; the latest release of each must be published, not a draft or prerelease, and match the pattern before the build is promoted
+        default: ''
+        type: string
       private-deps:
-        description: Mint an APP_ID/APP_PRIVATE_KEY token so promotion can read the releases of the owner's private dependencies
+        description: Mint an APP_ID/APP_PRIVATE_KEY token so promotion can read the releases of the owner's private dependencies and required releases
         default: false
         type: boolean
       jamf-url:
@@ -64,8 +68,8 @@ permissions:
 
 jobs:
   # Read-only: finds the build, proves where it came from and that it depends
-  # only on the owner's production releases, and shows the reviewer what an
-  # approval will release.
+  # only on production releases, including the required releases it lists, and
+  # shows the reviewer what an approval will release.
   resolve:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -125,11 +129,13 @@ jobs:
           DEPENDENCY_TOKEN: ${{ steps.dependency-token.outputs.token }}
           MINIMUM_AGE: ${{ inputs.minimum-staging-age }}
           SKIP_MINIMUM_AGE_REASON: ${{ inputs.skip-minimum-age-reason }}
+          REQUIRED_RELEASES: ${{ inputs.required-releases }}
         run: |
           node "$RELEASE_TOOLS/swift-release.mjs" resolve --version "$STAGING_VERSION" \
             --package "$PACKAGE_NAME" --library "$LIBRARY" --environment "$ENVIRONMENT" \
             --signer-workflow "$SIGNER_WORKFLOW" --output "$RUNNER_TEMP/swift-release" \
-            --minimum-age="$MINIMUM_AGE" --skip-minimum-age-reason="$SKIP_MINIMUM_AGE_REASON"
+            --minimum-age="$MINIMUM_AGE" --skip-minimum-age-reason="$SKIP_MINIMUM_AGE_REASON" \
+            --required-releases="$REQUIRED_RELEASES"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.resolve.outputs.pending == 'true'
         with:

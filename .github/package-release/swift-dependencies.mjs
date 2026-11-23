@@ -3,6 +3,7 @@ import { exec, notFound, tagCommit } from "./package-release.mjs";
 
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const LITERAL = /"((?:[^"\\\n]|\\.)*)"/g;
+const SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 /** A file of the source commit, read from GitHub; undefined when the commit has none. */
 function sourceFile(run, repository, sha, path) {
@@ -53,31 +54,61 @@ export function packageDeclarations(source) {
   return declarations;
 }
 
-/**
- * Why a version of one of the owner's repositories is not production, or
- * undefined when it is: a published release under vX.Y.Z or X.Y.Z, not a draft
- * or prerelease, whose tag still names the resolved revision.
- */
-function releaseProblem(run, dependency, version, revision) {
+/** Why a repository's releases cannot be read, or undefined when they can. */
+function unreadable(run, repository) {
   try {
-    run("gh", ["api", `repos/${dependency}`]);
+    run("gh", ["api", `repos/${repository}`]);
+    return undefined;
   } catch (error) {
-    if (notFound(error)) return `${dependency} is not readable to check its releases; promote with private-deps`;
+    if (notFound(error)) return `${repository} is not readable to check its releases; promote with private-deps`;
     throw error;
   }
-  for (const tag of [`v${version}`, version]) {
-    let release;
-    try {
-      release = JSON.parse(run("gh", ["api", `repos/${dependency}/releases/tags/${tag}`]));
-    } catch (error) {
-      if (notFound(error)) continue;
-      throw error;
-    }
-    if (release.draft || release.prerelease) return `${dependency} ${tag} is a prerelease, not a production release`;
-    if (revision && tagCommit(run, dependency, tag) !== revision) return `${dependency} ${tag} no longer names the resolved commit ${revision}`;
-    return undefined;
+}
+
+/** A repository's release at releases/`which` on GitHub, or undefined when there is none. */
+function readRelease(run, repository, which) {
+  try {
+    return JSON.parse(run("gh", ["api", `repos/${repository}/releases/${which}`]));
+  } catch (error) {
+    if (notFound(error)) return undefined;
+    throw error;
   }
-  return `${version} is not a published release of ${dependency}`;
+}
+
+const isProduction = (release) => !release.draft && !release.prerelease;
+const escapeRegExp = (text) => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+const assetPattern = (glob) => new RegExp(`^${glob.split("*").map(escapeRegExp).join(".*")}$`);
+
+/**
+ * The production release of a version of one of the owner's repositories, or
+ * why there is none: a published release under vX.Y.Z or X.Y.Z, not a draft or
+ * prerelease, whose tag still names the resolved revision.
+ */
+function versionRelease(run, dependency, version, revision) {
+  const problem = unreadable(run, dependency);
+  if (problem) return { problem };
+  for (const tag of [`v${version}`, version]) {
+    const release = readRelease(run, dependency, `tags/${tag}`);
+    if (!release) continue;
+    if (!isProduction(release)) return { problem: `${dependency} ${tag} is a prerelease, not a production release` };
+    if (revision && tagCommit(run, dependency, tag) !== revision) return { problem: `${dependency} ${tag} no longer names the resolved commit ${revision}` };
+    return { release: tag };
+  }
+  return { problem: `${version} is not a published release of ${dependency}` };
+}
+
+/**
+ * A repository's latest release, or why it has none to rely on: GitHub's
+ * latest release is published and neither a draft nor a prerelease, and one of
+ * its assets must match `asset`, where * matches any characters, when given.
+ */
+function latestRelease(run, repository, asset) {
+  const problem = unreadable(run, repository);
+  if (problem) return { problem };
+  const release = readRelease(run, repository, "latest");
+  if (!release || !isProduction(release)) return { problem: `${repository} has no production release; promote it first` };
+  if (asset && !release.assets.some(({ name }) => assetPattern(asset).test(name))) return { problem: `${repository} ${release.tag_name} has no asset matching ${asset}` };
+  return { release: release.tag_name };
 }
 
 /**
@@ -90,7 +121,7 @@ function releaseProblem(run, dependency, version, revision) {
  * payload with neither Package.resolved nor Package.swift has no SwiftPM
  * dependencies to check.
  */
-export function dependencyFindings({ repository, sourceSha, library = false, run = exec, dependencyRun = run }) {
+function swiftPackageFindings({ repository, sourceSha, library, run, dependencyRun }) {
   const owner = repository.split("/")[0];
   const internal = new RegExp(`^(?:(?:https?|ssh|git)://(?:[^@/]+@)?github\\.com/|git@github\\.com:)${owner}/([A-Za-z0-9._-]+?)(?:\\.git)?/?$`, "i");
   const repositoryOf = (url) => {
@@ -100,10 +131,10 @@ export function dependencyFindings({ repository, sourceSha, library = false, run
   const stable = (version) => VERSION.test(version) && !semver.prerelease(version);
   const findings = [];
   const dependencies = [];
-  const check = (subject, dependency, version, revision) => {
-    const problem = releaseProblem(dependencyRun, dependency, version, revision);
+  const check = (source, subject, dependency, version, revision) => {
+    const { release, problem } = versionRelease(dependencyRun, dependency, version, revision);
     if (problem) findings.push(`${subject}: ${problem}`);
-    else dependencies.push({ dependency, version });
+    else dependencies.push({ repository: dependency, release, source });
   };
   const resolved = library ? undefined : sourceFile(run, repository, sourceSha, "Package.resolved");
   if (resolved !== undefined) {
@@ -116,7 +147,7 @@ export function dependencyFindings({ repository, sourceSha, library = false, run
       if (branch) findings.push(`${subject} to branch ${branch}; require a released version`);
       else if (!version) findings.push(`${subject} to revision ${revision}; require a released version`);
       else if (!stable(version)) findings.push(`${subject} at ${version}, which is not a stable version`);
-      else check(subject, dependency, version, revision);
+      else check("Package.resolved", subject, dependency, version, revision);
     }
     return { dependencies, findings };
   }
@@ -139,7 +170,46 @@ export function dependencyFindings({ repository, sourceSha, library = false, run
       findings.push(`${subject} by branch or revision; require a released version`);
     else if (!versions.length) findings.push(`${subject} without a version literal promotion can check`);
     else if (!versions.every(stable)) findings.push(`${subject} at ${versions.join(" to ")}, which admits prerelease versions`);
-    else check(subject, dependency, versions[0]);
+    else check("Package.swift", subject, dependency, versions[0]);
   }
   return { dependencies, findings };
+}
+
+/**
+ * The repositories a build lists at `path` as required releases, one
+ * owner/repository a line, optionally followed by an asset pattern; blank lines
+ * and anything after # are ignored. Each needs a latest release to rely on.
+ */
+function requiredReleaseFindings({ repository, sourceSha, path, run, dependencyRun }) {
+  const dependencies = [];
+  const findings = [];
+  const list = sourceFile(run, repository, sourceSha, path);
+  if (list === undefined) return { dependencies, findings: [`${sourceSha} has no ${path} to read its required releases from`] };
+  for (const [index, line] of list.split("\n").entries()) {
+    const fields = line.replace(/#.*/, "").trim().split(/\s+/).filter(Boolean);
+    if (!fields.length) continue;
+    const [required, asset, ...rest] = fields;
+    if (!SLUG.test(required) || rest.length) {
+      findings.push(`${path} line ${index + 1}: write owner/repository, optionally followed by an asset pattern`);
+      continue;
+    }
+    const { release, problem } = latestRelease(dependencyRun, required, asset);
+    if (problem) findings.push(`${path} requires ${required}: ${problem}`);
+    else dependencies.push({ repository: required, release, source: path });
+  }
+  return { dependencies, findings };
+}
+
+/**
+ * Findings that keep a build from production, and the production release each
+ * repository it depends on resolved to: the owner's repositories its SwiftPM
+ * dependencies come from and, when `requiredReleases` names a list at the
+ * source commit, the repositories listed there. Every finding is collected
+ * before any is reported.
+ */
+export function dependencyFindings({ repository, sourceSha, library = false, requiredReleases = "", run = exec, dependencyRun = run }) {
+  const swift = swiftPackageFindings({ repository, sourceSha, library, run, dependencyRun });
+  if (!requiredReleases) return swift;
+  const listed = requiredReleaseFindings({ repository, sourceSha, path: requiredReleases, run, dependencyRun });
+  return { dependencies: [...swift.dependencies, ...listed.dependencies], findings: [...swift.findings, ...listed.findings] };
 }

@@ -1049,6 +1049,7 @@ jobs:
       minimum-staging-age: 2h # optional; 2h is the default
       jamf-url: ${{ vars.JAMF_URL }} # optional
       private-deps: true # optional: a dependency is one of the owner's private repositories
+      required-releases: .github/required-releases.txt # optional: repositories that need a production release
     secrets:
       APP_ID: ${{ secrets.APP_ID }}
       APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
@@ -1093,9 +1094,25 @@ jobs:
   instead: each must be a version requirement written as string literals,
   with no branch, revision or prerelease bound, and its lowest version must be
   such a release. Reading a private repository's releases takes
-  `private-deps`. The reviewer's summary lists each release it checked: the
-  pinned version from `Package.resolved`, or the lowest version
-  `Package.swift` requires, which SwiftPM may resolve higher.
+  `private-deps`.
+- **Required releases.** A build can also require other repositories to have
+  a production release, such as the packages its hosts install from them.
+  `required-releases` names a file at the source commit with one `owner/repo`
+  a line, optionally followed by a pattern one asset of the release must
+  match, where `*` matches any characters, such as `photon-hq/prism *.pkg`;
+  blank lines and anything after `#` are ignored. Promotion reads the file
+  from GitHub and fails unless each repository's latest GitHub release is
+  published, neither a draft nor a prerelease, and matches its pattern. A
+  missing file or a line in another form fails it too. Reading a private
+  repository's releases takes `private-deps`. Findings from SwiftPM and from
+  the list are reported together in one failure.
+- **Summary.** The reviewer's summary lists, in one table with the file that
+  requires each, the release every dependency resolved to: the pinned
+  version from `Package.resolved`, the lowest version `Package.swift`
+  requires, or a required repository's latest release. It records the
+  releases available when promotion resolved; SwiftPM may resolve a
+  `Package.swift` requirement higher, and a release published later can
+  change what a host that installs the latest release selects.
 - **Staging age.** Promotion waits until every change the build carries
   since the latest `vX.Y.Z` has been on staging for `minimum-staging-age`
   (default `2h`; minutes, hours or days such as `30m`, `2h`, `1d`). The time

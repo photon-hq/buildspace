@@ -145,6 +145,11 @@ class WorkflowTests(unittest.TestCase):
             if name != 'resolve':
                 self.assertNotIn('APP_PRIVATE_KEY', yaml.dump(job), name)
 
+    def test_required_releases_reach_only_the_read_only_resolve_job(self):
+        for name, job in PROMOTE['jobs'].items():
+            if name != 'resolve':
+                self.assertNotIn('required-releases', yaml.dump(job), name)
+
     def test_jamf_receives_only_the_released_package_of_an_approved_promotion(self):
         jamf = PROMOTE['jobs']['jamf-upload']
         self.assertEqual(jamf['needs'], ['resolve', 'publish'])

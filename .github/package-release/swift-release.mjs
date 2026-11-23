@@ -228,8 +228,9 @@ const behind = (version, latest) => Boolean(latest) && latest !== version && !se
 /**
  * Find the build to promote and prove where it came from: staged by the stage
  * workflow from a commit on main, unchanged since, newer than the latest
- * release, and depending only on the owner's production releases. `pending`
- * is false when that release already is this build.
+ * release, and depending only on production releases, including those of the
+ * repositories it lists at `requiredReleases`. `pending` is false when that
+ * release already is this build.
  */
 export async function resolveCandidate({
   repository,
@@ -242,6 +243,7 @@ export async function resolveCandidate({
   output,
   minimumAge,
   skipMinimumAge = "",
+  requiredReleases = "",
   now = Date.now(),
   run = exec,
   dependencyRun = run,
@@ -298,7 +300,7 @@ export async function resolveCandidate({
     if (productionReleaseExists(run, manifest)) return { manifest, pending: false, dependencies: [] };
   } else if (behind(candidate, latest))
     throw new Error(`${tag} cannot be promoted: ${candidate} is not newer than the latest release ${latest}; stage a newer build`);
-  const { dependencies, findings } = dependencyFindings({ repository, sourceSha: manifest.sourceSha, library, run, dependencyRun });
+  const { dependencies, findings } = dependencyFindings({ repository, sourceSha: manifest.sourceSha, library, requiredReleases, run, dependencyRun });
   if (findings.length)
     throw new Error(`${tag} cannot be promoted until its dependencies are production releases:\n${findings.map((finding) => `- ${finding}`).join("\n")}`);
   // A library runs on no staging Mac; the packages that pin it wait instead.
@@ -482,6 +484,7 @@ async function main() {
       output: { type: "string" },
       package: { type: "string" },
       production: { type: "string" },
+      "required-releases": { type: "string", default: "" },
       "signer-workflow": { type: "string" },
       "skip-minimum-age-reason": { type: "string", default: "" },
       staging: { type: "string" },
@@ -551,6 +554,7 @@ async function main() {
           output: resolve(values.output),
           minimumAge: values["minimum-age"],
           skipMinimumAge: reason,
+          requiredReleases: values["required-releases"],
           dependencyRun: env.DEPENDENCY_TOKEN ? (command, args) => exec(command, args, { ...env, GH_TOKEN: env.DEPENDENCY_TOKEN }) : exec,
         });
       } catch (error) {
@@ -561,7 +565,14 @@ async function main() {
       }
       const { manifest, pending, dependencies, soak } = resolved;
       const released = dependencies.length
-        ? ["Its internal dependencies are production releases:", "", "| Dependency | Version |", "| --- | --- |", ...dependencies.map(({ dependency, version }) => `| ${dependency} | \`${version}\` |`), ""]
+        ? [
+            "Its dependencies were these production releases when promotion resolved:",
+            "",
+            "| Repository | Release | Required by |",
+            "| --- | --- | --- |",
+            ...dependencies.map(({ repository: name, release, source }) => `| ${name} | \`${release}\` | ${source} |`),
+            "",
+          ]
         : [];
       await summarize(
         pending

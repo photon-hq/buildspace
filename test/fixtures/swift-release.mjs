@@ -49,7 +49,8 @@ const MANIFEST_ONLY = '// swift-tools-version: 6.2\nimport PackageDescription\n\
 /**
  * A fake GitHub that records every command. `files` are the source commit's;
  * `repos` are the owner's other repositories, a private one readable only
- * through `dependencyRun`, which holds the dependency token. `soak` holds the
+ * through `dependencyRun`, which holds the dependency token, each naming the
+ * tag GitHub serves as its `latest` release, if any. `soak` holds the
  * commits since the latest release, oldest first, with their pull requests,
  * and when each release was published.
  */
@@ -74,10 +75,11 @@ function world({ tags = {}, releases = {}, environment = ["octocat"], attested =
         const repo = repos[owner];
         if (!repo || (repo.private && !privileged)) throw missing();
         if (!rest) return JSON.stringify({ full_name: owner });
-        const named = /^\/(?:releases\/tags|git\/ref\/tags)\/(.+)$/.exec(rest)?.[1];
+        const named = rest === "/releases/latest" ? repo.latest : /^\/(?:releases\/tags|git\/ref\/tags)\/(.+)$/.exec(rest)?.[1];
         const release = repo.releases[named];
         if (!release) throw missing();
-        if (rest.startsWith("/releases/")) return JSON.stringify({ tag_name: named, draft: Boolean(release.draft), prerelease: Boolean(release.prerelease) });
+        if (rest.startsWith("/releases/"))
+          return JSON.stringify({ tag_name: named, draft: Boolean(release.draft), prerelease: Boolean(release.prerelease), assets: (release.assets ?? []).map((name) => ({ name })) });
         return JSON.stringify({ object: { type: "commit", sha: release.sha } });
       }
       if (path.endsWith("/environments/production")) {
