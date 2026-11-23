@@ -185,9 +185,11 @@ function requiredReleaseFindings({ repository, sourceSha, path, run, dependencyR
   const findings = [];
   const list = sourceFile(run, repository, sourceSha, path);
   if (list === undefined) return { dependencies, findings: [`${sourceSha} has no ${path} to read its required releases from`] };
+  let entries = 0;
   for (const [index, line] of list.split("\n").entries()) {
     const fields = line.replace(/#.*/, "").trim().split(/\s+/).filter(Boolean);
     if (!fields.length) continue;
+    entries++;
     const [required, asset, ...rest] = fields;
     if (!SLUG.test(required) || rest.length) {
       findings.push(`${path} line ${index + 1}: write owner/repository, optionally followed by an asset pattern`);
@@ -197,6 +199,7 @@ function requiredReleaseFindings({ repository, sourceSha, path, run, dependencyR
     if (problem) findings.push(`${path} requires ${required}: ${problem}`);
     else dependencies.push({ repository: required, release, source: path });
   }
+  if (!entries) findings.push(`${path} names no repository; list the repositories the build requires, or stop setting required-releases`);
   return { dependencies, findings };
 }
 

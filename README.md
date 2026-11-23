@@ -1103,7 +1103,8 @@ jobs:
   blank lines and anything after `#` are ignored. Promotion reads the file
   from GitHub and fails unless each repository's latest GitHub release is
   published, neither a draft nor a prerelease, and matches its pattern. A
-  missing file or a line in another form fails it too. Reading a private
+  missing file, a file that names no repository, or a line in another form
+  fails it too. Reading a private
   repository's releases takes `private-deps`. Findings from SwiftPM and from
   the list are reported together in one failure.
 - **Summary.** The reviewer's summary lists, in one table with the file that

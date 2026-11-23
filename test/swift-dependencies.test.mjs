@@ -187,7 +187,13 @@ test("a private required repository's releases are read with the dependency toke
   assert.deepEqual(dependencies, [{ repository: "photon-hq/agent", release: "v0.3.0", source: LIST }]);
 });
 
-test("a build is refused when its commit lacks the list of releases it requires", async () => {
-  const { fake } = await staged({ world: { repos: REQUIRED } });
-  await assert.rejects(resolveWith(fake, { requiredReleases: LIST }), new RegExp(`${SHA} has no \\.github/required-releases\\.txt to read its required releases from`));
+test("a build is refused when its list of required releases is missing or names no repository", async (t) => {
+  await t.test("a commit without the list", async () => {
+    const { fake } = await staged({ world: { repos: REQUIRED } });
+    await assert.rejects(resolveWith(fake, { requiredReleases: LIST }), new RegExp(`${SHA} has no \\.github/required-releases\\.txt to read its required releases from`));
+  });
+  await t.test("a list of only comments and blank lines", async () => {
+    const { fake } = await staged({ world: { files: { [LIST]: "# Installed by production hosts\n\n" }, repos: REQUIRED } });
+    await assert.rejects(resolveWith(fake, { requiredReleases: LIST }), /\.github\/required-releases\.txt names no repository/);
+  });
 });
