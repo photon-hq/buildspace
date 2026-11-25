@@ -38,7 +38,8 @@ Use stage/promote for supported packages and Swift products:
 | Owner-scoped npm package on GitHub Packages | `package-stage.yml` + `package-promote.yml` | Push to main stages; dispatch from main and approval promote |
 | Scoped or single unscoped public npmjs package | `package-stage.yml` + `package-promote.yml` | Push to main stages; dispatch from main and approval promote |
 | Swift executable packaged as macOS `.pkg` | `swift-stage.yml` + `swift-promote.yml` | Push to main stages; dispatch from main and approval promote |
-| SwiftPM library | `swift-stage.yml` + `swift-promote.yml`, both with `library: true` | Push to main stages; dispatch from main and approval promote |
+| Payload-only macOS `.pkg` (no Swift build) | `swift-stage.yml` + `swift-promote.yml`, both with `kind: payload` | Push to main stages; dispatch from main and approval promote |
+| SwiftPM library | `swift-stage.yml` + `swift-promote.yml`, both with `kind: library` | Push to main stages; dispatch from main and approval promote |
 
 Follow the [package guide](https://github.com/photon-hq/buildspace#package-stage-and-promote)
 or [Swift guide](https://github.com/photon-hq/buildspace#swift-stage-and-promote)
@@ -48,7 +49,7 @@ For npmjs, set `registry: https://registry.npmjs.org` and the exact `package` na
 
 The following release workflows remain for compatibility. Keep their gates until each caller has a supported replacement.
 Package stage/promote does not replace standalone Rust/Go binaries, crates.io publishing, or independent monorepo versioning.
-Swift stage/promote does not replace payload-only packages or Makefile dylibs. PR checks and previews run independently of release labels.
+Swift stage/promote does not replace Makefile dylibs. PR checks and previews run independently of release labels.
 
 | Project type | Workflow file | Trigger |
 |---|---|---|
