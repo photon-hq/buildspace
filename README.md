@@ -60,6 +60,7 @@ BuildSpace gives you three layers of CI/CD automation:
   - [update-docs](#update-docs)
   - [update-skills](#update-skills-1)
 - [Architecture](#architecture)
+- [Agent skill](#agent-skill)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -2493,6 +2494,16 @@ buildspace/
 │       ├── update-docs.yaml                  # AI docs update on release
 │       └── update-skills.yaml                # AI skills update on release
 ```
+
+## Agent skill
+
+The [`buildspace-ci-cd`](./skills/buildspace-ci-cd/SKILL.md) skill teaches a coding agent to set up and debug BuildSpace workflows and blocks. Install it with:
+
+```bash
+npx skills add photon-hq/buildspace --skill buildspace-ci-cd
+```
+
+It used to live in [photon-hq/skills](https://github.com/photon-hq/skills), which now holds only the Photon 2.0 skills. Update it here when workflows, blocks or their inputs change.
 
 ---
 
