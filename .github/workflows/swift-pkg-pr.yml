@@ -34,8 +34,8 @@ on:
         required: false
         default: false
         description: "Mint an app token (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone private/internal org dependencies."
-      dependency-repositories:
-        description: Comma or newline-separated dependency repository names; empty preserves installation-wide read access
+      app-token-repositories:
+        description: Newline-delimited repositories a minted GitHub App token may read during the build
         type: string
         default: ''
       build-flags:
@@ -88,16 +88,23 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check private dependency inputs
+        env:
+          PRIVATE_DEPS: ${{ inputs.private-deps }}
+          APP_TOKEN_REPOSITORIES: ${{ inputs.app-token-repositories }}
+        run: |
+          [[ -z "$APP_TOKEN_REPOSITORIES" || "$PRIVATE_DEPS" == true ]] ||
+            { echo "::error::app-token-repositories requires private-deps: true" >&2; exit 1; }
       # ── Mint app token for private SPM dependencies (optional) ───────────
       - name: Mint app token for private SPM deps
         id: app-token
         if: inputs.private-deps
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ inputs.dependency-repositories }}
+          repositories: ${{ inputs.app-token-repositories }}
           permission-contents: read
 
       # ── Build ────────────────────────────────────────────────────────────

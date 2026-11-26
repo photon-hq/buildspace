@@ -10,6 +10,7 @@ import unittest
 
 import yaml
 
+PREVIEW = yaml.load(Path('.github/workflows/swift-pkg-pr.yml').read_text(), Loader=yaml.BaseLoader)
 STAGE = yaml.load(Path('.github/workflows/swift-stage.yml').read_text(), Loader=yaml.BaseLoader)
 PROMOTE = yaml.load(Path('.github/workflows/swift-promote.yml').read_text(), Loader=yaml.BaseLoader)
 PACKAGE = yaml.load(Path('.github/blocks/swift-stage-package/action.yml').read_text(), Loader=yaml.BaseLoader)
@@ -21,6 +22,13 @@ SWIFT = 'echo "$@" >> "$RUNNER_TEMP/swift-args"\ncase "$*" in *--show-bin-path) 
 
 def step(job, name):
     return next(s for s in job['steps'] if s.get('name') == name)
+
+
+def run_input_check(workflow, check, inputs):
+    defaults = {name: field.get('default', '') for name, field in workflow['on']['workflow_call']['inputs'].items()}
+    given = {**defaults, **inputs}
+    env = {name: re.sub(r'\$\{\{ inputs\.([\w-]+) \}\}', lambda match: given[match[1]], value) for name, value in check['env'].items()}
+    return subprocess.run(['bash', '-c', check['run']], env={**os.environ, **env}, capture_output=True, text=True)
 
 
 class WorkflowTests(unittest.TestCase):
@@ -68,26 +76,43 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(holders, list(BUILDS))
 
     def test_dependency_tokens_accept_a_repository_allowlist_and_only_read_contents(self):
-        preview = yaml.load(Path('.github/workflows/swift-pkg-pr.yml').read_text(), Loader=yaml.BaseLoader)
         for workflow, job, token_name in (
             (STAGE, 'build', 'Mint a token for private dependencies'),
             (PROMOTE, 'resolve', 'Mint a token to read private dependencies'),
-            (preview, 'build', 'Mint app token for private SPM deps'),
+            (PREVIEW, 'build', 'Mint app token for private SPM deps'),
         ):
             with self.subTest(workflow=workflow['name']):
-                option = workflow['on']['workflow_call']['inputs']['dependency-repositories']
-                self.assertEqual(option['type'], 'string')
-                self.assertEqual(option['default'], '')
                 token = step(workflow['jobs'][job], token_name)
-                self.assertEqual(token['with']['repositories'], '${{ inputs.dependency-repositories }}')
+                self.assertEqual(token['uses'], 'actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1')
+                self.assertEqual(token['with']['repositories'], '${{ inputs.app-token-repositories }}')
                 self.assertEqual({k: v for k, v in token['with'].items() if k.startswith('permission-')},
                                  {'permission-contents': 'read'})
+
+    def test_repository_allowlists_cannot_be_silently_ignored(self):
+        for workflow, job, check_name in (
+            (PREVIEW, 'build', 'Check private dependency inputs'),
+            (STAGE, 'version', 'Check the kind and the inputs it takes'),
+            (PROMOTE, 'resolve', 'Check the kind and private dependency inputs'),
+        ):
+            check = step(workflow['jobs'][job], check_name)
+            for private_deps, repositories in (
+                ('false', ''),
+                ('true', ''),
+                ('true', 'SignozSwift\nopentelemetry-swift'),
+                ('false', 'SignozSwift\nopentelemetry-swift'),
+            ):
+                with self.subTest(workflow=workflow['name'], private_deps=private_deps, repositories=repositories):
+                    result = run_input_check(workflow, check, {'private-deps': private_deps, 'app-token-repositories': repositories})
+                    if repositories and private_deps == 'false':
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('::error::app-token-repositories requires private-deps: true', result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_kind_must_be_known_and_a_payload_takes_only_payload_inputs(self):
         check = step(STAGE['jobs']['version'], 'Check the kind and the inputs it takes')
         self.assertEqual(STAGE['jobs']['version']['steps'][0], check)
         self.assertNotIn('if', check)
-        defaults = {name: field.get('default', '') for name, field in STAGE['on']['workflow_call']['inputs'].items()}
         for inputs, error in (
             ({}, None),
             ({'kind': 'payload', 'payload-path': 'payload', 'scripts-path': 'scripts'}, None),
@@ -95,9 +120,7 @@ class WorkflowTests(unittest.TestCase):
             ({'kind': 'payload'}, 'A payload needs payload-path'),
             ({'kind': 'payload', 'payload-path': 'payload', 'entitlements': 'ent.plist'}, 'A payload needs payload-path'),
         ):
-            given = {**defaults, **inputs}
-            env = {name: re.sub(r'\$\{\{ inputs\.([\w-]+) \}\}', lambda match: given[match[1]], value) for name, value in check['env'].items()}
-            result = subprocess.run(['bash', '-c', check['run']], env={**os.environ, **env}, capture_output=True, text=True)
+            result = run_input_check(STAGE, check, inputs)
             if error:
                 self.assertNotEqual(result.returncode, 0, inputs)
                 self.assertIn(f'::error::{error}', result.stderr, inputs)
