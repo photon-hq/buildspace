@@ -35,6 +35,10 @@ on:
         description: Mint an APP_ID/APP_PRIVATE_KEY token so SwiftPM can clone the owner's private dependencies
         default: false
         type: boolean
+      app-token-repositories:
+        description: Newline-delimited repositories a minted GitHub App token may read during the build
+        type: string
+        default: ''
       paths:
         description: Space-separated git pathspecs whose changes count toward the build's version; defaults to the whole repository
         default: ''
@@ -93,11 +97,14 @@ jobs:
           RESOURCE_BUNDLES: ${{ inputs.resource-bundles }}
           ENTITLEMENTS: ${{ inputs.entitlements }}
           PRIVATE_DEPS: ${{ inputs.private-deps }}
+          APP_TOKEN_REPOSITORIES: ${{ inputs.app-token-repositories }}
         run: |
           [[ "$KIND" =~ ^(executable|payload|library)$ ]] ||
             { echo "::error::kind must be executable, payload or library, not $KIND" >&2; exit 1; }
           [[ "$KIND" != payload || ( -n "$PAYLOAD_PATH" && -z "$RESOURCE_BUNDLES$ENTITLEMENTS" && "$PRIVATE_DEPS" != true ) ]] ||
             { echo "::error::A payload needs payload-path and takes no resource-bundles, entitlements or private-deps" >&2; exit 1; }
+          [[ -z "$APP_TOKEN_REPOSITORIES" || "$PRIVATE_DEPS" == true ]] ||
+            { echo "::error::app-token-repositories requires private-deps: true" >&2; exit 1; }
       - name: Fetch the release tools of this workflow's commit
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -186,6 +193,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.app-token-repositories }}
           permission-contents: read
       - name: Check the package and its source
         if: inputs.kind != 'library'
