@@ -1065,6 +1065,10 @@ jobs:
   and `dry-run` work as in `package-stage`. The promote call names the same
   `package-name` and `kind`, and sets `private-deps` (with the same
   secrets) when a dependency is one of the owner's private repositories.
+  Set `dependency-repositories` on both calls to limit their read-only tokens to
+  comma or newline-separated repository names. Include transitive private
+  dependencies and any private `required-releases` entries used by promotion.
+  An empty value preserves installation-wide read access for existing callers.
   Callers that passed `library: true` pass `kind: library` to both
   `swift-stage` and `swift-promote`.
 - **Payloads.** `kind: payload` packages a `.pkg` with no
@@ -1340,6 +1344,7 @@ Builds a macOS `.pkg` on every PR commit and reports status directly in the PR a
 | `resource-bundles` | string | No | `""` | Space-separated list of SPM resource bundle names to include in the `.pkg` |
 | `entitlements` | string | No | `""` | Path to entitlements plist for ad-hoc codesigning the built binary |
 | `private-deps` | boolean | No | `false` | Mint a GitHub App token so SwiftPM can clone private/internal org dependencies |
+| `dependency-repositories` | string | No | `""` | Comma or newline-separated dependency repository names for the read-only token; empty keeps installation-wide read access |
 | `build-flags` | string | No | `""` | Extra `swift build` arguments for the PR build only, split on whitespace. `-Xswiftc -Onone` skips optimisation (about a third less compile time) yet, unlike a debug build, still compiles code under `#if !DEBUG`; the PR `.pkg` is then unoptimised |
 | `use-blacksmith` | boolean | No | `false` | Use Blacksmith Linux runners for notification jobs; the macOS Swift/package build stays on `macos-26` |
 

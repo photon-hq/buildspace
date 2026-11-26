@@ -35,6 +35,10 @@ on:
         description: Mint an APP_ID/APP_PRIVATE_KEY token so promotion can read the releases of the owner's private dependencies and required releases
         default: false
         type: boolean
+      dependency-repositories:
+        description: Comma or newline-separated dependency repository names; empty preserves installation-wide read access
+        type: string
+        default: ''
       jamf-url:
         description: Jamf Pro instance to upload the promoted package to; leave empty to skip Jamf
         default: ''
@@ -117,6 +121,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.dependency-repositories }}
           permission-contents: read
       - name: Resolve and verify the candidate
         id: resolve

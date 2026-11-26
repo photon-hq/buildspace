@@ -67,6 +67,22 @@ class WorkflowTests(unittest.TestCase):
         holders = [s.get('name') for s in build['steps'] if 'secrets.SECRET_ENV_VARS' in yaml.dump(s)]
         self.assertEqual(holders, list(BUILDS))
 
+    def test_dependency_tokens_accept_a_repository_allowlist_and_only_read_contents(self):
+        preview = yaml.load(Path('.github/workflows/swift-pkg-pr.yml').read_text(), Loader=yaml.BaseLoader)
+        for workflow, job, token_name in (
+            (STAGE, 'build', 'Mint a token for private dependencies'),
+            (PROMOTE, 'resolve', 'Mint a token to read private dependencies'),
+            (preview, 'build', 'Mint app token for private SPM deps'),
+        ):
+            with self.subTest(workflow=workflow['name']):
+                option = workflow['on']['workflow_call']['inputs']['dependency-repositories']
+                self.assertEqual(option['type'], 'string')
+                self.assertEqual(option['default'], '')
+                token = step(workflow['jobs'][job], token_name)
+                self.assertEqual(token['with']['repositories'], '${{ inputs.dependency-repositories }}')
+                self.assertEqual({k: v for k, v in token['with'].items() if k.startswith('permission-')},
+                                 {'permission-contents': 'read'})
+
     def test_the_kind_must_be_known_and_a_payload_takes_only_payload_inputs(self):
         check = step(STAGE['jobs']['version'], 'Check the kind and the inputs it takes')
         self.assertEqual(STAGE['jobs']['version']['steps'][0], check)

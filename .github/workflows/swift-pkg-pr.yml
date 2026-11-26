@@ -34,6 +34,10 @@ on:
         required: false
         default: false
         description: "Mint an app token (APP_ID/APP_PRIVATE_KEY) so SwiftPM can clone private/internal org dependencies."
+      dependency-repositories:
+        description: Comma or newline-separated dependency repository names; empty preserves installation-wide read access
+        type: string
+        default: ''
       build-flags:
         type: string
         required: false
@@ -93,6 +97,8 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.dependency-repositories }}
+          permission-contents: read
 
       # ── Build ────────────────────────────────────────────────────────────
       - name: Swift Build

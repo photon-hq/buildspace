@@ -35,6 +35,10 @@ on:
         description: Mint an APP_ID/APP_PRIVATE_KEY token so SwiftPM can clone the owner's private dependencies
         default: false
         type: boolean
+      dependency-repositories:
+        description: Comma or newline-separated dependency repository names; empty preserves installation-wide read access
+        type: string
+        default: ''
       paths:
         description: Space-separated git pathspecs whose changes count toward the build's version; defaults to the whole repository
         default: ''
@@ -186,6 +190,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.dependency-repositories }}
           permission-contents: read
       - name: Check the package and its source
         if: inputs.kind != 'library'
