@@ -607,6 +607,60 @@ Local validation: `node --test test/package-*.test.mjs test/release-version.test
 
 ---
 
+### Package consumers
+
+**Workflow:** `.github/workflows/package-consumers.yml`
+
+- On a PR that changes a published package, comments which deployed services
+  use it and at which version in production, in staging and on main. The comment
+  is updated on every push and removed when the PR no longer changes a package.
+  A change to crates alone posts nothing unless some service uses them, even
+  when some services could not be checked.
+  It only informs and should not be a required check: a failed read of
+  application-manifest or a missing App secret fails the job and leaves the
+  previous comment as it was.
+- A changed package is the innermost one owning a changed file: an `@photon-hq/*`
+  npm package that is not `private`, a library crate, or a buf module named
+  `buf.build/photon-hq/<module>`, whose SDKs are `@buf/photon-hq_<module>.*`.
+- Services and the commits they run come from application-manifest
+  (`clusters/photon-production` and `clusters/photon-staging-usw2`); main is each
+  service repository's default branch. Uses are read from every
+  `pnpm-lock.yaml` and `Cargo.lock` in that commit, transitive ones and npm
+  aliases included, and an indirect use names the direct dependency it comes
+  through. A commit with an npm or Cargo project but neither lockfile is listed
+  as not checked; one with no such project (lago) cannot use the packages. The
+  caller's own services are left out.
+- dashboard-v2, landing-v1 and mcp-internal are not deployed from
+  application-manifest, so only their main is checked and the comment says so.
+- A buf SDK version shows its module commit and that commit's date. The comment
+  ends with the head commit it describes, so a stale one is visible after a
+  failed run.
+- A cell is `—` when the service is not deployed there, `none` when that commit
+  does not use the package and `?` when it could not be checked.
+- Public repositories must not call it, and the job skips them: their comments
+  and Actions logs would expose internal service names, dependencies and
+  production versions. PRs from forks are skipped too.
+- Never runs the caller's code. `APP_ID`/`APP_PRIVATE_KEY` mint a token with
+  only `contents: read` across the owner's repositories; the comment is written
+  with the job token.
+
+```yaml
+on:
+  pull_request:
+
+jobs:
+  consumers:
+    uses: photon-hq/buildspace/.github/workflows/package-consumers.yml@<reviewed-commit-sha>
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+```
+
+---
+
 ### Production dependency check
 
 **Action:** `.github/blocks/check-production-dependencies`

@@ -1,0 +1,78 @@
+name: Package consumers
+
+# On a PR that changes a published package (an @photon-hq npm package, a Cargo
+# crate or a buf module), comment which deployed services use it and at which
+# version in production, in staging and on main. Informational only.
+on:
+  workflow_call:
+    secrets:
+      APP_ID:
+        required: true
+        description: GitHub App that can read application-manifest and every service repository
+      APP_PRIVATE_KEY:
+        required: true
+
+jobs:
+  consumers:
+    # Public repositories never run this: their comments and Actions logs would
+    # expose internal service names, dependencies and production versions.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.repository.visibility != 'public' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: package-consumers-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Fetch the tools of this workflow's commit
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init -q "$RUNNER_TEMP/buildspace"
+          git -C "$RUNNER_TEMP/buildspace" fetch -q --depth 1 "https://github.com/$WORKFLOW_REPOSITORY" "$WORKFLOW_SHA"
+          git -C "$RUNNER_TEMP/buildspace" checkout -q FETCH_HEAD
+          npm ci --prefix "$RUNNER_TEMP/buildspace/.github/blocks/check-production-dependencies" --ignore-scripts --no-audit --no-fund
+      # Only read with git: the caller's code never runs here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create a read-only token for the service repositories
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+      - name: List the services using the changed packages
+        id: consumers
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OUTPUT: ${{ runner.temp }}/consumers.md
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/buildspace/.github/package-consumers/consumers.mjs"
+          delimiter="body-$(openssl rand -hex 16)"
+          {
+            echo "state=$([[ -s "$OUTPUT" ]] && echo present || echo absent)"
+            echo "body<<$delimiter"
+            cat "$OUTPUT"
+            echo
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+      - uses: photon-hq/buildspace/.github/blocks/comment-on-pr@c106a1cf6af1417665266bff004d62ed3f724e88
+        with:
+          comment-key: package-consumers
+          state: ${{ steps.consumers.outputs.state }}
+          message: ${{ steps.consumers.outputs.body }}
