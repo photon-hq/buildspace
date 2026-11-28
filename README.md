@@ -607,6 +607,47 @@ Local validation: `node --test test/package-*.test.mjs test/release-version.test
 
 ---
 
+### Package consumers
+
+**Workflow:** `.github/workflows/package-consumers.yml`
+
+- On a PR that changes a published package, comments which deployed services
+  use it and at which version in production, in staging and on main. The comment
+  is updated on every push and removed when the PR no longer changes a package.
+  It only informs; it never fails the PR.
+- A changed package is the innermost one owning a changed file: an `@photon-hq/*`
+  npm package that is not `private`, a Cargo crate, or a buf module named
+  `buf.build/photon-hq/<module>`, whose SDKs are `@buf/photon-hq_<module>.*`.
+- Services and the commits they run come from application-manifest
+  (`clusters/photon-production` and `clusters/photon-staging-usw2`); main is each
+  service repository's default branch. Uses are read from that commit's
+  `pnpm-lock.yaml` and `Cargo.lock`, transitive ones included, and an indirect
+  use names the direct dependency it comes through. The caller's own services
+  are left out.
+- Public repositories must not call it, and the job skips them: their comments
+  and Actions logs would expose internal service names, dependencies and
+  production versions. PRs from forks are skipped too.
+- Never runs the caller's code. `APP_ID`/`APP_PRIVATE_KEY` mint a token with
+  only `contents: read` across the owner's repositories; the comment is written
+  with the job token.
+
+```yaml
+on:
+  pull_request:
+
+jobs:
+  consumers:
+    uses: photon-hq/buildspace/.github/workflows/package-consumers.yml@<reviewed-commit-sha>
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      APP_ID: ${{ secrets.APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+```
+
+---
+
 ### Production dependency check
 
 **Action:** `.github/blocks/check-production-dependencies`
