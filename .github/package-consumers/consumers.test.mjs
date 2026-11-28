@@ -94,6 +94,15 @@ test("cargo: internal crates show their release tag and the crate they come thro
   ].join("\n\n");
   assert.deepEqual(plain(cargoUses(pinned, (name) => name === "photon-error")),
     { "photon-error": { "0123456": [""] } });
+  // The same name and version from two sources: the reference names its source.
+  const git = "git+https://github.com/photon-hq/error?tag=v0.3.0#def";
+  const twice = [
+    `[[package]]\nname = "service"\nversion = "0.1.0"\ndependencies = ["photon-error 0.1.0 (${git})"]`,
+    '[[package]]\nname = "photon-error"\nversion = "0.1.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"',
+    `[[package]]\nname = "photon-error"\nversion = "0.1.0"\nsource = "${git}"`,
+  ].join("\n\n");
+  assert.deepEqual(plain(cargoUses(twice, (name) => name === "photon-error")),
+    { "photon-error": { "v0.3.0": [""] } });
 });
 
 test("changed packages: the innermost published package owning each changed file", async () => {
@@ -113,9 +122,22 @@ test("changed packages: the innermost published package owning each changed file
   assert.deepEqual((await changedPackages(changed, read, paths)).map(({ kind, name }) => `${kind}:${name}`),
     ["crate:photon-error", "npm:@photon-hq/telnyx-aerial-contract", "buf:buf.build/photon-hq/aerial"].sort((a, b) => a.split(":")[1].localeCompare(b.split(":")[1])));
   assert.deepEqual(await changedPackages(["README.md"], read, paths), []);
+  // A buf.yaml change touches the modules it declares, which live below it.
+  assert.deepEqual((await changedPackages(["proto/buf.yaml"], read, paths)).map(({ name }) => name), ["buf.build/photon-hq/aerial"]);
   const watched = watcher(await changedPackages(changed, read, paths));
   assert.ok(watched(contract) && watched("@buf/photon-hq_aerial.bufbuild_es") && watched("photon-error"));
   assert.ok(!watched("@buf/photon-hq_aerial-v2.bufbuild_es") && !watched("@photon-hq/internal"));
+});
+
+test("changed packages: an npm package and a crate in one directory", async () => {
+  const read = [
+    ["pkg/package.json", async () => JSON.stringify({ name: contract })],
+    ["pkg/Cargo.toml", async () => '[package]\nname = "aerial-contract"\nversion = "0.1.0"'],
+  ];
+  const paths = new Set(["pkg/package.json", "pkg/Cargo.toml", "pkg/src/lib.rs"]);
+  const names = async (changed) => (await changedPackages(changed, read, paths)).map(({ name }) => name);
+  assert.deepEqual(await names(["pkg/src/lib.rs"]), [contract, "aerial-contract"]);
+  assert.deepEqual(await names(["pkg/Cargo.toml"]), ["aerial-contract"]);
 });
 
 test("renders one table per package; buf SDK versions show the module commit", () => {
@@ -149,7 +171,7 @@ test("renders one table per package; buf SDK versions show the module commit", (
     "| --- | --- | --- | --- |",
     "| aerial | none | none | 0a0a1f2b3c4d |",
     "",
-    "No deployed service uses `@photon-hq/unused`.",
+    "No use of `@photon-hq/unused` found in the services that could be checked.",
     "",
     "Not checked (no pnpm-lock.yaml or Cargo.lock): manifest production/staging/main.",
     "",
@@ -157,6 +179,21 @@ test("renders one table per package; buf SDK versions show the module commit", (
   ].join("\n"));
   // Only unused crates: nothing to comment.
   assert.equal(renderComment([{ kind: "crate", name: "service-core" }], services), "");
+  // Every read succeeded: absence is stated; a direct use elsewhere keeps the via.
+  const complete = [
+    { service: "aerial", production: uses([[contract, "7.0.1", adapter]]), main: uses([[contract, "7.1.0", ""]]) },
+  ];
+  assert.equal(renderComment([packages[0], packages[2]], complete), [
+    "### Services using the packages this PR changes",
+    "",
+    `#### \`${contract}\``,
+    "",
+    "| Service | Production | Staging | main |",
+    "| --- | --- | --- | --- |",
+    `| aerial (direct and via \`${adapter}\`) | 7.0.1 | — | 7.1.0 |`,
+    "",
+    "No deployed service uses `@photon-hq/unused`.",
+  ].join("\n"));
 });
 
 test("reads deployment refs, main heads and each commit's lockfiles once", async () => {
@@ -217,7 +254,7 @@ test("a commit whose only lockfiles are under node_modules is not checked", asyn
   assert.deepEqual(await commitUses(["README.md", "node_modules/x/pnpm-lock.yaml"], async () => "", () => true), { missing: true });
 });
 
-test("a deleted package, or one a file moves out of, still counts as changed", async () => {
+test("a deleted or renamed package, or one a file moves out of, still counts as changed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "package-consumers-"));
   const run = promisify(execFile);
   const git = async (...args) => (await run("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args])).stdout;
@@ -231,6 +268,7 @@ test("a deleted package, or one a file moves out of, still counts as changed", a
     await put("gone/index.js", "x");
     await put("old/package.json", JSON.stringify({ name: "@photon-hq/moved" }));
     await put("old/index.js", "export const value = 1;\n".repeat(20));
+    await put("renamed/package.json", JSON.stringify({ name: "@photon-hq/before" }));
     await git("add", ".");
     await git("commit", "-qm", "base");
     const base = (await git("rev-parse", "HEAD")).trim();
@@ -238,9 +276,11 @@ test("a deleted package, or one a file moves out of, still counts as changed", a
     // A file moved out of its package: a rename would list only the new path.
     await mkdir(join(dir, "scripts"));
     await git("mv", "old/index.js", "scripts/index.js");
+    await put("renamed/package.json", JSON.stringify({ name: "@photon-hq/after" }));
+    await git("add", ".");
     await git("commit", "-qm", "head");
     const head = (await git("rev-parse", "HEAD")).trim();
-    assert.deepEqual((await packagesBetween(git, base, head)).map((entry) => entry.name), ["@photon-hq/gone", "@photon-hq/moved"]);
+    assert.deepEqual((await packagesBetween(git, base, head)).map((entry) => entry.name), ["@photon-hq/after", "@photon-hq/before", "@photon-hq/gone", "@photon-hq/moved"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

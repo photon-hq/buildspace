@@ -79,10 +79,12 @@ export function cargoUses(text, watched) {
     entry,
   });
   const byName = Map.groupBy(packages, (entry) => entry.name);
-  // A dependency is "name", "name version" or "name version (source)".
+  // A dependency is "name", "name version" or "name version (source)"; the
+  // source is given when the same name and version come from two places.
   const resolve = (reference) => {
-    const [name, version] = reference.split(" ");
-    return byName.get(name)?.find((entry) => !version || entry.version === version);
+    const [, name, version, source] = /^(\S+)(?: (\S+))?(?: \((.+)\))?$/.exec(reference) ?? [];
+    return byName.get(name)?.find((entry) =>
+      (!version || entry.version === version) && (!source || entry.source === source));
   };
   const members = packages.filter((entry) => !entry.source);
   const starts = new Map();

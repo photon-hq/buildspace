@@ -32,32 +32,36 @@ export async function changedPackages(changed, files, paths = new Set()) {
       if (path.endsWith("package.json")) {
         const manifest = JSON.parse(await read());
         if (manifest.name?.startsWith("@photon-hq/") && !manifest.private)
-          packages.push({ kind: "npm", name: manifest.name, dir });
+          packages.push({ kind: "npm", name: manifest.name, dir, manifest: path });
       } else if (path.endsWith("Cargo.toml")) {
         // Internal crates are `publish = false` too; only a library can be a dependency.
         const manifest = parseToml(await read());
         const name = manifest.package?.name;
         if (typeof name === "string" && (manifest.lib || paths.has(join(dir, "src/lib.rs"))))
-          packages.push({ kind: "crate", name, dir });
+          packages.push({ kind: "crate", name, dir, manifest: path });
       } else if (path.endsWith("buf.yaml")) {
         const config = parseYaml(await read());
         const modules = config.version === "v2" ? config.modules ?? [] : [{ path: ".", name: config.name }];
         for (const module of modules) {
           const name = /^buf\.build\/photon-hq\/([a-z0-9-]+)$/.exec(module.name ?? "")?.[1];
-          if (name) packages.push({ kind: "buf", name: `buf.build/photon-hq/${name}`, prefix: `@buf/photon-hq_${name}.`, dir: normalize(join(dir, module.path ?? ".")) });
+          if (name) packages.push({ kind: "buf", name: `buf.build/photon-hq/${name}`, prefix: `@buf/photon-hq_${name}.`, dir: normalize(join(dir, module.path ?? ".")), manifest: path });
         }
       }
     } catch {
       // Not a manifest the ecosystem could have published.
     }
   }
-  // A file belongs to the innermost package that contains it.
+  // A manifest belongs to the packages it declares (a buf.yaml sits outside its
+  // modules); any other file to every package of the innermost directory holding it.
   const touched = new Map();
   for (const path of changed) {
-    const owner = packages
-      .filter((entry) => within(path, entry.dir))
-      .sort((a, b) => b.dir.length - a.dir.length)[0];
-    if (owner) touched.set(`${owner.kind}:${owner.name}`, owner);
+    let owners = packages.filter((entry) => entry.manifest === path);
+    if (!owners.length) {
+      const holding = packages.filter((entry) => within(path, entry.dir));
+      const innermost = Math.max(...holding.map((entry) => entry.dir.length));
+      owners = holding.filter((entry) => entry.dir.length === innermost);
+    }
+    for (const owner of owners) touched.set(`${owner.kind}:${owner.name}`, owner);
   }
   return [...touched.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -114,25 +118,34 @@ export function renderComment(packages, services) {
     const rows = [];
     for (const service of services) {
       const cells = [];
+      // A column that uses the package directly needs no path; a column that
+      // only reaches it indirectly keeps its paths, whatever the others do.
       const vias = new Set();
+      let used = false;
+      let direct = false;
       for (const column of COLUMNS) {
         if (!service[column]?.uses) {
           cells.push(service[column] ? "?" : "—");
           continue;
         }
         const versions = new Set();
+        const through = new Set();
         for (const [name, found] of service[column].uses) {
           if (!matches(name)) continue;
-          for (const [version, through] of found) {
+          for (const [version, paths] of found) {
             versions.add(display(version));
-            for (const via of through) vias.add(via);
+            for (const via of paths) through.add(via);
           }
         }
+        used ||= versions.size > 0;
+        if (through.has("")) direct = true;
+        else for (const via of through) vias.add(via);
         cells.push(versions.size ? [...versions].sort().join(", ").replace(/[|\r\n]/g, "") : "none");
       }
-      if (!vias.size) continue;
-      const indirect = vias.has("") ? [] : [...vias].sort();
-      const label = indirect.length ? `${service.service} (via ${indirect.map(code).join(", ")})` : service.service;
+      if (!used) continue;
+      const indirect = [...vias].sort();
+      const label = !indirect.length ? service.service
+        : `${service.service} (${direct ? "direct and " : ""}via ${indirect.map(code).join(", ")})`;
       rows.push(`| ${label} | ${cells.join(" | ")} |`);
     }
     const title = entry.kind === "buf" ? `${code(entry.name)} SDKs` : code(entry.name);
@@ -142,7 +155,8 @@ export function renderComment(packages, services) {
   // A service's own crates are packages too; with no use to show, say nothing.
   if (!sections.length && !unused.length) return "";
   const lines = ["### Services using the packages this PR changes", "", ...sections];
-  if (unused.length) lines.push(`No deployed service uses ${unused.join(", ")}.`, "");
+  if (unused.length && (failures.length || unchecked.length)) lines.push(`No use of ${unused.join(", ")} found in the services that could be checked.`, "");
+  else if (unused.length) lines.push(`No deployed service uses ${unused.join(", ")}.`, "");
   if (unchecked.length) lines.push(`Not checked (no pnpm-lock.yaml or Cargo.lock): ${unchecked.join("; ")}.`, "");
   if (failures.length) lines.push(`Could not read: ${failures.join("; ")}.`, "");
   let body = lines.join("\n").trimEnd();
@@ -232,18 +246,21 @@ export async function readConsumers(api, services, watched) {
 }
 
 /**
- * The packages changed between the PR's merge base and head. A package that is
- * deleted or moved keeps its manifest at the merge base, so it is read from there.
+ * The packages changed between the PR's merge base and head, found in both
+ * trees: a deleted, moved or renamed package is still known at the merge base.
  */
 export async function packagesBetween(git, base, head) {
   const fork = (await git("merge-base", base, head)).trim();
   const changed = (await git("diff", "--no-renames", "--name-only", "-z", `${fork}..${head}`)).split("\0").filter(Boolean);
-  const tree = async (commit) => (await git("ls-tree", "-rz", "--name-only", commit)).split("\0").filter(Boolean);
-  const atHead = new Set(await tree(head));
-  const paths = new Set([...atHead, ...await tree(fork)]);
-  const manifests = [...paths]
-    .filter((path) => /(^|\/)(package\.json|Cargo\.toml|buf\.yaml)$/.test(path) && !path.split("/").includes("node_modules"));
-  return changedPackages(changed, manifests.map((path) => [path, () => git("show", `${atHead.has(path) ? head : fork}:${path}`)]), paths);
+  const touched = new Map();
+  for (const commit of [fork, head]) {
+    const paths = new Set((await git("ls-tree", "-rz", "--name-only", commit)).split("\0").filter(Boolean));
+    const manifests = [...paths]
+      .filter((path) => /(^|\/)(package\.json|Cargo\.toml|buf\.yaml)$/.test(path) && !path.split("/").includes("node_modules"));
+    for (const entry of await changedPackages(changed, manifests.map((path) => [path, () => git("show", `${commit}:${path}`)]), paths))
+      touched.set(`${entry.kind}:${entry.name}`, entry);
+  }
+  return [...touched.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function main() {
