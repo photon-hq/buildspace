@@ -614,16 +614,21 @@ Local validation: `node --test test/package-*.test.mjs test/release-version.test
 - On a PR that changes a published package, comments which deployed services
   use it and at which version in production, in staging and on main. The comment
   is updated on every push and removed when the PR no longer changes a package.
-  It only informs; it never fails the PR.
+  It only informs and should not be a required check: a failed read of
+  application-manifest or a missing App secret fails the job and leaves the
+  previous comment as it was.
 - A changed package is the innermost one owning a changed file: an `@photon-hq/*`
-  npm package that is not `private`, a Cargo crate, or a buf module named
+  npm package that is not `private`, a library crate, or a buf module named
   `buf.build/photon-hq/<module>`, whose SDKs are `@buf/photon-hq_<module>.*`.
 - Services and the commits they run come from application-manifest
   (`clusters/photon-production` and `clusters/photon-staging-usw2`); main is each
-  service repository's default branch. Uses are read from that commit's
-  `pnpm-lock.yaml` and `Cargo.lock`, transitive ones included, and an indirect
-  use names the direct dependency it comes through. The caller's own services
-  are left out.
+  service repository's default branch. Uses are read from every
+  `pnpm-lock.yaml` and `Cargo.lock` in that commit, transitive ones and npm
+  aliases included, and an indirect use names the direct dependency it comes
+  through. A commit with neither lockfile is listed as not checked. The
+  caller's own services are left out.
+- A cell is `—` when the service is not deployed there, `none` when that commit
+  does not use the package and `?` when it could not be checked.
 - Public repositories must not call it, and the job skips them: their comments
   and Actions logs would expose internal service names, dependencies and
   production versions. PRs from forks are skipped too.

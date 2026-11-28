@@ -4,6 +4,8 @@ import { parsePnpmLockfile, parseToml } from "../blocks/check-production-depende
 
 const FIELDS = ["dependencies", "devDependencies", "optionalDependencies"];
 const baseVersion = (version) => String(version).split("(")[0];
+// An npm alias resolves to "<real name>@<version>" instead of a version.
+const ALIAS = /^(@[^/@]+\/[^@]+|[^@(:/][^@(:]*)@(\d.*)$/;
 
 /**
  * Walk from every direct dependency and record each watched package reached:
@@ -37,7 +39,11 @@ function walk(starts, children, watched) {
 
 export function pnpmUses(text, watched) {
   const { lockfile } = parsePnpmLockfile(text);
-  const node = (name, version) => ({ key: `${name}@${version}`, name, version: baseVersion(version) });
+  const node = (name, version) => {
+    const alias = ALIAS.exec(String(version));
+    if (alias) [, name, version] = alias;
+    return { key: `${name}@${version}`, name, version: baseVersion(version) };
+  };
   const starts = new Map();
   for (const importer of Object.values(lockfile.importers ?? {})) {
     for (const field of FIELDS) {
@@ -61,11 +67,15 @@ export function pnpmUses(text, watched) {
 
 export function cargoUses(text, watched) {
   const packages = parseToml(text).package ?? [];
-  // Internal crates come from a release tag; their Cargo version is not bumped.
+  // Internal crates come from git, where the Cargo version is not bumped: show
+  // the release tag, or the short commit of a rev or branch.
+  const gitVersion = (source = "") => source.startsWith("git+")
+    ? /[?&]tag=([^#&]+)/.exec(source)?.[1] ?? /#([0-9a-f]{7})/.exec(source)?.[1]
+    : undefined;
   const node = (entry) => ({
     key: `${entry.name} ${entry.version} ${entry.source ?? ""}`,
     name: entry.name,
-    version: /[?&]tag=([^#&]+)/.exec(entry.source ?? "")?.[1] ?? entry.version,
+    version: gitVersion(entry.source) ?? entry.version,
     entry,
   });
   const byName = Map.groupBy(packages, (entry) => entry.name);
