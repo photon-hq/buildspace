@@ -614,6 +614,8 @@ Local validation: `node --test test/package-*.test.mjs test/release-version.test
 - On a PR that changes a published package, comments which deployed services
   use it and at which version in production, in staging and on main. The comment
   is updated on every push and removed when the PR no longer changes a package.
+  A change to crates alone posts nothing unless some service uses them, even
+  when some services could not be checked.
   It only informs and should not be a required check: a failed read of
   application-manifest or a missing App secret fails the job and leaves the
   previous comment as it was.

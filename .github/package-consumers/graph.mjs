@@ -80,11 +80,13 @@ export function cargoUses(text, watched) {
   });
   const byName = Map.groupBy(packages, (entry) => entry.name);
   // A dependency is "name", "name version" or "name version (source)"; the
-  // source is given when the same name and version come from two places.
+  // source is given when the same name and version come from two places, and
+  // leaves out the "#<commit>" a package's own source carries.
+  const unpinned = (source = "") => source.split("#")[0];
   const resolve = (reference) => {
     const [, name, version, source] = /^(\S+)(?: (\S+))?(?: \((.+)\))?$/.exec(reference) ?? [];
     return byName.get(name)?.find((entry) =>
-      (!version || entry.version === version) && (!source || entry.source === source));
+      (!version || entry.version === version) && (!source || unpinned(entry.source) === unpinned(source)));
   };
   const members = packages.filter((entry) => !entry.source);
   const starts = new Map();

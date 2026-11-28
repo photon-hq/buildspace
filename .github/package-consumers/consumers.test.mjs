@@ -97,7 +97,7 @@ test("cargo: internal crates show their release tag and the crate they come thro
   // The same name and version from two sources: the reference names its source.
   const git = "git+https://github.com/photon-hq/error?tag=v0.3.0#def";
   const twice = [
-    `[[package]]\nname = "service"\nversion = "0.1.0"\ndependencies = ["photon-error 0.1.0 (${git})"]`,
+    `[[package]]\nname = "service"\nversion = "0.1.0"\ndependencies = ["photon-error 0.1.0 (${git.split("#")[0]})"]`,
     '[[package]]\nname = "photon-error"\nversion = "0.1.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"',
     `[[package]]\nname = "photon-error"\nversion = "0.1.0"\nsource = "${git}"`,
   ].join("\n\n");
@@ -248,6 +248,11 @@ test("reads deployment refs, main heads and each commit's lockfiles once", async
   assert.deepEqual(plain(read[3].main.uses), { [contract]: { "7.1.0": [""] } });
   // aerial's staging and main are the same commit: its lockfiles are read once.
   assert.equal(requests.filter((path) => path === `repos/photon-hq/aerial/contents/pnpm-lock.yaml?ref=${sha(2)}`).length, 1);
+});
+
+test("an unreadable application-manifest listing fails instead of listing no services", async () => {
+  await assert.rejects(deployedServices(async () => undefined), /Cannot read photon-hq\/application-manifest/);
+  assert.deepEqual(await deployedServices(async () => []), []);
 });
 
 test("a commit whose only lockfiles are under node_modules is not checked", async () => {

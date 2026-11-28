@@ -198,7 +198,9 @@ export async function deployedServices(api) {
   const services = new Map();
   for (const [environment, root] of ENVIRONMENTS) {
     const listing = await api(`repos/${MANIFEST}/contents/${root}?ref=main`);
-    const names = (listing ?? []).filter((entry) => entry.type === "dir").map((entry) => entry.name);
+    // Not "no services": the previous comment must stay as it was.
+    if (!listing) throw new Error(`Cannot read ${MANIFEST}/${root}`);
+    const names = listing.filter((entry) => entry.type === "dir").map((entry) => entry.name);
     await pool(names, 8, async (name) => {
       const text = await api(`repos/${MANIFEST}/contents/${root}/${name}/deployment-ref.yaml?ref=main`, "application/vnd.github.raw+json");
       const deployment = text && parseYaml(text)?.deployment;
