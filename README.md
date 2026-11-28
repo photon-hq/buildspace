@@ -627,8 +627,14 @@ Local validation: `node --test test/package-*.test.mjs test/release-version.test
   service repository's default branch. Uses are read from every
   `pnpm-lock.yaml` and `Cargo.lock` in that commit, transitive ones and npm
   aliases included, and an indirect use names the direct dependency it comes
-  through. A commit with neither lockfile is listed as not checked. The
+  through. A commit with an npm or Cargo project but neither lockfile is listed
+  as not checked; one with no such project (lago) cannot use the packages. The
   caller's own services are left out.
+- dashboard-v2, landing-v1 and mcp-internal are not deployed from
+  application-manifest, so only their main is checked and the comment says so.
+- A buf SDK version shows its module commit and that commit's date. The comment
+  ends with the head commit it describes, so a stale one is visible after a
+  failed run.
 - A cell is `—` when the service is not deployed there, `none` when that commit
   does not use the package and `?` when it could not be checked.
 - Public repositories must not call it, and the job skips them: their comments

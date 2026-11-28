@@ -15,6 +15,9 @@ export const ENVIRONMENTS = [
   ["staging", "clusters/photon-staging-usw2"],
 ];
 const COLUMNS = ["production", "staging", "main"];
+// Deployed by workflow_dispatch, not from application-manifest: their running
+// commits are not recorded yet (M1), so only main is read.
+export const MAIN_ONLY = ["dashboard-v2", "landing-v1", "mcp-internal"];
 const LIMIT = 60_000;
 
 const within = (path, dir) => dir === "." || path === dir || path.startsWith(`${dir}/`);
@@ -74,12 +77,14 @@ export function watcher(packages) {
 
 /**
  * The uses in every pnpm-lock.yaml and Cargo.lock of a commit, given its file
- * paths; { missing: true } when it has none, so it is not read as using nothing.
+ * paths. A commit with an npm or Cargo project but neither lockfile is
+ * { missing: true }, so it is not read as using nothing; one with no such
+ * project (lago is Ruby) cannot use the packages.
  */
 export async function commitUses(paths, read, watched) {
-  const lockfiles = paths.filter((path) =>
-    /(^|\/)(pnpm-lock\.yaml|Cargo\.lock)$/.test(path) && !path.split("/").includes("node_modules"));
-  if (!lockfiles.length) return { missing: true };
+  const found = (pattern) => paths.filter((path) => pattern.test(path) && !path.split("/").includes("node_modules"));
+  const lockfiles = found(/(^|\/)(pnpm-lock\.yaml|Cargo\.lock)$/);
+  if (!lockfiles.length) return found(/(^|\/)(package\.json|Cargo\.toml)$/).length ? { missing: true } : { uses: new Map() };
   const uses = await Promise.all(lockfiles.map(async (path) => {
     const text = await read(path);
     try {
@@ -91,17 +96,22 @@ export async function commitUses(paths, read, watched) {
   return { uses: mergeUses(...uses) };
 }
 
-// A buf SDK version is <plugin>-<timestamp>-<module commit>.<n>; the module commit is what differs.
-const display = (version) => /^\d+\.\d+\.\d+-\d{14}-([0-9a-f]{12})\.\d+$/.exec(version)?.[1] ?? version;
+// A buf SDK version is <plugin>-<timestamp>-<module commit>.<n>: show the
+// module commit and its date, which orders the commits.
+const display = (version) => {
+  const sdk = /^\d+\.\d+\.\d+-(\d{4})(\d{2})(\d{2})\d{6}-([0-9a-f]{12})\.\d+$/.exec(version);
+  return sdk ? `${sdk[1]}-${sdk[2]}-${sdk[3]} · ${sdk[4]}` : version;
+};
 const code = (value) => `\`${String(value).replace(/[`|\r\n]/g, "")}\``;
 
 /**
  * `services` is [{ service, repository, production?, staging?, main? }], where
- * each environment holds that commit's { uses }, { missing } or { error }.
- * A cell is `—` when not deployed, `none` when the package is not used and `?`
- * when the commit could not be checked. Empty when there is nothing to say.
+ * each environment holds that commit's { uses }, { missing }, { untracked } or
+ * { error }. A cell is `—` when not deployed, `none` when the package is not
+ * used and `?` when the commit could not be checked. `head` is the commit the
+ * comment describes. Empty when there is nothing to say.
  */
-export function renderComment(packages, services) {
+export function renderComment(packages, services, head) {
   const sections = [];
   const unused = [];
   const failures = [];
@@ -159,8 +169,12 @@ export function renderComment(packages, services) {
   else if (unused.length) lines.push(`No deployed service uses ${unused.join(", ")}.`, "");
   if (unchecked.length) lines.push(`Not checked (no pnpm-lock.yaml or Cargo.lock): ${unchecked.join("; ")}.`, "");
   if (failures.length) lines.push(`Could not read: ${failures.join("; ")}.`, "");
+  const mainOnly = services.filter((service) => service.production?.untracked).map((service) => service.service);
+  if (mainOnly.length) lines.push(`Only main is checked for ${mainOnly.join(", ")}: they are not deployed from application-manifest.`, "");
   let body = lines.join("\n").trimEnd();
   if (body.length > LIMIT) body = `${body.slice(0, body.lastIndexOf("\n", LIMIT))}\n\nThe list is cut off at GitHub's comment size limit.`;
+  // A failed run keeps the previous comment; this says which push it describes.
+  if (head) body += `\n\nChecked for ${head.slice(0, 7)}.`;
   return body;
 }
 
@@ -211,6 +225,8 @@ export async function deployedServices(api) {
       services.set(name, service);
     });
   }
+  for (const name of MAIN_ONLY)
+    if (!services.has(name)) services.set(name, { service: name, repository: `photon-hq/${name}`, mainOnly: true });
   return [...services.values()].sort((a, b) => a.service.localeCompare(b.service));
 }
 
@@ -240,7 +256,8 @@ export async function readConsumers(api, services, watched) {
         .then((sha) => sha ? { sha } : { error: "repository not readable" }, (error) => ({ error: error.message })));
     const main = await heads.get(service.repository);
     for (const [column, sha] of [["production", service.production], ["staging", service.staging], ["main", main.sha]]) {
-      if (main.error) service[column] = column === "main" || sha ? { error: main.error } : undefined;
+      if (service.mainOnly && column !== "main") service[column] = { untracked: true };
+      else if (main.error) service[column] = column === "main" || sha ? { error: main.error } : undefined;
       else service[column] = sha ? await usesOf(service.repository, sha) : undefined;
     }
   });
@@ -274,7 +291,7 @@ async function main() {
     console.log(`Changed packages: ${packages.map((entry) => entry.name).join(", ")}`);
     const api = github(token);
     const services = (await deployedServices(api)).filter((service) => service.repository !== repository);
-    body = renderComment(packages, await readConsumers(api, services, watcher(packages)));
+    body = renderComment(packages, await readConsumers(api, services, watcher(packages)), head);
   }
   await writeFile(output, body);
   console.log(body || "Nothing to comment: no published package changes, or no deployed service uses them");

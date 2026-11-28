@@ -140,7 +140,7 @@ test("changed packages: an npm package and a crate in one directory", async () =
   assert.deepEqual(await names(["pkg/Cargo.toml"]), ["aerial-contract"]);
 });
 
-test("renders one table per package; buf SDK versions show the module commit", () => {
+test("renders one table per package; buf SDK versions show the module commit and its date", () => {
   const packages = [
     { kind: "npm", name: contract },
     { kind: "buf", name: "buf.build/photon-hq/aerial", prefix: "@buf/photon-hq_aerial." },
@@ -154,8 +154,9 @@ test("renders one table per package; buf SDK versions show the module commit", (
     { service: "billing-v2", production: uses([]), main: uses([]) },
     { service: "hidden", production: { error: "repository not readable" }, main: { error: "repository not readable" } },
     { service: "manifest", production: { missing: true }, staging: { missing: true }, main: { missing: true } },
+    { service: "dashboard-v2", production: { untracked: true }, staging: { untracked: true }, main: uses([[contract, "7.1.0", ""]]) },
   ];
-  assert.equal(renderComment(packages, services), [
+  assert.equal(renderComment(packages, services, "abcdef0123456789"), [
     "### Services using the packages this PR changes",
     "",
     `#### \`${contract}\``,
@@ -164,18 +165,23 @@ test("renders one table per package; buf SDK versions show the module commit", (
     "| --- | --- | --- | --- |",
     "| aerial | 7.0.1 | 7.1.0 | 7.1.0 |",
     `| base-bffs (via \`${adapter}\`) | 7.0.1 | ? | none |`,
+    "| dashboard-v2 | ? | ? | 7.1.0 |",
     "",
     "#### `buf.build/photon-hq/aerial` SDKs",
     "",
     "| Service | Production | Staging | main |",
     "| --- | --- | --- | --- |",
-    "| aerial | none | none | 0a0a1f2b3c4d |",
+    "| aerial | none | none | 2025-11-19 · 0a0a1f2b3c4d |",
     "",
     "No use of `@photon-hq/unused` found in the services that could be checked.",
     "",
     "Not checked (no pnpm-lock.yaml or Cargo.lock): manifest production/staging/main.",
     "",
     "Could not read: base-bffs staging (HTTP 403); hidden production/main (repository not readable).",
+    "",
+    "Only main is checked for dashboard-v2: they are not deployed from application-manifest.",
+    "",
+    "Checked for abcdef0.",
   ].join("\n"));
   // Only unused crates: nothing to comment.
   assert.equal(renderComment([{ kind: "crate", name: "service-core" }], services), "");
@@ -211,7 +217,10 @@ test("reads deployment refs, main heads and each commit's lockfiles once", async
     "repos/photon-hq/manifest/commits/HEAD": sha(6),
     ...Object.fromEntries([[1, "pnpm-lock.yaml"], [2, "pnpm-lock.yaml"], [3, "pnpm-lock.yaml"], [4, "server/pnpm-lock.yaml"], [6, "package-lock.json"]].map(([n, path]) =>
       [`repos/photon-hq/${n === 6 ? "manifest" : n >= 3 ? "voice" : "aerial"}/git/trees/${sha(n)}?recursive=1`,
-        { truncated: false, tree: [{ type: "blob", path }, { type: "blob", path: "node_modules/x/pnpm-lock.yaml" }, { type: "tree", path: "src" }] }])),
+        { truncated: false, tree: [{ type: "blob", path }, { type: "blob", path: "package.json" }, { type: "blob", path: "node_modules/x/pnpm-lock.yaml" }, { type: "tree", path: "src" }] }])),
+    "repos/photon-hq/dashboard-v2/commits/HEAD": sha(7),
+    [`repos/photon-hq/dashboard-v2/git/trees/${sha(7)}?recursive=1`]: { truncated: false, tree: [{ type: "blob", path: "pnpm-lock.yaml" }] },
+    [`repos/photon-hq/dashboard-v2/contents/pnpm-lock.yaml?ref=${sha(7)}`]: pnpmLock("7.1.0"),
     [`repos/photon-hq/aerial/contents/pnpm-lock.yaml?ref=${sha(1)}`]: pnpmLock("7.0.1"),
     [`repos/photon-hq/aerial/contents/pnpm-lock.yaml?ref=${sha(2)}`]: pnpmLock("7.1.0"),
     [`repos/photon-hq/voice/contents/server/pnpm-lock.yaml?ref=${sha(4)}`]: pnpmLock("7.1.0"),
@@ -228,35 +237,45 @@ test("reads deployment refs, main heads and each commit's lockfiles once", async
   };
   const api = github("token", fetchImpl);
   const services = await deployedServices(api);
+  const mainOnly = (name) => ({ service: name, repository: `photon-hq/${name}`, mainOnly: true });
   assert.deepEqual(services, [
     { service: "aerial", repository: "photon-hq/aerial", production: sha(1), staging: sha(2) },
+    mainOnly("dashboard-v2"),
     { service: "hidden", repository: "photon-hq/hidden", production: sha(5) },
+    mainOnly("landing-v1"),
     { service: "manifest", repository: "photon-hq/manifest", production: sha(6) },
+    mainOnly("mcp-internal"),
     { service: "voice", repository: "photon-hq/voice", staging: sha(3) },
   ]);
   const watched = (name) => name === contract;
-  const read = await readConsumers(api, services, watched);
-  assert.deepEqual(plain(read[0].production.uses), { [contract]: { "7.0.1": [""] } });
-  assert.deepEqual(plain(read[0].main.uses), { [contract]: { "7.1.0": [""] } });
+  const read = Object.fromEntries((await readConsumers(api, services, watched)).map((service) => [service.service, service]));
+  assert.deepEqual(plain(read.aerial.production.uses), { [contract]: { "7.0.1": [""] } });
+  assert.deepEqual(plain(read.aerial.main.uses), { [contract]: { "7.1.0": [""] } });
   // A repository the token cannot see is a failed read, not a service that uses nothing.
-  assert.deepEqual([read[1].production, read[1].staging, read[1].main], [{ error: "repository not readable" }, undefined, { error: "repository not readable" }]);
-  // No lockfile anywhere in the commit: not checked, not "uses nothing".
-  assert.deepEqual([read[2].production, read[2].main], [{ missing: true }, { missing: true }]);
-  assert.equal(read[3].production, undefined);
-  assert.equal(read[3].staging.error, "HTTP 403");
+  assert.deepEqual([read.hidden.production, read.hidden.staging, read.hidden.main], [{ error: "repository not readable" }, undefined, { error: "repository not readable" }]);
+  // An npm project without a lockfile anywhere: not checked, not "uses nothing".
+  assert.deepEqual([read.manifest.production, read.manifest.main], [{ missing: true }, { missing: true }]);
+  assert.equal(read.voice.production, undefined);
+  assert.equal(read.voice.staging.error, "HTTP 403");
   // Lockfiles below the root are read too.
-  assert.deepEqual(plain(read[3].main.uses), { [contract]: { "7.1.0": [""] } });
+  assert.deepEqual(plain(read.voice.main.uses), { [contract]: { "7.1.0": [""] } });
+  // Services deployed outside application-manifest: only main is read.
+  assert.deepEqual([read["dashboard-v2"].production, read["dashboard-v2"].staging], [{ untracked: true }, { untracked: true }]);
+  assert.deepEqual(plain(read["dashboard-v2"].main.uses), { [contract]: { "7.1.0": [""] } });
   // aerial's staging and main are the same commit: its lockfiles are read once.
   assert.equal(requests.filter((path) => path === `repos/photon-hq/aerial/contents/pnpm-lock.yaml?ref=${sha(2)}`).length, 1);
 });
 
 test("an unreadable application-manifest listing fails instead of listing no services", async () => {
   await assert.rejects(deployedServices(async () => undefined), /Cannot read photon-hq\/application-manifest/);
-  assert.deepEqual(await deployedServices(async () => []), []);
+  assert.deepEqual((await deployedServices(async () => [])).map((service) => service.service), ["dashboard-v2", "landing-v1", "mcp-internal"]);
 });
 
-test("a commit whose only lockfiles are under node_modules is not checked", async () => {
-  assert.deepEqual(await commitUses(["README.md", "node_modules/x/pnpm-lock.yaml"], async () => "", () => true), { missing: true });
+test("a commit with an npm or Cargo project but no lockfile is not checked; one with neither uses nothing", async () => {
+  const none = async () => "";
+  assert.deepEqual(await commitUses(["package.json", "node_modules/x/pnpm-lock.yaml"], none, () => true), { missing: true });
+  assert.deepEqual(await commitUses(["tools/Cargo.toml"], none, () => true), { missing: true });
+  assert.deepEqual(plain((await commitUses(["Gemfile.lock", "go.mod", "node_modules/x/package.json"], none, () => true)).uses), {});
 });
 
 test("a deleted or renamed package, or one a file moves out of, still counts as changed", async () => {
